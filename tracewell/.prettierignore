@@ -1,0 +1,7 @@
+# Byte-exact test inputs: formatting would change their checksums.
+fixtures/messy/
+dist/
+coverage/
+playwright-report/
+test-results/
+package-lock.json

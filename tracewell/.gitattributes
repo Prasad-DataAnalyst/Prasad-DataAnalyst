@@ -1,0 +1,10 @@
+# Source files are normalised to LF in the repository.
+* text=auto eol=lf
+
+# The messy-file library is byte-exact (BOMs, CRLF, UTF-16, windows-1252): never touch line endings.
+fixtures/messy/** binary
+
+*.xlsx binary
+*.zip binary
+*.twp binary
+*.png binary

@@ -1,0 +1,27 @@
+Tracewell Data Workbench
+Copyright 2026 Prasad (Prasad-DataAnalyst)
+
+Tracewell is designed, written and owned by Prasad (Prasad-DataAnalyst) and is
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party software
+--------------------
+The application build bundles the following open-source packages, unmodified.
+Exact versions are pinned in package-lock.json, and `npm run check:licences`
+fails the build if a shipped package is not under an allowed licence.
+
+  @noble/hashes            MIT
+  @streamparser/json       MIT
+  @tanstack/react-virtual  MIT   (with @tanstack/virtual-core, MIT)
+  fflate                   MIT
+  lucide-react             ISC
+  react                    MIT   (with scheduler, MIT)
+  react-dom                MIT
+  react-resizable-panels   MIT
+  saxes                    ISC   (with xmlchars, MIT)
+  zod                      MIT
+  zustand                  MIT
+
+Development and test tools (TypeScript, Vite, Vitest, Playwright, ESLint,
+Prettier, fast-check, papaparse and others listed in package.json) are used to
+build and verify Tracewell and are not distributed with it.

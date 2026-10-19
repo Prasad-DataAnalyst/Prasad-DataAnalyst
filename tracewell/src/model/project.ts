@@ -1,0 +1,87 @@
+/** Project vocabulary: the `.twp` manifest (SAD section 11) and the summaries the UI shows. */
+import type { ExportRecord, OriginalFileInfo } from './export';
+import type { AuditSeq, BBox, DatasetId, IsoUtc, ProjectId, Sha256Hex, UserProfile } from './ids';
+import type { RulePackRef } from './rules';
+import type { TableSchema } from './schema';
+import type { Step } from './steps';
+
+export type IntegrityCheckId =
+  | 'zip'
+  | 'mimetype'
+  | 'format-version'
+  | 'manifest-schema'
+  | 'entry-checksum'
+  | 'original-checksum'
+  | 'audit-chain'
+  | 'replay-digest';
+
+/** One open-time check; any failure opens the project read-only, never blocked and never silently repaired. */
+export interface IntegrityCheck {
+  id: IntegrityCheckId;
+  ok: boolean;
+  target?: string;
+  detail: string;
+  ruleId?: 'TW-PRJ-001' | 'TW-PRJ-002' | 'TW-PRJ-003' | 'TW-PRJ-004';
+}
+
+export interface ProjectManifest {
+  format: 'tracewell-project';
+  formatVersion: '0.1';
+  appVersion: string;
+  projectId: ProjectId;
+  name: string;
+  createdAt: IsoUtc;
+  savedAt: IsoUtc;
+  savedBy: string;
+  unitSystem: 'SI' | 'Oilfield';
+  projectArea: BBox | null;
+  unitRegistry: { version: string; sha256: Sha256Hex };
+  rulePacks: RulePackRef[];
+  originals: (OriginalFileInfo & { path: string })[];
+  /** Digests of the working and output views, compared after replay (TW-PRJ-003). */
+  datasets: { id: DatasetId; name: string; rowCount: number; workingDigest: Sha256Hex; outputDigest: Sha256Hex }[];
+  auditHead: { seq: AuditSeq; hash: Sha256Hex };
+  entries: { path: string; size: number; sha256: Sha256Hex }[];
+}
+
+export interface DatasetSummary {
+  id: DatasetId;
+  name: string;
+  source: TableSchema['source'];
+  rowCount: number;
+  outputRowCount: number;
+  columnCount: number;
+  assumptions: number;
+  partial: boolean;
+  steps: Step[];
+}
+
+export interface ProjectSummary {
+  id: ProjectId;
+  name: string;
+  createdAt: IsoUtc;
+  profile: UserProfile;
+  unitSystem: 'SI' | 'Oilfield';
+  projectArea: BBox | null;
+  readOnly: boolean;
+  dirty: boolean;
+  lastSavedAt: IsoUtc | null;
+  originals: OriginalFileInfo[];
+  datasets: DatasetSummary[];
+  exports: ExportRecord[];
+  rulePacks: RulePackRef[];
+  auditHead: { seq: AuditSeq; hash: Sha256Hex };
+}
+
+export interface ProjectOpenReport {
+  project: ProjectSummary;
+  readOnly: boolean;
+  checks: IntegrityCheck[];
+}
+
+export interface SaveResult {
+  fileName: string;
+  size: number;
+  sha256: Sha256Hex;
+  bytes?: Uint8Array;
+}
