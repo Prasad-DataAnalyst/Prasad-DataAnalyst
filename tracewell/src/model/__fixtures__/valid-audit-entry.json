@@ -1,0 +1,196 @@
+[
+  {
+    "seq": 1,
+    "at": "2026-10-19T09:00:00.000Z",
+    "actor": {
+      "kind": "user",
+      "profileId": "u_prasad",
+      "name": "Prasad",
+      "role": "Analyst"
+    },
+    "action": "project.create",
+    "target": {},
+    "new": {
+      "name": "North Sea wells",
+      "unitSystem": "SI"
+    },
+    "prev": "4c29e9a6839d9e343b912cc0aad5d131368664e1cae5a938a626f039970570ad",
+    "hash": "a2f1f1eb706887e9ca2b8076431ce38b3b509c25b5b9306755b4a1c69524b923"
+  },
+  {
+    "seq": 2,
+    "at": "2026-10-19T09:00:05.120Z",
+    "actor": {
+      "kind": "user",
+      "profileId": "u_prasad",
+      "name": "Prasad",
+      "role": "Analyst"
+    },
+    "action": "source.add",
+    "target": {
+      "datasetId": "d1",
+      "fileId": "97b6be72e491a3472daf248fbd71035de929518372905aa9619add9a49145451"
+    },
+    "payload": {
+      "fileName": "csv_well_daily_golden.csv",
+      "size": 26,
+      "format": "csv"
+    },
+    "prev": "a2f1f1eb706887e9ca2b8076431ce38b3b509c25b5b9306755b4a1c69524b923",
+    "hash": "6983254ca9caa081820ccc4f41293249893797ded9398566e22d98bdca59a0e6"
+  },
+  {
+    "seq": 3,
+    "at": "2026-10-19T09:00:05.480Z",
+    "actor": {
+      "kind": "system",
+      "component": "detector"
+    },
+    "action": "detection.assume",
+    "target": {
+      "datasetId": "d1"
+    },
+    "payload": {
+      "assumptions": [
+        {
+          "datasetId": "d1",
+          "columnId": null,
+          "property": "encoding",
+          "value": "windows-1252",
+          "confidence": "medium",
+          "evidence": "Bytes 0x80-0x9F decode as Windows-1252 punctuation."
+        }
+      ]
+    },
+    "prev": "6983254ca9caa081820ccc4f41293249893797ded9398566e22d98bdca59a0e6",
+    "hash": "388e0325f9b27b7dab8d2015f7d0af32e8ce8af37485fa4add4268771c000c06"
+  },
+  {
+    "seq": 4,
+    "at": "2026-10-19T09:01:00.000Z",
+    "actor": {
+      "kind": "system",
+      "component": "engine"
+    },
+    "action": "check.run",
+    "target": {
+      "datasetId": "d1"
+    },
+    "payload": {
+      "packs": [
+        {
+          "id": "tracewell.generic-dq",
+          "version": "0.1.0",
+          "sha256": "880d43b08d7cbaaf6dd27060d6f61b62fffac655f62f1860d1dd65958d333803"
+        }
+      ],
+      "issues": 3
+    },
+    "prev": "388e0325f9b27b7dab8d2015f7d0af32e8ce8af37485fa4add4268771c000c06",
+    "hash": "f9f128479d4b33826af1e35d6de51b58cc2d5e53bb4fdb10fb6c533c0f8cbc98"
+  },
+  {
+    "seq": 5,
+    "at": "2026-10-19T09:02:30.250Z",
+    "actor": {
+      "kind": "user",
+      "profileId": "u_prasad",
+      "name": "Prasad",
+      "role": "Analyst"
+    },
+    "action": "cell.edit",
+    "target": {
+      "datasetId": "d1",
+      "rowId": 41,
+      "columnId": "c3",
+      "locator": "line 43"
+    },
+    "old": null,
+    "new": 1520.5,
+    "reason": "Value confirmed from the daily drilling report",
+    "prev": "f9f128479d4b33826af1e35d6de51b58cc2d5e53bb4fdb10fb6c533c0f8cbc98",
+    "hash": "568a57494bb91d21d30a6adeb38c89eea952942f4112c4baa34b15c1bc1ee437"
+  },
+  {
+    "seq": 6,
+    "at": "2026-10-19T09:03:00.000Z",
+    "actor": {
+      "kind": "user",
+      "profileId": "u_prasad",
+      "name": "Prasad",
+      "role": "Analyst"
+    },
+    "action": "issue.accept",
+    "target": {
+      "datasetId": "d1",
+      "issueId": "I-710abb165272"
+    },
+    "reason": "Shut-in pressure is expected to read low",
+    "rule": {
+      "id": "TW-DQ-005",
+      "version": "0.1.0"
+    },
+    "payload": {
+      "rows": [3, 4]
+    },
+    "prev": "568a57494bb91d21d30a6adeb38c89eea952942f4112c4baa34b15c1bc1ee437",
+    "hash": "ba20180b2ac2268907706996f140dec7ca6bb11d7ab2094605afc0c2701aea16"
+  },
+  {
+    "seq": 7,
+    "at": "2026-10-19T09:04:00.000Z",
+    "actor": {
+      "kind": "user",
+      "profileId": "u_prasad",
+      "name": "Prasad",
+      "role": "Analyst"
+    },
+    "action": "step.apply",
+    "target": {
+      "datasetId": "d1",
+      "stepId": "s1",
+      "columnId": "c3"
+    },
+    "new": {
+      "kind": "convert_unit",
+      "columnId": "c3",
+      "toUnit": "kPa",
+      "mode": "replace"
+    },
+    "reason": "Report pressures in kPa",
+    "method": {
+      "from": "psia",
+      "to": "kPa",
+      "fromFactor": 6894.757293168361,
+      "fromOffset": 0,
+      "toFactor": 1000,
+      "toOffset": 0,
+      "formula": "y = ((x * 6894.757293168361 + 0) - 0) / 1000",
+      "source": "NIST SP 811 (2008) Appendix B.8",
+      "registryVersion": "2026.1"
+    },
+    "payload": {
+      "converted": 998,
+      "nullsSkipped": 2
+    },
+    "prev": "ba20180b2ac2268907706996f140dec7ca6bb11d7ab2094605afc0c2701aea16",
+    "hash": "6951221bb053e7adfff4e20ae3ed03e4c6df4bd1582895367ac0db5e3c8373d3"
+  },
+  {
+    "seq": 8,
+    "at": "2026-10-19T09:05:00.000Z",
+    "actor": {
+      "kind": "user",
+      "profileId": "u_prasad",
+      "name": "Prasad",
+      "role": "Analyst"
+    },
+    "action": "entry.revert",
+    "target": {
+      "seq": 5
+    },
+    "reason": "Edit was made on the wrong row",
+    "prev": "6951221bb053e7adfff4e20ae3ed03e4c6df4bd1582895367ac0db5e3c8373d3",
+    "hash": "0cfb06d36cc0b1372f34e90e588169c9695d7d17985f391cf681b4184115afab"
+  }
+]

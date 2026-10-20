@@ -7,21 +7,11 @@ import type { LogicalType } from './values';
 export type Severity = 'error' | 'warning' | 'note';
 
 export type RuleCategory =
-  | 'completeness'
-  | 'uniqueness'
-  | 'validity'
-  | 'range'
-  | 'units'
-  | 'time'
-  | 'spatial'
-  | 'import'
-  | 'project'
-  | 'export';
+  'completeness' | 'uniqueness' | 'validity' | 'range' | 'units' | 'time' | 'spatial' | 'import' | 'project' | 'export';
 
 /** The whole dataset, or the columns matching every given filter ('all' matches every column). */
 export type ColumnSelector =
-  | { dataset: true }
-  | { roles?: ColumnRole[]; types?: LogicalType[]; quantities?: QuantityKind[]; all?: true };
+  { dataset: true } | { roles?: ColumnRole[]; types?: LogicalType[]; quantities?: QuantityKind[]; all?: true };
 
 export type CheckSpec =
   | { kind: 'not_null' }

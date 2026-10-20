@@ -1,0 +1,181 @@
+[
+  {
+    "why": "bad sha256 length",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/files/0/sha256",
+        "value": "1c980b22bca31941462855e560db3053e7772efb4b8bc7c4d5d8bb799a1abc"
+      }
+    ]
+  },
+  {
+    "why": "validation ok while a check failed",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/validation/checks",
+        "value": [
+          {
+            "id": "RB-OPEN",
+            "ok": false,
+            "detail": "Unreadable."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "why": "unknown profile",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/profile",
+        "value": "pdf"
+      }
+    ]
+  },
+  {
+    "why": "malformed export ID",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/exportId",
+        "value": "e_123"
+      }
+    ]
+  },
+  {
+    "why": "duplicate column IDs",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/dataset/columns/1/id",
+        "value": "c0"
+      }
+    ]
+  },
+  {
+    "why": "unknown file role",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/files/0/role",
+        "value": "other"
+      }
+    ]
+  },
+  {
+    "why": "unknown validation check",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/validation/checks",
+        "value": [
+          {
+            "id": "RB-MAGIC",
+            "ok": true,
+            "detail": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "why": "unknown substitution rule",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/substitutions",
+        "value": [
+          {
+            "ruleId": "TW-EXP-001",
+            "what": "Notes column",
+            "why": "A value is longer than 32,767 characters, the Excel cell limit.",
+            "instead": "The column is delivered in notes.csv."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "why": "step without identity",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/steps",
+        "value": [
+          {
+            "kind": "convert_unit",
+            "columnId": "c3",
+            "toUnit": "kPa",
+            "mode": "replace"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "why": "negative open issue count",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/openIssues/error",
+        "value": -1
+      }
+    ]
+  },
+  {
+    "why": "duplicate rule-pack reference",
+    "base": 0,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/rulePacks/-",
+        "value": {
+          "id": "tracewell.system",
+          "version": "0.1.0",
+          "sha256": "4f014fed68a683fc51dbc08749f12f461a0d2fe6da75e505bb0741b161ec3c5d"
+        }
+      }
+    ]
+  },
+  {
+    "why": "duplicate source file",
+    "base": 0,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/sources/-",
+        "value": {
+          "fileId": "97b6be72e491a3472daf248fbd71035de929518372905aa9619add9a49145451",
+          "name": "csv_well_daily_golden.csv",
+          "size": 26,
+          "mediaType": "text/csv",
+          "addedSeq": 2
+        }
+      }
+    ]
+  },
+  {
+    "why": "duplicate step ID",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/steps/1/id",
+        "value": "s1"
+      }
+    ]
+  }
+]

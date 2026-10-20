@@ -1,0 +1,438 @@
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { EngineError, utf8 } from '@tw/model';
+import { checksumsFile, parseChecksumsFile } from './checksums';
+import { sha256Hex } from './sha256';
+import { readZip, type ZipReader } from './zip-read';
+import { writeZip, type ZipEntryInput } from './zip-write';
+import {
+  centralRecords,
+  patchBoth,
+  PYTHON_AVAILABLE,
+  rawData,
+  renameBoth,
+  runPython,
+  toZip64,
+  withU32,
+} from './__fixtures__/zip-tools';
+
+const MiB = 1024 * 1024;
+
+const scratch = mkdtempSync(join(tmpdir(), 'tracewell-io-zip-'));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+function noise(length: number, seed: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let state = seed;
+  for (let i = 0; i < length; i++) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    out[i] = state >>> 24;
+  }
+  return out;
+}
+
+const SAMPLE: ZipEntryInput[] = [
+  { path: 'mimetype', data: utf8('application/vnd.tracewell.project+zip'), store: true },
+  { path: 'manifest.json', data: utf8('{"format":"tracewell-project","formatVersion":"0.1"}') },
+  { path: 'originals/ab12/wells daily.csv', data: utf8('well,rate\nA-1,42\n'.repeat(500)), store: true },
+  { path: 'data/donn\u00e9es/\u6cb9\u4e95.csv', data: utf8('x\n1\n') },
+  { path: 'empty.txt', data: new Uint8Array(0) },
+  { path: 'empty-stored.txt', data: new Uint8Array(0), store: true },
+  { path: 'noise.bin', data: noise(100_000, 11) },
+];
+
+function thrown(action: () => unknown): EngineError {
+  try {
+    action();
+  } catch (e) {
+    expect(e).toBeInstanceOf(EngineError);
+    return e as EngineError;
+  }
+  throw new Error('expected an EngineError, but nothing was thrown');
+}
+
+function contents(reader: ZipReader): Record<string, string> {
+  return Object.fromEntries(reader.paths().map((p) => [p, sha256Hex(reader.read(p))]));
+}
+
+interface PythonEntry {
+  name: string;
+  method: number;
+  size: number;
+  csize: number;
+  date: number[];
+  sha256: string;
+}
+
+/** Lists an archive with Python's zipfile module, which also tests every entry's CRC. */
+function pythonList(zip: Uint8Array): { bad: string | null; entries: PythonEntry[] } {
+  const path = join(scratch, `list-${sha256Hex(zip).slice(0, 12)}.zip`);
+  writeFileSync(path, zip);
+  const out = runPython(
+    [
+      'import hashlib, json, sys, zipfile',
+      'with zipfile.ZipFile(sys.argv[1]) as z:',
+      '    bad = z.testzip()',
+      '    entries = [{"name": i.filename, "method": i.compress_type, "size": i.file_size,',
+      '                "csize": i.compress_size, "date": list(i.date_time),',
+      '                "sha256": hashlib.sha256(z.read(i)).hexdigest()} for i in z.infolist()]',
+      'print(json.dumps({"bad": bad, "entries": entries}))',
+    ],
+    [path],
+  );
+  return JSON.parse(new TextDecoder().decode(out)) as { bad: string | null; entries: PythonEntry[] };
+}
+
+describe('writeZip and readZip', () => {
+  it('round-trip paths and bytes', () => {
+    const reader = readZip(writeZip(SAMPLE));
+    expect(reader.paths()).toEqual(SAMPLE.map((e) => e.path));
+    for (const entry of SAMPLE) {
+      expect(reader.has(entry.path)).toBe(true);
+      expect(reader.size(entry.path)).toBe(entry.data.length);
+      expect(reader.read(entry.path)).toEqual(entry.data);
+    }
+  });
+
+  it('give byte-identical output for the same input on two calls', () => {
+    const first = writeZip(SAMPLE);
+    const second = writeZip(SAMPLE.map((e) => ({ ...e, data: e.data.slice() })));
+    expect(second).toEqual(first);
+    expect(sha256Hex(second)).toBe(sha256Hex(first));
+  });
+
+  it('keep the caller order by default and sort by code point when asked', () => {
+    const entries: ZipEntryInput[] = [
+      { path: 'b.txt', data: utf8('b') },
+      { path: 'a/z.txt', data: utf8('z') },
+      { path: '\u{1f6e2}.txt', data: utf8('emoji') },
+      { path: '\uff21.txt', data: utf8('fullwidth A') },
+      { path: 'A.txt', data: utf8('A') },
+    ];
+    expect(readZip(writeZip(entries)).paths()).toEqual(entries.map((e) => e.path));
+    // U+FF21 sorts before U+1F6E2 by code point, although its UTF-16 code unit is larger.
+    expect(readZip(writeZip(entries, { sort: true })).paths()).toEqual([
+      'A.txt',
+      'a/z.txt',
+      'b.txt',
+      '\uff21.txt',
+      '\u{1f6e2}.txt',
+    ]);
+  });
+
+  it('store STORED entries verbatim and deflate the others', () => {
+    const zip = writeZip(SAMPLE);
+    for (const record of centralRecords(zip)) {
+      const input = SAMPLE.find((e) => e.path === record.name);
+      expect(input).toBeDefined();
+      if (input?.store === true) {
+        expect(record.method).toBe(0);
+        expect(record.compressedSize).toBe(input.data.length);
+        expect(rawData(zip, record)).toEqual(input.data);
+      } else {
+        expect(record.method).toBe(8);
+      }
+    }
+    const csv = centralRecords(zip).find((r) => r.name === 'manifest.json');
+    expect(csv && csv.compressedSize).toBeGreaterThan(0);
+  });
+
+  it('dates every entry 1980-01-01 00:00:00 and writes no extra fields', () => {
+    const zip = writeZip(SAMPLE);
+    const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    for (const record of centralRecords(zip)) {
+      expect(v.getUint16(record.at + 12, true)).toBe(0);
+      expect(v.getUint16(record.at + 14, true)).toBe(0x21);
+      expect(v.getUint16(record.at + 30, true)).toBe(0);
+    }
+  });
+
+  it('marks only non-ASCII names as UTF-8', () => {
+    const zip = writeZip(SAMPLE);
+    const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    const flags = Object.fromEntries(centralRecords(zip).map((r) => [r.name, v.getUint16(r.at + 8, true)]));
+    expect(flags['manifest.json']).toBe(0);
+    expect(flags['data/donn\u00e9es/\u6cb9\u4e95.csv']).toBe(0x0800);
+  });
+
+  it('writes and reads an empty archive', () => {
+    const zip = writeZip([]);
+    expect(zip.length).toBe(22);
+    expect(readZip(zip).paths()).toEqual([]);
+  });
+
+  it.each([
+    ['an empty path', ''],
+    ['an absolute path', '/etc/passwd'],
+    ['a drive letter', 'C:/data.csv'],
+    ['a backslash', 'data\\wells.csv'],
+    ['a parent segment', 'data/../wells.csv'],
+    ['a dot segment', './wells.csv'],
+    ['an empty segment', 'data//wells.csv'],
+    ['a directory path', 'data/'],
+    ['a NUL character', 'wells\u0000.csv'],
+  ])('refuses %s', (_label, path) => {
+    expect(thrown(() => writeZip([{ path, data: utf8('x') }])).code).toBe('INVALID_INPUT');
+  });
+
+  it('refuses duplicate paths', () => {
+    const entries = [
+      { path: 'a.txt', data: utf8('1') },
+      { path: 'a.txt', data: utf8('2') },
+    ];
+    expect(thrown(() => writeZip(entries)).message).toContain('more than once');
+  });
+});
+
+describe.skipIf(!PYTHON_AVAILABLE)('interoperability with Python zipfile', () => {
+  it('opens writeZip output with every CRC, size, method and date as written', () => {
+    const listing = pythonList(writeZip(SAMPLE));
+    expect(listing.bad).toBeNull();
+    expect(listing.entries.map((e) => e.name)).toEqual(SAMPLE.map((e) => e.path));
+    listing.entries.forEach((entry, i) => {
+      const input = SAMPLE[i];
+      expect(entry.sha256).toBe(sha256Hex(input?.data ?? new Uint8Array(0)));
+      expect(entry.size).toBe(input?.data.length);
+      expect(entry.method).toBe(input?.store === true ? 0 : 8);
+      expect(entry.date).toEqual([1980, 1, 1, 0, 0, 0]);
+    });
+  });
+
+  it('reads archives Python writes to a pipe, with data descriptors and a directory entry', () => {
+    const zip = runPython([
+      'import sys, zipfile',
+      'with zipfile.ZipFile(sys.stdout.buffer, "w", compression=zipfile.ZIP_DEFLATED) as z:',
+      '    z.writestr("dir/", b"")',
+      '    z.writestr("dir/rates.csv", b"well,rate\\n" * 2000)',
+      '    z.writestr(zipfile.ZipInfo("stored.bin"), bytes(range(256)) * 4, compress_type=zipfile.ZIP_STORED)',
+      '    z.writestr("caf\\u00e9.txt", "Temp \\u00b0C".encode("utf-8"))',
+    ]);
+    const reader = readZip(zip);
+    expect(reader.paths()).toEqual(['dir/rates.csv', 'stored.bin', 'caf\u00e9.txt']);
+    expect(new TextDecoder().decode(reader.read('dir/rates.csv'))).toBe('well,rate\n'.repeat(2000));
+    expect(reader.read('stored.bin')).toEqual(Uint8Array.from({ length: 1024 }, (_, i) => i % 256));
+    expect(reader.readText('caf\u00e9.txt')).toBe('Temp \u00b0C');
+  });
+
+  it('accepts the ZIP64 rewriter used below as a valid archive', () => {
+    const listing = pythonList(toZip64(writeZip(SAMPLE)));
+    expect(listing.bad).toBeNull();
+    expect(listing.entries.map((e) => e.sha256)).toEqual(SAMPLE.map((e) => sha256Hex(e.data)));
+  });
+});
+
+describe('readZip structure handling', () => {
+  it('reads ZIP64 end records and ZIP64 extra fields', () => {
+    const reader = readZip(toZip64(writeZip(SAMPLE)));
+    expect(contents(reader)).toEqual(contents(readZip(writeZip(SAMPLE))));
+  });
+
+  it('reads a name without the UTF-8 flag that is not UTF-8 as CP437', () => {
+    const zip = writeZip([{ path: 'caf?.txt', data: utf8('x') }]);
+    const [record] = centralRecords(zip);
+    if (record === undefined) throw new Error('no entry');
+    const patched = renameBoth(zip, record, Uint8Array.from([0x63, 0x61, 0x66, 0x82, 0x2e, 0x74, 0x78, 0x74]));
+    expect(readZip(patched).paths()).toEqual(['caf\u00e9.txt']);
+  });
+
+  it('reads entry text as UTF-8 without a byte-order mark', () => {
+    const text = 'Temp \u00b0C';
+    const zip = writeZip([{ path: 'a.txt', data: Uint8Array.from([0xef, 0xbb, 0xbf, ...utf8(text)]) }]);
+    expect(readZip(zip).readText('a.txt')).toBe(text);
+  });
+
+  it('refuses entry text that is not UTF-8', () => {
+    const zip = writeZip([{ path: 'a.txt', data: Uint8Array.from([0x61, 0xff]) }]);
+    expect(thrown(() => readZip(zip).readText('a.txt')).code).toBe('PROJECT_INVALID');
+  });
+
+  it('reports a missing entry as NOT_FOUND', () => {
+    const reader = readZip(writeZip(SAMPLE));
+    expect(reader.has('nope.txt')).toBe(false);
+    expect(thrown(() => reader.read('nope.txt')).code).toBe('NOT_FOUND');
+    expect(thrown(() => reader.size('nope.txt')).code).toBe('NOT_FOUND');
+  });
+
+  it('returns a fresh array on every read, so callers may transfer or change it', () => {
+    const reader = readZip(writeZip(SAMPLE));
+    const first = reader.read('mimetype');
+    first.fill(0);
+    expect(new TextDecoder().decode(reader.read('mimetype'))).toBe('application/vnd.tracewell.project+zip');
+  });
+
+  it('refuses bytes that are not a ZIP archive', () => {
+    const error = thrown(() => readZip(utf8('well,rate\nA-1,42\n'.repeat(10))));
+    expect(error.code).toBe('FORMAT_UNSUPPORTED');
+    expect(error.message).toContain('not a ZIP archive');
+  });
+
+  it('refuses a truncated archive', () => {
+    const zip = writeZip(SAMPLE);
+    const error = thrown(() => readZip(zip.subarray(0, zip.length - 30)));
+    expect(['FORMAT_UNSUPPORTED', 'PROJECT_INVALID']).toContain(error.code);
+  });
+
+  it('refuses an archive whose central directory points outside the file', () => {
+    const zip = writeZip(SAMPLE);
+    expect(thrown(() => readZip(withU32(zip, zip.length - 22 + 16, zip.length))).code).toBe('PROJECT_INVALID');
+  });
+
+  it('refuses encrypted entries', () => {
+    const zip = writeZip(SAMPLE);
+    const record = centralRecords(zip)[1];
+    if (record === undefined) throw new Error('no entry');
+    const error = thrown(() => readZip(patchBoth(zip, record, 'flags', 0x0001)));
+    expect(error.code).toBe('FORMAT_UNSUPPORTED');
+    expect(error.message).toContain('encrypted');
+  });
+
+  it('refuses compression methods other than STORED and DEFLATE', () => {
+    const zip = writeZip(SAMPLE);
+    const record = centralRecords(zip)[1];
+    if (record === undefined) throw new Error('no entry');
+    const error = thrown(() => readZip(patchBoth(zip, record, 'method', 12)));
+    expect(error.code).toBe('FORMAT_UNSUPPORTED');
+    expect(error.detail).toMatchObject({ method: 12 });
+  });
+
+  it('refuses duplicate entry names', () => {
+    const zip = writeZip([
+      { path: 'a.txt', data: utf8('1') },
+      { path: 'b.txt', data: utf8('2') },
+    ]);
+    const second = centralRecords(zip)[1];
+    if (second === undefined) throw new Error('no entry');
+    const error = thrown(() => readZip(renameBoth(zip, second, utf8('a.txt'))));
+    expect(error.code).toBe('PROJECT_INVALID');
+    expect(error.message).toContain('more than once');
+  });
+
+  it('refuses a local header whose name differs from the central directory', () => {
+    const zip = writeZip([{ path: 'a.txt', data: utf8('1') }]);
+    const [record] = centralRecords(zip);
+    if (record === undefined) throw new Error('no entry');
+    const patched = zip.slice();
+    patched.set(utf8('b'), record.localAt + 30);
+    expect(thrown(() => readZip(patched)).code).toBe('PROJECT_INVALID');
+  });
+
+  it.each([
+    ['deflated', 'manifest.json'],
+    ['stored', 'originals/ab12/wells daily.csv'],
+  ])('detects a changed byte in %s data by its CRC-32', (_kind, path) => {
+    const zip = writeZip(SAMPLE);
+    const record = centralRecords(zip).find((r) => r.name === path);
+    if (record === undefined) throw new Error('no entry');
+    const data = rawData(zip, record);
+    const patched = zip.slice();
+    const at = data.byteOffset - zip.byteOffset + Math.floor(data.length / 2);
+    patched[at] = (patched[at] ?? 0) ^ 0x01;
+    const reader = readZip(patched);
+    expect(thrown(() => reader.read(path)).code).toBe('PROJECT_INVALID');
+    expect(reader.read('mimetype')).toEqual(SAMPLE[0]?.data);
+  });
+});
+
+describe('readZip guards (zip bombs)', () => {
+  const zeros = writeZip([{ path: 'zeros.bin', data: new Uint8Array(10 * MiB) }]);
+
+  it('compresses the 10 MB bomb entry to a few kilobytes', () => {
+    expect(zeros.length).toBeLessThan(64 * 1024);
+  });
+
+  it('rejects a 10 MB entry of zeros when maxInflatedBytes is 1 MB, with a clear error', () => {
+    const error = thrown(() => readZip(zeros, { maxInflatedBytes: MiB }));
+    expect(error.code).toBe('PROJECT_INVALID');
+    expect(error.message).toBe('The archive would expand to 10,485,760 bytes, more than the limit of 1,048,576 bytes.');
+    expect(error.fix).toContain('zip bombs');
+    expect(error.detail).toEqual({ reason: 'inflated-size', declaredBytes: 10 * MiB, limit: MiB });
+  });
+
+  it('reads the same entry under the default cap', () => {
+    // Compared by digest: a deep equality over ten million elements takes over a minute.
+    expect(sha256Hex(readZip(zeros).read('zeros.bin'))).toBe(sha256Hex(new Uint8Array(10 * MiB)));
+  });
+
+  it('stops inflating an entry that expands beyond a falsely small declared size', () => {
+    const [record] = centralRecords(zeros);
+    if (record === undefined) throw new Error('no entry');
+    const lying = patchBoth(zeros, record, 'size', 1000);
+    const reader = readZip(lying, { maxInflatedBytes: MiB });
+    expect(reader.size('zeros.bin')).toBe(1000);
+    const error = thrown(() => reader.read('zeros.bin'));
+    expect(error.code).toBe('PROJECT_INVALID');
+    expect(error.detail).toMatchObject({ reason: 'entry-oversize', declaredBytes: 1000 });
+  });
+
+  it('refuses an entry that expands to less than its declared size', () => {
+    const [record] = centralRecords(zeros);
+    if (record === undefined) throw new Error('no entry');
+    const reader = readZip(patchBoth(zeros, record, 'size', 10 * MiB + 1));
+    expect(thrown(() => reader.read('zeros.bin')).detail).toMatchObject({ actualBytes: 10 * MiB });
+  });
+
+  it('rejects more entries than maxEntries', () => {
+    const many = writeZip(Array.from({ length: 5 }, (_, i) => ({ path: `f${i}.txt`, data: utf8(String(i)) })));
+    expect(readZip(many, { maxEntries: 5 }).paths()).toHaveLength(5);
+    const error = thrown(() => readZip(many, { maxEntries: 4 }));
+    expect(error.code).toBe('PROJECT_INVALID');
+    expect(error.detail).toEqual({ reason: 'entry-count', entries: 5, limit: 4 });
+  });
+
+  it.each([-1, 1.5, Number.NaN])('refuses the cap %s', (cap) => {
+    expect(thrown(() => readZip(zeros, { maxInflatedBytes: cap })).code).toBe('INVALID_INPUT');
+  });
+});
+
+describe('checksum files', () => {
+  const files: Record<string, Uint8Array> = {
+    'README.txt': utf8('How to verify: sha256sum -c CHECKSUMS.sha256\n'),
+    'data/wells.csv': utf8('well,rate\r\nA-1,42\r\n'),
+    'name with spaces.txt': utf8('spaces'),
+    'donn\u00e9es.csv': utf8('x\n'),
+    'manifest.json': utf8('{}'),
+  };
+  const entries = Object.entries(files).map(([path, data]) => ({ path, sha256: sha256Hex(data) }));
+
+  it('round-trip through checksumsFile and parseChecksumsFile, sorted by path', () => {
+    const text = checksumsFile(entries);
+    const parsed = parseChecksumsFile(text);
+    expect(parsed.map((e) => e.path)).toEqual([
+      'README.txt',
+      'data/wells.csv',
+      'donn\u00e9es.csv',
+      'manifest.json',
+      'name with spaces.txt',
+    ]);
+    expect(new Map(parsed.map((e) => [e.path, e.sha256]))).toEqual(new Map(entries.map((e) => [e.path, e.sha256])));
+    expect(text.split('\n')[0]).toBe(`${sha256Hex(files['README.txt'] ?? '')}  README.txt`);
+    expect(text.endsWith('\n')).toBe(true);
+  });
+
+  const sha256sum = spawnSync('sha256sum', ['--version']).status === 0;
+
+  it.skipIf(!sha256sum)('writes a file that `sha256sum -c` accepts, and that catches a changed file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tracewell-io-sums-'));
+    try {
+      for (const [path, data] of Object.entries(files)) {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), data);
+      }
+      writeFileSync(join(dir, 'CHECKSUMS.sha256'), checksumsFile(entries));
+      const ok = spawnSync('sha256sum', ['-c', '--strict', 'CHECKSUMS.sha256'], { cwd: dir });
+      expect(ok.status, ok.stderr.toString()).toBe(0);
+      expect(ok.stdout.toString()).toContain('data/wells.csv: OK');
+      expect(ok.stdout.toString()).toContain('name with spaces.txt: OK');
+
+      writeFileSync(join(dir, 'data/wells.csv'), 'tampered');
+      const bad = spawnSync('sha256sum', ['-c', 'CHECKSUMS.sha256'], { cwd: dir });
+      expect(bad.status).not.toBe(0);
+      expect(bad.stdout.toString()).toContain('data/wells.csv: FAILED');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

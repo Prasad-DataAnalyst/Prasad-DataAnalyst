@@ -4,16 +4,7 @@ import type { ColumnId, DatasetId, FileId, StepId } from './ids';
 import type { LogicalType } from './values';
 
 export type ColumnRole =
-  | 'measure'
-  | 'id'
-  | 'time'
-  | 'latitude'
-  | 'longitude'
-  | 'easting'
-  | 'northing'
-  | 'geometry'
-  | 'unit'
-  | 'text';
+  'measure' | 'id' | 'time' | 'latitude' | 'longitude' | 'easting' | 'northing' | 'geometry' | 'unit' | 'text';
 
 export type QuantityKind =
   | 'length'

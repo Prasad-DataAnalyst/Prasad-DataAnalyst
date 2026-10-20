@@ -5,20 +5,21 @@
  */
 import { EngineError } from './errors';
 import type { JsonValue } from './ids';
-import { isDateCell, isDateTimeCell, isGeometryCell, type CellValue } from './values';
+import { isPlainObject } from './json';
+import { DATE_TEXT, DATETIME_TEXT, isDateCell, isDateTimeCell, isGeometryCell, type CellValue } from './values';
 
 /** The canonical null cell: a NUL character then 'N', which no string cell can produce. */
 const NULL_CELL = '\u0000N';
 
 const encoder = new TextEncoder();
 
-function invalid(message: string, detail?: JsonValue): EngineError {
-  return new EngineError(
-    'INVALID_INPUT',
-    message,
-    'Only finite numbers, strings, booleans, null, arrays and plain objects can be encoded; correct the value first.',
-    detail,
-  );
+const ENCODABLE_FIX =
+  'Only finite numbers, strings, booleans, null, arrays and plain objects can be encoded; correct the value first.';
+const CELL_FORM_FIX =
+  'Write date cells as YYYY-MM-DD and datetime cells as YYYY-MM-DDTHH:mm:ss.sssZ in UTC where the value is created.';
+
+function invalid(message: string, detail?: JsonValue, fix: string = ENCODABLE_FIX): EngineError {
+  return new EngineError('INVALID_INPUT', message, fix, detail);
 }
 
 /**
@@ -91,18 +92,12 @@ function encodeObject(obj: Record<string, unknown>, ancestors: Set<object>): str
 }
 
 /**
- * True for objects created by a literal, JSON.parse or structuredClone, in any realm. Dates, Maps,
- * typed arrays and class instances are refused because Object.keys would silently encode them as {}.
- */
-function isPlainObject(v: object): v is Record<string, unknown> {
-  const proto: unknown = Object.getPrototypeOf(v);
-  return proto === null || Object.getPrototypeOf(proto) === null;
-}
-
-/**
  * The canonical cell string used by column digests:
  * null '\u0000N', string 's:' + text (no Unicode normalisation), number 'n:' + canonical number,
  * boolean 'b:1' | 'b:0', date 'd:' + YYYY-MM-DD, datetime 't:' + ISO UTC, geometry 'g:' + canonical JSON.
+ *
+ * Date and datetime text must already be in that form. Encoding another spelling of the same day or
+ * instant would give a digest that no other engine reproduces, so it is refused instead.
  */
 export function canonicalCell(v: CellValue): string {
   if (v === null) return NULL_CELL;
@@ -114,10 +109,15 @@ export function canonicalCell(v: CellValue): string {
     case 'boolean':
       return v ? 'b:1' : 'b:0';
   }
-  if (isDateCell(v)) return `d:${v.date}`;
-  if (isDateTimeCell(v)) return `t:${v.datetime}`;
+  if (isDateCell(v)) return `d:${inForm(v.date, DATE_TEXT, 'YYYY-MM-DD')}`;
+  if (isDateTimeCell(v)) return `t:${inForm(v.datetime, DATETIME_TEXT, 'YYYY-MM-DDTHH:mm:ss.sssZ')}`;
   if (isGeometryCell(v)) return `g:${canonicalJson(v.geometry as unknown as JsonValue)}`;
   throw invalid('The value is not a cell value (null, string, number, boolean, date, datetime or geometry).');
+}
+
+function inForm(text: string, form: RegExp, pattern: string): string {
+  if (form.test(text)) return text;
+  throw invalid(`The cell text "${text}" is not written as ${pattern}.`, { text, expected: pattern }, CELL_FORM_FIX);
 }
 
 /** UTF-8 bytes of a string. Lone surrogates become U+FFFD, as with every TextEncoder. */

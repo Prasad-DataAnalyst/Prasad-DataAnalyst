@@ -36,26 +36,41 @@ export type CellValue = null | string | number | boolean | DateCell | DateTimeCe
 /** What readers emit: text, native numbers, booleans and dates where the format has them, or a format error cell. */
 export type RawField = string | number | boolean | null | DateCell | DateTimeCell | { error: string };
 
+/** The canonical text of a DateCell (internal; the module exports only the types and guards). */
+export const DATE_TEXT = /^\d{4}-\d{2}-\d{2}$/;
+/** The canonical text of a DateTimeCell (internal). */
+export const DATETIME_TEXT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * An object cell has exactly one member. Without this, { date, datetime } would pass two guards and
+ * be read differently depending on which guard a module tries first, and an extra member would be
+ * silently left out of the cell's digest.
+ */
+function soleMember(v: unknown, key: string): unknown {
+  if (!isRecord(v)) return undefined;
+  const keys = Object.keys(v);
+  return keys.length === 1 && keys[0] === key ? v[key] : undefined;
+}
+
 export function isDateCell(v: unknown): v is DateCell {
-  return isRecord(v) && typeof v['date'] === 'string';
+  return typeof soleMember(v, 'date') === 'string';
 }
 
 export function isDateTimeCell(v: unknown): v is DateTimeCell {
-  return isRecord(v) && typeof v['datetime'] === 'string';
+  return typeof soleMember(v, 'datetime') === 'string';
 }
 
 export function isGeometryCell(v: unknown): v is GeometryCell {
-  if (!isRecord(v)) return false;
-  const geometry = v['geometry'];
+  const geometry = soleMember(v, 'geometry');
   return isRecord(geometry) && typeof geometry['type'] === 'string';
 }
 
 function isErrorField(v: unknown): v is { error: string } {
-  return isRecord(v) && typeof v['error'] === 'string';
+  return typeof soleMember(v, 'error') === 'string';
 }
 
 /**

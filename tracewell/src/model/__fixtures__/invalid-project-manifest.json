@@ -1,0 +1,159 @@
+[
+  {
+    "why": "bad sha256 length",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/originals/0/fileId",
+        "value": "97b6be72e491a3472daf248fbd71035de929518372905aa9619add9a4914545"
+      }
+    ]
+  },
+  {
+    "why": "unsupported format version",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/formatVersion",
+        "value": "0.2"
+      }
+    ]
+  },
+  {
+    "why": "duplicate entry paths",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/entries/1/path",
+        "value": "audit.jsonl"
+      }
+    ]
+  },
+  {
+    "why": "entry path escapes the package",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/entries/0/path",
+        "value": "../evil.txt"
+      }
+    ]
+  },
+  {
+    "why": "absolute entry path",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/entries/0/path",
+        "value": "/etc/passwd"
+      }
+    ]
+  },
+  {
+    "why": "malformed project ID",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/projectId",
+        "value": "p_0123"
+      }
+    ]
+  },
+  {
+    "why": "missing audit head",
+    "base": 0,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/auditHead"
+      }
+    ]
+  },
+  {
+    "why": "unknown unit system",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/unitSystem",
+        "value": "Imperial"
+      }
+    ]
+  },
+  {
+    "why": "wrong format name",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/format",
+        "value": "tracewell-export"
+      }
+    ]
+  },
+  {
+    "why": "negative size",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/entries/0/size",
+        "value": -1
+      }
+    ]
+  },
+  {
+    "why": "unknown key",
+    "base": 0,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/encrypted",
+        "value": true
+      }
+    ]
+  },
+  {
+    "why": "duplicate rule-pack reference",
+    "base": 0,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/rulePacks/-",
+        "value": {
+          "id": "tracewell.generic-dq",
+          "version": "0.1.0",
+          "sha256": "880d43b08d7cbaaf6dd27060d6f61b62fffac655f62f1860d1dd65958d333803"
+        }
+      }
+    ]
+  },
+  {
+    "why": "project area latitude beyond 90",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/projectArea",
+        "value": [1.5, 56.0, 3.0, 95.0]
+      }
+    ]
+  },
+  {
+    "why": "project area south edge north of its north edge",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/projectArea",
+        "value": [1.5, 57.5, 3.0, 56.0]
+      }
+    ]
+  }
+]

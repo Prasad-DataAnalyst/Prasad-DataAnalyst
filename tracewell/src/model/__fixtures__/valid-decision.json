@@ -1,0 +1,101 @@
+[
+  {
+    "kind": "edit_cell",
+    "datasetId": "d1",
+    "rowId": 41,
+    "columnId": "c3",
+    "value": {
+      "text": "1520.5"
+    },
+    "reason": "Confirmed from the daily report"
+  },
+  {
+    "kind": "edit_cell",
+    "datasetId": "d1",
+    "rowId": 7,
+    "columnId": "c0",
+    "value": {
+      "value": {
+        "date": "2026-03-01"
+      }
+    },
+    "reason": "Day and month were swapped",
+    "issueId": "I-710abb165272"
+  },
+  {
+    "kind": "edit_cell",
+    "datasetId": "d2",
+    "rowId": 0,
+    "columnId": "c2",
+    "value": {
+      "value": null
+    },
+    "reason": "Sensor fault"
+  },
+  {
+    "kind": "accept_issue",
+    "issueId": "I-710abb165272",
+    "rows": "all",
+    "reason": "Expected during shut-in"
+  },
+  {
+    "kind": "accept_issue",
+    "issueId": "I-710abb165272",
+    "rows": [3, 4, 9],
+    "reason": "Expected during shut-in"
+  },
+  {
+    "kind": "exclude_rows",
+    "datasetId": "d1",
+    "rows": [12, 13],
+    "reason": "Test rows from commissioning"
+  },
+  {
+    "kind": "exclude_rows",
+    "datasetId": "d1",
+    "rows": {
+      "issueId": "I-710abb165272"
+    },
+    "reason": "Duplicates of earlier rows"
+  },
+  {
+    "kind": "comment_issue",
+    "issueId": "I-710abb165272",
+    "text": "Asked the field team to confirm."
+  },
+  {
+    "kind": "override_detection",
+    "datasetId": "d1",
+    "columnId": "c3",
+    "property": "unit",
+    "value": "psia",
+    "reason": "Header says psi; gauge is absolute"
+  },
+  {
+    "kind": "override_detection",
+    "datasetId": "d1",
+    "property": "delimiter",
+    "value": ";",
+    "reason": "File is semicolon separated"
+  },
+  {
+    "kind": "set_project_area",
+    "bbox": [1.5, 56.0, 3.0, 57.5],
+    "reason": "Licence block outline"
+  },
+  {
+    "kind": "set_project_area",
+    "bbox": null,
+    "reason": "Area no longer applies"
+  },
+  {
+    "kind": "revert",
+    "seq": 5,
+    "reason": "Edit was made on the wrong row"
+  },
+  {
+    "kind": "set_project_area",
+    "bbox": [170.0, -20.0, -170.0, -10.0],
+    "reason": "Block crosses the antimeridian"
+  }
+]

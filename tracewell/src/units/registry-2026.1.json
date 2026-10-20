@@ -1,0 +1,1006 @@
+{
+  "version": "2026.1",
+  "units": [
+    {
+      "code": "m",
+      "label": "metre",
+      "aliases": ["meter", "metres", "meters"],
+      "quantity": "length",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI base unit (SI Brochure, 9th edition (2019), section 2.3.1)"
+    },
+    {
+      "code": "km",
+      "label": "kilometre",
+      "aliases": ["kilometer", "kilometres", "kilometers"],
+      "quantity": "length",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10³ m; SI prefix kilo (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "mm",
+      "label": "millimetre",
+      "aliases": ["millimeter", "millimetres", "millimeters"],
+      "quantity": "length",
+      "toSI": {
+        "factor": 0.001,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁻³ m; SI prefix milli (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "ft",
+      "label": "foot (international)",
+      "aliases": ["feet", "foot"],
+      "quantity": "length",
+      "toSI": {
+        "factor": 0.3048,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "International foot, 0.3048 m exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "in",
+      "label": "inch",
+      "aliases": ["inch", "inches"],
+      "quantity": "length",
+      "toSI": {
+        "factor": 0.0254,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Inch, 0.0254 m exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "m2",
+      "label": "square metre",
+      "aliases": ["sq m", "square metre", "square meter"],
+      "quantity": "area",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Coherent SI derived unit (SI Brochure, 9th edition (2019), section 2.3.4)"
+    },
+    {
+      "code": "km2",
+      "label": "square kilometre",
+      "aliases": ["sq km"],
+      "quantity": "area",
+      "toSI": {
+        "factor": 1000000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁶ m²; SI prefix kilo on the metre (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "acre",
+      "label": "acre (international foot)",
+      "aliases": ["acres"],
+      "quantity": "area",
+      "toSI": {
+        "factor": 4046.8564224,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "43 560 square feet of the international foot = 4046.8564224 m² exactly (foot: NIST SP 811 (2008), Appendix B.8); the U.S. survey foot is deprecated since 1 January 2023 and the survey acre is 4 ppm larger"
+    },
+    {
+      "code": "m3",
+      "label": "cubic metre",
+      "aliases": ["cu m", "cubic metre", "cubic meter"],
+      "quantity": "volume",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Coherent SI derived unit (SI Brochure, 9th edition (2019), section 2.3.4)"
+    },
+    {
+      "code": "L",
+      "label": "litre",
+      "aliases": ["l", "litre", "liter", "litres", "liters"],
+      "quantity": "volume",
+      "toSI": {
+        "factor": 0.001,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Litre, 10⁻³ m³ (SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "bbl",
+      "label": "barrel (petroleum, 42 U.S. gallons)",
+      "aliases": ["barrel", "barrels", "bbls"],
+      "quantity": "volume",
+      "toSI": {
+        "factor": 0.158987294928,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Barrel for petroleum, 42 U.S. gallons = 0.158987294928 m³ exactly (API MPMS Chapter 1; NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "ft3",
+      "label": "cubic foot",
+      "aliases": ["cu ft", "cubic foot", "cubic feet"],
+      "quantity": "volume",
+      "toSI": {
+        "factor": 0.028316846592,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Cubic foot, 0.3048³ m³ = 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "Sm3",
+      "label": "standard cubic metre (15 °C, 101.325 kPa)",
+      "aliases": ["standard cubic metre", "standard cubic meter"],
+      "quantity": "std_volume",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-15C-101.325kPa",
+      "source": "Cubic metre at the standard reference conditions 15 °C and 101.325 kPa (ISO 13443:1996)"
+    },
+    {
+      "code": "Nm3",
+      "label": "normal cubic metre (0 °C, 101.325 kPa)",
+      "aliases": ["normal cubic metre", "normal cubic meter"],
+      "quantity": "std_volume",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-0C-101.325kPa",
+      "source": "Cubic metre at the normal conditions 0 °C and 101.325 kPa (DIN 1343:1990)"
+    },
+    {
+      "code": "scf",
+      "label": "standard cubic foot (60 °F, 14.696 psia)",
+      "aliases": ["standard cubic foot", "standard cubic feet"],
+      "quantity": "std_volume",
+      "toSI": {
+        "factor": 0.028316846592,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "Cubic foot, 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "Mscf",
+      "label": "thousand standard cubic feet (60 °F, 14.696 psia)",
+      "aliases": ["Mcf"],
+      "quantity": "std_volume",
+      "toSI": {
+        "factor": 28.316846592,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "10³ scf (oilfield prefix M = thousand); cubic foot, 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "MMscf",
+      "label": "million standard cubic feet (60 °F, 14.696 psia)",
+      "aliases": ["MMcf"],
+      "quantity": "std_volume",
+      "toSI": {
+        "factor": 28316.846592,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "10⁶ scf (oilfield prefix MM = million); cubic foot, 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "stb",
+      "label": "stock-tank barrel (60 °F, 14.696 psia)",
+      "aliases": ["stock-tank barrel", "stock tank barrel", "stock-tank barrels", "stock tank barrels"],
+      "quantity": "std_volume",
+      "toSI": {
+        "factor": 0.158987294928,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "Stock-tank oil volume in barrels; barrel for petroleum, 42 U.S. gallons = 0.158987294928 m³ exactly (API MPMS Chapter 1; NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "kg",
+      "label": "kilogram",
+      "aliases": ["kilogram", "kilograms", "kgs"],
+      "quantity": "mass",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI base unit (SI Brochure, 9th edition (2019), section 2.3.1)"
+    },
+    {
+      "code": "t",
+      "label": "tonne (metric ton)",
+      "aliases": ["tonne", "tonnes", "metric ton", "metric tons", "metric tonne", "metric tonnes"],
+      "quantity": "mass",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Tonne, 10³ kg (SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "lb",
+      "label": "pound (avoirdupois)",
+      "aliases": ["lbs", "lbm", "pound", "pounds"],
+      "quantity": "mass",
+      "toSI": {
+        "factor": 0.45359237,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Pound (avoirdupois), 0.45359237 kg exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "s",
+      "label": "second",
+      "aliases": ["sec", "secs", "second", "seconds"],
+      "quantity": "time",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI base unit (SI Brochure, 9th edition (2019), section 2.3.1)"
+    },
+    {
+      "code": "min",
+      "label": "minute",
+      "aliases": ["mins", "minute", "minutes"],
+      "quantity": "time",
+      "toSI": {
+        "factor": 60,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Minute, 60 s (SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "h",
+      "label": "hour",
+      "aliases": ["hr", "hrs", "hour", "hours"],
+      "quantity": "time",
+      "toSI": {
+        "factor": 3600,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Hour, 3600 s (SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "d",
+      "label": "day",
+      "aliases": ["day", "days"],
+      "quantity": "time",
+      "toSI": {
+        "factor": 86400,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Day, 86 400 s (SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "K",
+      "label": "kelvin",
+      "aliases": ["kelvin", "°K", "degK"],
+      "quantity": "temperature",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI base unit (SI Brochure, 9th edition (2019), section 2.3.1)"
+    },
+    {
+      "code": "degC",
+      "label": "degree Celsius",
+      "aliases": ["°C", "C", "celsius", "centigrade"],
+      "quantity": "temperature",
+      "toSI": {
+        "factor": 1,
+        "offset": 273.15
+      },
+      "exact": true,
+      "convention": null,
+      "source": "T/K = t/°C + 273.15 (SI Brochure, 9th edition (2019), section 2.3.1 and Table 4)"
+    },
+    {
+      "code": "degF",
+      "label": "degree Fahrenheit",
+      "aliases": ["°F", "F", "fahrenheit"],
+      "quantity": "temperature",
+      "toSI": {
+        "factor": 0.5555555555555556,
+        "offset": 255.37222222222223
+      },
+      "exact": false,
+      "convention": null,
+      "source": "T/K = (t/°F + 459.67)/1.8 (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "delta_K",
+      "label": "kelvin (temperature difference)",
+      "aliases": ["ΔK"],
+      "quantity": "temperature_diff",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "A temperature difference in kelvin (SI Brochure, 9th edition (2019), section 2.3.1)"
+    },
+    {
+      "code": "delta_degC",
+      "label": "degree Celsius (temperature difference)",
+      "aliases": ["Δ°C", "ΔdegC"],
+      "quantity": "temperature_diff",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "A temperature difference of 1 °C equals 1 K (SI Brochure, 9th edition (2019), section 2.3.1)"
+    },
+    {
+      "code": "delta_degF",
+      "label": "degree Fahrenheit (temperature difference)",
+      "aliases": ["Δ°F", "ΔdegF"],
+      "quantity": "temperature_diff",
+      "toSI": {
+        "factor": 0.5555555555555556,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "A temperature difference of 1 °F equals 1/1.8 K (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "Pa",
+      "label": "pascal (absolute)",
+      "aliases": ["pascal"],
+      "quantity": "pressure_abs",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI derived unit with a special name (SI Brochure, 9th edition (2019), Table 4); SI pressures are absolute unless stated otherwise"
+    },
+    {
+      "code": "kPa",
+      "label": "kilopascal (absolute)",
+      "aliases": ["kPa(a)", "kPaa", "kPa abs", "kilopascal"],
+      "quantity": "pressure_abs",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10³ Pa; SI prefix kilo (SI Brochure, 9th edition (2019), Table 7); SI pressures are absolute unless stated otherwise"
+    },
+    {
+      "code": "MPa",
+      "label": "megapascal (absolute)",
+      "aliases": ["MPa(a)", "MPaa", "MPa abs", "megapascal"],
+      "quantity": "pressure_abs",
+      "toSI": {
+        "factor": 1000000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁶ Pa; SI prefix mega (SI Brochure, 9th edition (2019), Table 7); SI pressures are absolute unless stated otherwise"
+    },
+    {
+      "code": "bar",
+      "label": "bar (absolute)",
+      "aliases": ["bara", "bar(a)", "bar abs"],
+      "quantity": "pressure_abs",
+      "toSI": {
+        "factor": 100000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Bar, 10⁵ Pa exactly (NIST SP 811 (2008), Appendix B.8); absolute unless stated otherwise"
+    },
+    {
+      "code": "psia",
+      "label": "pound-force per square inch, absolute",
+      "aliases": ["psi(a)", "psi abs", "psi absolute"],
+      "quantity": "pressure_abs",
+      "toSI": {
+        "factor": 6894.757293168362,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "Pound-force per square inch = 0.45359237 kg × 9.80665 m/s² / (0.0254 m)² (NIST SP 811 (2008), Appendix B.8 lists 6.894 757 E+03 Pa); absolute pressure"
+    },
+    {
+      "code": "psi",
+      "label": "pound-force per square inch (gauge or absolute not stated; treated as absolute)",
+      "aliases": ["lbf/in2", "lb/in2"],
+      "quantity": "pressure_abs",
+      "toSI": {
+        "factor": 6894.757293168362,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "Pound-force per square inch = 0.45359237 kg × 9.80665 m/s² / (0.0254 m)² (NIST SP 811 (2008), Appendix B.8 lists 6.894 757 E+03 Pa); the reference is not stated, so it is treated as absolute"
+    },
+    {
+      "code": "kPag",
+      "label": "kilopascal (gauge)",
+      "aliases": ["kPa(g)", "kPa gauge"],
+      "quantity": "pressure_gauge",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "gauge",
+      "source": "10³ Pa; SI prefix kilo (SI Brochure, 9th edition (2019), Table 7); gauge pressure, measured from the local atmospheric pressure"
+    },
+    {
+      "code": "barg",
+      "label": "bar (gauge)",
+      "aliases": ["bar(g)", "bar gauge"],
+      "quantity": "pressure_gauge",
+      "toSI": {
+        "factor": 100000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "gauge",
+      "source": "Bar, 10⁵ Pa exactly (NIST SP 811 (2008), Appendix B.8); gauge pressure, measured from the local atmospheric pressure"
+    },
+    {
+      "code": "psig",
+      "label": "pound-force per square inch, gauge",
+      "aliases": ["psi(g)", "psi gauge"],
+      "quantity": "pressure_gauge",
+      "toSI": {
+        "factor": 6894.757293168362,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": "gauge",
+      "source": "Pound-force per square inch = 0.45359237 kg × 9.80665 m/s² / (0.0254 m)² (NIST SP 811 (2008), Appendix B.8 lists 6.894 757 E+03 Pa); gauge pressure, measured from the local atmospheric pressure"
+    },
+    {
+      "code": "delta_kPa",
+      "label": "kilopascal (pressure difference)",
+      "aliases": ["kPad", "kPa(d)", "ΔkPa"],
+      "quantity": "pressure_diff",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10³ Pa; SI prefix kilo (SI Brochure, 9th edition (2019), Table 7); a pressure difference"
+    },
+    {
+      "code": "delta_psi",
+      "label": "pound-force per square inch (pressure difference)",
+      "aliases": ["psid", "psi(d)", "Δpsi"],
+      "quantity": "pressure_diff",
+      "toSI": {
+        "factor": 6894.757293168362,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "Pound-force per square inch = 0.45359237 kg × 9.80665 m/s² / (0.0254 m)² (NIST SP 811 (2008), Appendix B.8 lists 6.894 757 E+03 Pa); a pressure difference"
+    },
+    {
+      "code": "inH2O",
+      "label": "inch of water at 60 °F (pressure difference)",
+      "aliases": ["inWC", "inch of water", "inches of water"],
+      "quantity": "pressure_diff",
+      "toSI": {
+        "factor": 248.84,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "Inch of water (60 °F), 2.4884 E+02 Pa, a rounded conventional value (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "J",
+      "label": "joule",
+      "aliases": ["joule", "joules"],
+      "quantity": "energy",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI derived unit with a special name (SI Brochure, 9th edition (2019), Table 4)"
+    },
+    {
+      "code": "MJ",
+      "label": "megajoule",
+      "aliases": ["megajoule", "megajoules"],
+      "quantity": "energy",
+      "toSI": {
+        "factor": 1000000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁶ J; SI prefix mega (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "GJ",
+      "label": "gigajoule",
+      "aliases": ["gigajoule", "gigajoules"],
+      "quantity": "energy",
+      "toSI": {
+        "factor": 1000000000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁹ J; SI prefix giga (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "kWh",
+      "label": "kilowatt hour",
+      "aliases": ["kilowatt hour", "kilowatt hours", "kilowatt-hour", "kilowatt-hours"],
+      "quantity": "energy",
+      "toSI": {
+        "factor": 3600000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Kilowatt hour, 3.6 × 10⁶ J exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "Btu",
+      "label": "British thermal unit (International Table)",
+      "aliases": ["Btu_IT", "Btu(IT)", "British thermal unit"],
+      "quantity": "energy",
+      "toSI": {
+        "factor": 1055.05585262,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "British thermal unit (International Table), 1055.05585262 J exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "MMBtu",
+      "label": "million British thermal units (International Table)",
+      "aliases": ["million Btu"],
+      "quantity": "energy",
+      "toSI": {
+        "factor": 1055055852.62,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁶ Btu (oilfield prefix MM = million); British thermal unit (International Table), 1055.05585262 J exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "W",
+      "label": "watt",
+      "aliases": ["watt", "watts"],
+      "quantity": "power",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "SI derived unit with a special name (SI Brochure, 9th edition (2019), Table 4)"
+    },
+    {
+      "code": "kW",
+      "label": "kilowatt",
+      "aliases": ["kilowatt", "kilowatts"],
+      "quantity": "power",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10³ W; SI prefix kilo (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "MW",
+      "label": "megawatt",
+      "aliases": ["megawatt", "megawatts"],
+      "quantity": "power",
+      "toSI": {
+        "factor": 1000000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10⁶ W; SI prefix mega (SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "hp",
+      "label": "horsepower (mechanical, 550 ft·lbf/s)",
+      "aliases": ["horsepower"],
+      "quantity": "power",
+      "toSI": {
+        "factor": 745.6998715822702,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "Horsepower = 550 ft·lbf/s = 745.69987158227022 W (NIST SP 811 (2008), Appendix B.8 lists 7.456 999 E+02 W)"
+    },
+    {
+      "code": "kg/m3",
+      "label": "kilogram per cubic metre",
+      "aliases": [],
+      "quantity": "density",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Coherent SI derived unit (SI Brochure, 9th edition (2019), section 2.3.4)"
+    },
+    {
+      "code": "g/cm3",
+      "label": "gram per cubic centimetre",
+      "aliases": ["g/cc", "kg/L", "g/mL"],
+      "quantity": "density",
+      "toSI": {
+        "factor": 1000,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "10³ kg/m³ exactly (SI prefixes, SI Brochure, 9th edition (2019), Table 7)"
+    },
+    {
+      "code": "lb/ft3",
+      "label": "pound per cubic foot",
+      "aliases": ["lbm/ft3", "pcf"],
+      "quantity": "density",
+      "toSI": {
+        "factor": 16.018463373960138,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "0.45359237 kg / 0.028316846592 m³ (NIST SP 811 (2008), Appendix B.8 lists 1.601 846 E+01 kg/m³)"
+    },
+    {
+      "code": "kg/s",
+      "label": "kilogram per second",
+      "aliases": [],
+      "quantity": "mass_rate",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Coherent SI derived unit (SI Brochure, 9th edition (2019), section 2.3.4)"
+    },
+    {
+      "code": "kg/h",
+      "label": "kilogram per hour",
+      "aliases": [],
+      "quantity": "mass_rate",
+      "toSI": {
+        "factor": 0.0002777777777777778,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "1 kg / 3600 s (hour: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "t/d",
+      "label": "tonne per day",
+      "aliases": ["tpd", "tonne/d", "tonnes/d"],
+      "quantity": "mass_rate",
+      "toSI": {
+        "factor": 0.011574074074074073,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "10³ kg / 86 400 s (tonne and day: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "lb/h",
+      "label": "pound per hour",
+      "aliases": ["lbm/h", "lbs/h"],
+      "quantity": "mass_rate",
+      "toSI": {
+        "factor": 0.00012599788055555556,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "0.45359237 kg / 3600 s (pound: NIST SP 811 (2008), Appendix B.8; hour: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "m3/s",
+      "label": "cubic metre per second",
+      "aliases": [],
+      "quantity": "volume_rate",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Coherent SI derived unit (SI Brochure, 9th edition (2019), section 2.3.4)"
+    },
+    {
+      "code": "m3/h",
+      "label": "cubic metre per hour",
+      "aliases": [],
+      "quantity": "volume_rate",
+      "toSI": {
+        "factor": 0.0002777777777777778,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "1 m³ / 3600 s (hour: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "m3/d",
+      "label": "cubic metre per day",
+      "aliases": [],
+      "quantity": "volume_rate",
+      "toSI": {
+        "factor": 0.000011574074074074073,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "1 m³ / 86 400 s (day: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "bbl/d",
+      "label": "barrel per day",
+      "aliases": ["bpd", "bbls/d", "b/d", "blpd", "bopd", "bwpd"],
+      "quantity": "volume_rate",
+      "toSI": {
+        "factor": 0.0000018401307283333333,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "0.158987294928 m³ / 86 400 s (barrel: API MPMS Chapter 1; day: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "Sm3/d",
+      "label": "standard cubic metre per day (15 °C, 101.325 kPa)",
+      "aliases": [],
+      "quantity": "std_volume_rate",
+      "toSI": {
+        "factor": 0.000011574074074074073,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": "std-15C-101.325kPa",
+      "source": "1 Sm³ / 86 400 s; cubic metre at the standard reference conditions 15 °C and 101.325 kPa (ISO 13443:1996)"
+    },
+    {
+      "code": "Nm3/h",
+      "label": "normal cubic metre per hour (0 °C, 101.325 kPa)",
+      "aliases": [],
+      "quantity": "std_volume_rate",
+      "toSI": {
+        "factor": 0.0002777777777777778,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": "std-0C-101.325kPa",
+      "source": "1 Nm³ / 3600 s; cubic metre at the normal conditions 0 °C and 101.325 kPa (DIN 1343:1990)"
+    },
+    {
+      "code": "scf/d",
+      "label": "standard cubic foot per day (60 °F, 14.696 psia)",
+      "aliases": ["scfd"],
+      "quantity": "std_volume_rate",
+      "toSI": {
+        "factor": 3.2774128e-7,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "1 scf / 86 400 s; cubic foot, 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "Mscf/d",
+      "label": "thousand standard cubic feet per day (60 °F, 14.696 psia)",
+      "aliases": ["Mscfd", "Mcf/d", "Mcfd"],
+      "quantity": "std_volume_rate",
+      "toSI": {
+        "factor": 0.00032774128,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "10³ scf / 86 400 s (oilfield prefix M = thousand); cubic foot, 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "MMscf/d",
+      "label": "million standard cubic feet per day (60 °F, 14.696 psia)",
+      "aliases": ["MMscfd", "MMcf/d", "MMcfd"],
+      "quantity": "std_volume_rate",
+      "toSI": {
+        "factor": 0.32774128,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": "std-60F-14.696psia",
+      "source": "10⁶ scf / 86 400 s (oilfield prefix MM = million); cubic foot, 0.028316846592 m³ exactly (NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "stb/d",
+      "label": "stock-tank barrel per day (60 °F, 14.696 psia)",
+      "aliases": ["stbd"],
+      "quantity": "std_volume_rate",
+      "toSI": {
+        "factor": 0.0000018401307283333333,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": "std-60F-14.696psia",
+      "source": "1 stb / 86 400 s; barrel for petroleum, 42 U.S. gallons = 0.158987294928 m³ exactly (API MPMS Chapter 1; NIST SP 811 (2008), Appendix B.8), at the standard conditions 60 °F and 14.696 psia (API MPMS Chapter 1)"
+    },
+    {
+      "code": "GJ/d",
+      "label": "gigajoule per day",
+      "aliases": [],
+      "quantity": "energy_rate",
+      "toSI": {
+        "factor": 11574.074074074075,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "10⁹ J / 86 400 s (day: SI Brochure, 9th edition (2019), Table 8)"
+    },
+    {
+      "code": "MMBtu/d",
+      "label": "million British thermal units per day",
+      "aliases": [],
+      "quantity": "energy_rate",
+      "toSI": {
+        "factor": 12211.29459050926,
+        "offset": 0
+      },
+      "exact": false,
+      "convention": null,
+      "source": "10⁶ Btu / 86 400 s; British thermal unit (International Table), 1055.05585262 J exactly (NIST SP 811 (2008), Appendix B.8)"
+    },
+    {
+      "code": "fraction",
+      "label": "fraction (0 to 1)",
+      "aliases": [],
+      "quantity": "fraction",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "A ratio of two quantities of the same kind, of dimension one (SI Brochure, 9th edition (2019), section 2.3.3)"
+    },
+    {
+      "code": "%",
+      "label": "percent",
+      "aliases": ["percent", "pct", "mol%", "mole%", "vol%", "wt%", "mass%"],
+      "quantity": "fraction",
+      "toSI": {
+        "factor": 0.01,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Percent, 10⁻² (SI Brochure, 9th edition (2019), section 5.4.7)"
+    },
+    {
+      "code": "ppm",
+      "label": "parts per million",
+      "aliases": ["ppmv", "ppmw", "ppmm", "ppm(v)", "ppm(w)", "ppm(m)", "mg/kg"],
+      "quantity": "fraction",
+      "toSI": {
+        "factor": 0.000001,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Parts per million, 10⁻⁶; a widely used convention that the SI Brochure, 9th edition (2019), section 5.4.7, discourages"
+    },
+    {
+      "code": "m/s",
+      "label": "metre per second",
+      "aliases": [],
+      "quantity": "velocity",
+      "toSI": {
+        "factor": 1,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "Coherent SI derived unit (SI Brochure, 9th edition (2019), section 2.3.4)"
+    },
+    {
+      "code": "ft/s",
+      "label": "foot per second",
+      "aliases": [],
+      "quantity": "velocity",
+      "toSI": {
+        "factor": 0.3048,
+        "offset": 0
+      },
+      "exact": true,
+      "convention": null,
+      "source": "0.3048 m/s exactly (NIST SP 811 (2008), Appendix B.8)"
+    }
+  ]
+}

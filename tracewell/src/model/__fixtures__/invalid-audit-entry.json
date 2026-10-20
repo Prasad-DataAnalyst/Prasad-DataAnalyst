@@ -1,0 +1,194 @@
+[
+  {
+    "why": "unknown action",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/action",
+        "value": "cell.delete"
+      }
+    ]
+  },
+  {
+    "why": "bad sha256 length",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/hash",
+        "value": "568a57494bb91d21d30a6adeb38c89eea952942f4112c4baa34b15c1bc1ee43"
+      }
+    ]
+  },
+  {
+    "why": "upper-case sha256",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/prev",
+        "value": "F9F128479D4B33826AF1E35D6DE51B58CC2D5E53BB4FDB10FB6C533C0F8CBC98"
+      }
+    ]
+  },
+  {
+    "why": "missing actor",
+    "base": 4,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/actor"
+      }
+    ]
+  },
+  {
+    "why": "unknown key",
+    "base": 4,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/note",
+        "value": "edited later"
+      }
+    ]
+  },
+  {
+    "why": "seq is zero",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/seq",
+        "value": 0
+      }
+    ]
+  },
+  {
+    "why": "seq is not an integer",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/seq",
+        "value": 1.5
+      }
+    ]
+  },
+  {
+    "why": "timestamp without milliseconds",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/at",
+        "value": "2026-10-19T09:02:30Z"
+      }
+    ]
+  },
+  {
+    "why": "timestamp with an offset",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/at",
+        "value": "2026-10-19T09:02:30.250+01:00"
+      }
+    ]
+  },
+  {
+    "why": "impossible calendar date",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/at",
+        "value": "2026-02-30T09:02:30.250Z"
+      }
+    ]
+  },
+  {
+    "why": "user role other than Analyst",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/actor/role",
+        "value": "Admin"
+      }
+    ]
+  },
+  {
+    "why": "unknown system component",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/actor",
+        "value": {
+          "kind": "system",
+          "component": "ui"
+        }
+      }
+    ]
+  },
+  {
+    "why": "unknown target key",
+    "base": 4,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/target/column",
+        "value": "c3"
+      }
+    ]
+  },
+  {
+    "why": "negative row ID",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/target/rowId",
+        "value": -1
+      }
+    ]
+  },
+  {
+    "why": "malformed column ID",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/target/columnId",
+        "value": "Pressure"
+      }
+    ]
+  },
+  {
+    "why": "rule version is not semantic",
+    "base": 5,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rule",
+        "value": {
+          "id": "TW-DQ-005",
+          "version": "1"
+        }
+      }
+    ]
+  },
+  {
+    "why": "conversion factor of zero",
+    "base": 6,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/method/toFactor",
+        "value": 0
+      }
+    ]
+  }
+]

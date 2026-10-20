@@ -1,0 +1,145 @@
+[
+  {
+    "id": "tracewell.sample-dq",
+    "version": "0.1.0",
+    "title": "Sample data-quality rules",
+    "source": "Tracewell rule catalogue, SAD section 7.8",
+    "rules": [
+      {
+        "id": "TW-DQ-001",
+        "version": "0.1.0",
+        "title": "Missing key value",
+        "category": "completeness",
+        "severity": "warning",
+        "appliesTo": {
+          "roles": ["id", "time"]
+        },
+        "check": {
+          "kind": "not_null"
+        },
+        "message": "{column} is empty in {count} rows.",
+        "explanation": "Rows without an identifier or a time cannot be matched or ordered.",
+        "source": "ISO 8000-8 completeness"
+      },
+      {
+        "id": "TW-DQ-005",
+        "version": "0.1.0",
+        "title": "Physically impossible value",
+        "category": "range",
+        "severity": "error",
+        "appliesTo": {
+          "roles": ["measure"],
+          "quantities": ["pressure_abs", "temperature"]
+        },
+        "check": {
+          "kind": "physical_range"
+        },
+        "message": "{column} has {count} values outside {min} to {max} {unit}.",
+        "explanation": "Absolute pressure cannot be negative and temperature cannot be below absolute zero.",
+        "source": "Physical bounds per quantity kind"
+      },
+      {
+        "id": "TW-TIME-003",
+        "version": "0.1.0",
+        "title": "Gap in a time series",
+        "category": "time",
+        "severity": "warning",
+        "appliesTo": {
+          "roles": ["time"]
+        },
+        "check": {
+          "kind": "ts_gap",
+          "factor": 3
+        },
+        "message": "{column} has {count} gaps longer than three times the usual interval.",
+        "explanation": "A long gap usually means missing records.",
+        "source": "Engineering practice"
+      },
+      {
+        "id": "TW-TIME-006",
+        "version": "0.1.0",
+        "title": "Flatline",
+        "category": "time",
+        "severity": "warning",
+        "appliesTo": {
+          "roles": ["measure"],
+          "types": ["number", "integer"]
+        },
+        "check": {
+          "kind": "flatline",
+          "minRun": 6
+        },
+        "message": "{column} repeats the same value in {count} rows.",
+        "explanation": "A sensor that repeats one value may be stuck.",
+        "source": "Engineering practice"
+      },
+      {
+        "id": "TW-TIME-007",
+        "version": "0.1.0",
+        "title": "Spike",
+        "category": "time",
+        "severity": "note",
+        "appliesTo": {
+          "roles": ["measure"]
+        },
+        "check": {
+          "kind": "spike",
+          "window": 7,
+          "k": 3
+        },
+        "message": "{column} has {count} spikes.",
+        "explanation": "Hampel filter with a scaled median absolute deviation.",
+        "source": "Hampel (1974)"
+      },
+      {
+        "id": "TW-IMP-005",
+        "version": "0.1.0",
+        "title": "Assumptions made at import",
+        "category": "import",
+        "severity": "note",
+        "appliesTo": {
+          "dataset": true
+        },
+        "check": {
+          "kind": "import_note",
+          "code": "TW-IMP-005"
+        },
+        "message": "{count} properties were assumed: {detail}.",
+        "explanation": "Review assumed detections before relying on the data.",
+        "source": "Tracewell"
+      },
+      {
+        "id": "TW-PRJ-001",
+        "version": "0.1.0",
+        "title": "Original file changed",
+        "category": "project",
+        "severity": "error",
+        "appliesTo": {
+          "dataset": true
+        },
+        "check": {
+          "kind": "system"
+        },
+        "message": "{detail}",
+        "explanation": "An original file no longer matches its SHA-256 content address.",
+        "source": "Tracewell"
+      },
+      {
+        "id": "TW-DQ-002",
+        "version": "0.1.0",
+        "title": "Duplicate rows",
+        "category": "uniqueness",
+        "severity": "warning",
+        "appliesTo": {
+          "all": true
+        },
+        "check": {
+          "kind": "duplicate_rows"
+        },
+        "message": "{count} duplicate rows.",
+        "explanation": "Identical rows are usually loaded twice.",
+        "source": "Tracewell"
+      }
+    ]
+  }
+]

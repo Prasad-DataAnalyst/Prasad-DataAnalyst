@@ -1,0 +1,92 @@
+[
+  {
+    "why": "alias used by two units",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units/1/aliases",
+        "value": ["meter", "feet"]
+      }
+    ]
+  },
+  {
+    "why": "code reused as another unit's alias",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units/1/aliases",
+        "value": ["m"]
+      }
+    ]
+  },
+  {
+    "why": "zero factor",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units/0/toSI",
+        "value": {
+          "factor": 0,
+          "offset": 0
+        }
+      }
+    ]
+  },
+  {
+    "why": "unknown quantity kind",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units/0/quantity",
+        "value": "speed"
+      }
+    ]
+  },
+  {
+    "why": "no units",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units",
+        "value": []
+      }
+    ]
+  },
+  {
+    "why": "unknown convention",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units/7/convention",
+        "value": "std-20C"
+      }
+    ]
+  },
+  {
+    "why": "missing source",
+    "base": 0,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/units/0/source"
+      }
+    ]
+  },
+  {
+    "why": "empty alias",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/units/0/aliases",
+        "value": [""]
+      }
+    ]
+  }
+]

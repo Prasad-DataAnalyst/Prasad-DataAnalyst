@@ -27,7 +27,15 @@ export type OverridableProperty =
 
 /** Every decision except a comment needs a reason of at least MIN_REASON_LENGTH non-space characters. */
 export type Decision =
-  | { kind: 'edit_cell'; datasetId: DatasetId; rowId: RowId; columnId: ColumnId; value: CellInput; reason: string; issueId?: IssueId }
+  | {
+      kind: 'edit_cell';
+      datasetId: DatasetId;
+      rowId: RowId;
+      columnId: ColumnId;
+      value: CellInput;
+      reason: string;
+      issueId?: IssueId;
+    }
   | { kind: 'accept_issue'; issueId: IssueId; rows: 'all' | RowId[]; reason: string }
   | { kind: 'exclude_rows'; datasetId: DatasetId; rows: RowId[] | { issueId: IssueId }; reason: string }
   | { kind: 'comment_issue'; issueId: IssueId; text: string }

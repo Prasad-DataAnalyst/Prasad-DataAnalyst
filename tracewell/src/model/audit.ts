@@ -2,7 +2,18 @@
  * The audit log (SAD section 9): append-only, SHA-256 hash-chained, and the single source of truth
  * from which project state is rebuilt.
  */
-import type { AuditSeq, ColumnId, DatasetId, FileId, IsoUtc, IssueId, JsonValue, RowId, Sha256Hex, StepId } from './ids';
+import type {
+  AuditSeq,
+  ColumnId,
+  DatasetId,
+  FileId,
+  IsoUtc,
+  IssueId,
+  JsonValue,
+  RowId,
+  Sha256Hex,
+  StepId,
+} from './ids';
 import type { ConversionMethod } from './units';
 
 export type AuditAction =

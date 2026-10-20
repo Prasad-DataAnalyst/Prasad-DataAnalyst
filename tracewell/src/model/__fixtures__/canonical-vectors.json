@@ -1,0 +1,437 @@
+{
+  "description": "Golden vectors for the canonical encodings of SAD section 9.4 (normative). Consumed by src/model/canonical.test.ts and by tests/oracle/canonical.py; both implementations must produce every expected string exactly.",
+  "conventions": [
+    "kind 'number' is canonicalNumber, 'json' is canonicalJson and 'cell' is canonicalCell.",
+    "input is JSON text. Parse it, then encode the parsed value.",
+    "Every number in an input denotes the IEEE 754 double nearest to its decimal text; '-0' is negative zero. Python: json.loads(input, parse_int=float).",
+    "expected is the exact output string, compared code unit for code unit.",
+    "rejected lists values that have no canonical form; literal is parsed with Number() in JavaScript and float() in Python, and encoding it must fail (INVALID_INPUT in the engine)."
+  ],
+  "vectors": [
+    {
+      "name": "zero",
+      "kind": "number",
+      "input": "0",
+      "expected": "0"
+    },
+    {
+      "name": "negative zero",
+      "kind": "number",
+      "input": "-0",
+      "expected": "0"
+    },
+    {
+      "name": "negative zero written as a fraction",
+      "kind": "number",
+      "input": "-0.0",
+      "expected": "0"
+    },
+    {
+      "name": "one",
+      "kind": "number",
+      "input": "1",
+      "expected": "1"
+    },
+    {
+      "name": "integral value written with a fraction",
+      "kind": "number",
+      "input": "1.0",
+      "expected": "1"
+    },
+    {
+      "name": "negative integer",
+      "kind": "number",
+      "input": "-1",
+      "expected": "-1"
+    },
+    {
+      "name": "hundred",
+      "kind": "number",
+      "input": "100",
+      "expected": "100"
+    },
+    {
+      "name": "one tenth",
+      "kind": "number",
+      "input": "0.1",
+      "expected": "0.1"
+    },
+    {
+      "name": "binary rounding residue",
+      "kind": "number",
+      "input": "0.30000000000000004",
+      "expected": "0.30000000000000004"
+    },
+    {
+      "name": "absolute zero in Celsius",
+      "kind": "number",
+      "input": "-273.15",
+      "expected": "-273.15"
+    },
+    {
+      "name": "psi in pascal",
+      "kind": "number",
+      "input": "6894.757293168361",
+      "expected": "6894.757293168361"
+    },
+    {
+      "name": "barrel in cubic metres",
+      "kind": "number",
+      "input": "0.158987294928",
+      "expected": "0.158987294928"
+    },
+    {
+      "name": "largest exact integer",
+      "kind": "number",
+      "input": "9007199254740991",
+      "expected": "9007199254740991"
+    },
+    {
+      "name": "integer beyond 2^53 rounds to nearest double",
+      "kind": "number",
+      "input": "9007199254740993",
+      "expected": "9007199254740992"
+    },
+    {
+      "name": "1e20 is written in full",
+      "kind": "number",
+      "input": "1e20",
+      "expected": "100000000000000000000"
+    },
+    {
+      "name": "21-digit integer written in full",
+      "kind": "number",
+      "input": "123456789012345680000",
+      "expected": "123456789012345680000"
+    },
+    {
+      "name": "1e21 switches to exponent form",
+      "kind": "number",
+      "input": "1e21",
+      "expected": "1e+21"
+    },
+    {
+      "name": "large exponent",
+      "kind": "number",
+      "input": "1e100",
+      "expected": "1e+100"
+    },
+    {
+      "name": "23-digit integer rounds and uses exponent form",
+      "kind": "number",
+      "input": "12345678901234567890123",
+      "expected": "1.2345678901234568e+22"
+    },
+    {
+      "name": "largest finite double",
+      "kind": "number",
+      "input": "1.7976931348623157e308",
+      "expected": "1.7976931348623157e+308"
+    },
+    {
+      "name": "1e-6 is written in full",
+      "kind": "number",
+      "input": "0.000001",
+      "expected": "0.000001"
+    },
+    {
+      "name": "2e-6 is written in full",
+      "kind": "number",
+      "input": "2e-6",
+      "expected": "0.000002"
+    },
+    {
+      "name": "1e-7 switches to exponent form",
+      "kind": "number",
+      "input": "1e-7",
+      "expected": "1e-7"
+    },
+    {
+      "name": "small value with fraction digits",
+      "kind": "number",
+      "input": "1.5e-7",
+      "expected": "1.5e-7"
+    },
+    {
+      "name": "smallest normal double",
+      "kind": "number",
+      "input": "2.2250738585072014e-308",
+      "expected": "2.2250738585072014e-308"
+    },
+    {
+      "name": "smallest subnormal double",
+      "kind": "number",
+      "input": "5e-324",
+      "expected": "5e-324"
+    },
+    {
+      "name": "negative small value",
+      "kind": "number",
+      "input": "-4.35e-10",
+      "expected": "-4.35e-10"
+    },
+    {
+      "name": "object keys are sorted",
+      "kind": "json",
+      "input": "{\"b\":1,\"a\":2}",
+      "expected": "{\"a\":2,\"b\":1}"
+    },
+    {
+      "name": "nested keys are sorted and arrays keep their order",
+      "kind": "json",
+      "input": "{\"z\":{\"y\":[3,{\"d\":true,\"c\":null}],\"x\":\"s\"},\"a\":[]}",
+      "expected": "{\"a\":[],\"z\":{\"x\":\"s\",\"y\":[3,{\"c\":null,\"d\":true}]}}"
+    },
+    {
+      "name": "whitespace is removed",
+      "kind": "json",
+      "input": "{ \"a\" : [ 1 , 2 ] ,\n \"b\" : { } }",
+      "expected": "{\"a\":[1,2],\"b\":{}}"
+    },
+    {
+      "name": "numbers are canonical",
+      "kind": "json",
+      "input": "[1.0,-0,1e21,1e-7,0.1,1e20]",
+      "expected": "[1,0,1e+21,1e-7,0.1,100000000000000000000]"
+    },
+    {
+      "name": "keys sort by UTF-16 code unit, not code point",
+      "kind": "json",
+      "input": "{\"\\uff21\":1,\"\\ud83d\\ude00\":2,\"a\":3,\"B\":4,\"\":5}",
+      "expected": "{\"\":5,\"B\":4,\"a\":3,\"\ud83d\ude00\":2,\"\uff21\":1}"
+    },
+    {
+      "name": "integer-like keys sort as text",
+      "kind": "json",
+      "input": "{\"10\":1,\"2\":2,\"1\":3,\"a\":4}",
+      "expected": "{\"1\":3,\"10\":1,\"2\":2,\"a\":4}"
+    },
+    {
+      "name": "escaped keys sort by their unescaped text",
+      "kind": "json",
+      "input": "{\"a\\\"b\":1,\"a\\nb\":2}",
+      "expected": "{\"a\\nb\":2,\"a\\\"b\":1}"
+    },
+    {
+      "name": "strings are escaped as JSON.stringify escapes them",
+      "kind": "json",
+      "input": "[\"q\\\"\",\"b\\\\s\",\"n\\n\",\"t\\t\",\"r\\r\",\"b\\b\",\"f\\f\",\"c\\u0001\",\"x\\u001f\",\"d\\u007f\",\"s/\",\"l\\u2028\",\"z\\u0000\"]",
+      "expected": "[\"q\\\"\",\"b\\\\s\",\"n\\n\",\"t\\t\",\"r\\r\",\"b\\b\",\"f\\f\",\"c\\u0001\",\"x\\u001f\",\"d\u007f\",\"s/\",\"l\u2028\",\"z\\u0000\"]"
+    },
+    {
+      "name": "lone surrogates are escaped in lower case",
+      "kind": "json",
+      "input": "[\"\\uD800\",\"a\\udc00b\"]",
+      "expected": "[\"\\ud800\",\"a\\udc00b\"]"
+    },
+    {
+      "name": "non-ASCII text is not escaped",
+      "kind": "json",
+      "input": "\"Gas \\u00e9t\\u00e9 \\ud83d\\udee2\\ufe0f\"",
+      "expected": "\"Gas \u00e9t\u00e9 \ud83d\udee2\ufe0f\""
+    },
+    {
+      "name": "empty containers",
+      "kind": "json",
+      "input": "[[],{},[[]],{\"a\":{}}]",
+      "expected": "[[],{},[[]],{\"a\":{}}]"
+    },
+    {
+      "name": "top-level string",
+      "kind": "json",
+      "input": "\"text\"",
+      "expected": "\"text\""
+    },
+    {
+      "name": "top-level true",
+      "kind": "json",
+      "input": "true",
+      "expected": "true"
+    },
+    {
+      "name": "top-level false",
+      "kind": "json",
+      "input": "false",
+      "expected": "false"
+    },
+    {
+      "name": "top-level null",
+      "kind": "json",
+      "input": "null",
+      "expected": "null"
+    },
+    {
+      "name": "top-level negative zero",
+      "kind": "json",
+      "input": "-0.0",
+      "expected": "0"
+    },
+    {
+      "name": "null",
+      "kind": "cell",
+      "input": "null",
+      "expected": "\u0000N"
+    },
+    {
+      "name": "empty string",
+      "kind": "cell",
+      "input": "\"\"",
+      "expected": "s:"
+    },
+    {
+      "name": "plain string",
+      "kind": "cell",
+      "input": "\"Well A-12\"",
+      "expected": "s:Well A-12"
+    },
+    {
+      "name": "string that spells the null encoding stays a string",
+      "kind": "cell",
+      "input": "\"\\u0000N\"",
+      "expected": "s:\u0000N"
+    },
+    {
+      "name": "string with newlines",
+      "kind": "cell",
+      "input": "\"line 1\\nline 2\\r\\nline 3\"",
+      "expected": "s:line 1\nline 2\r\nline 3"
+    },
+    {
+      "name": "string with emoji",
+      "kind": "cell",
+      "input": "\"\\ud83d\\udee2\\ufe0f Brent \\ud83d\\ude00\"",
+      "expected": "s:\ud83d\udee2\ufe0f Brent \ud83d\ude00"
+    },
+    {
+      "name": "leading zeros stay text",
+      "kind": "cell",
+      "input": "\"0012\"",
+      "expected": "s:0012"
+    },
+    {
+      "name": "decomposed text is not normalised",
+      "kind": "cell",
+      "input": "\"e\\u0301\"",
+      "expected": "s:e\u0301"
+    },
+    {
+      "name": "composed text is not normalised",
+      "kind": "cell",
+      "input": "\"\\u00e9\"",
+      "expected": "s:\u00e9"
+    },
+    {
+      "name": "string with quotes and backslash is not escaped",
+      "kind": "cell",
+      "input": "\"a\\\"b\\\\c\"",
+      "expected": "s:a\"b\\c"
+    },
+    {
+      "name": "integer",
+      "kind": "cell",
+      "input": "1",
+      "expected": "n:1"
+    },
+    {
+      "name": "negative zero",
+      "kind": "cell",
+      "input": "-0",
+      "expected": "n:0"
+    },
+    {
+      "name": "fraction",
+      "kind": "cell",
+      "input": "0.1",
+      "expected": "n:0.1"
+    },
+    {
+      "name": "negative fraction",
+      "kind": "cell",
+      "input": "-273.15",
+      "expected": "n:-273.15"
+    },
+    {
+      "name": "exponent form",
+      "kind": "cell",
+      "input": "1e21",
+      "expected": "n:1e+21"
+    },
+    {
+      "name": "small exponent form",
+      "kind": "cell",
+      "input": "1e-7",
+      "expected": "n:1e-7"
+    },
+    {
+      "name": "subnormal",
+      "kind": "cell",
+      "input": "5e-324",
+      "expected": "n:5e-324"
+    },
+    {
+      "name": "true",
+      "kind": "cell",
+      "input": "true",
+      "expected": "b:1"
+    },
+    {
+      "name": "false",
+      "kind": "cell",
+      "input": "false",
+      "expected": "b:0"
+    },
+    {
+      "name": "date",
+      "kind": "cell",
+      "input": "{\"date\":\"2026-03-01\"}",
+      "expected": "d:2026-03-01"
+    },
+    {
+      "name": "datetime",
+      "kind": "cell",
+      "input": "{\"datetime\":\"2026-03-01T06:30:00.000Z\"}",
+      "expected": "t:2026-03-01T06:30:00.000Z"
+    },
+    {
+      "name": "point geometry with sorted keys",
+      "kind": "cell",
+      "input": "{\"geometry\":{\"type\":\"Point\",\"coordinates\":[3.2,56.5]}}",
+      "expected": "g:{\"coordinates\":[3.2,56.5],\"type\":\"Point\"}"
+    },
+    {
+      "name": "line geometry with canonical numbers and a third ordinate",
+      "kind": "cell",
+      "input": "{\"geometry\":{\"coordinates\":[[-0.0,51.5,12],[1e-7,52.0]],\"type\":\"LineString\"}}",
+      "expected": "g:{\"coordinates\":[[0,51.5,12],[1e-7,52]],\"type\":\"LineString\"}"
+    },
+    {
+      "name": "polygon geometry",
+      "kind": "cell",
+      "input": "{\"geometry\":{\"type\":\"Polygon\",\"coordinates\":[[[0,0],[1,0],[1,1],[0,0]]]}}",
+      "expected": "g:{\"coordinates\":[[[0,0],[1,0],[1,1],[0,0]]],\"type\":\"Polygon\"}"
+    },
+    {
+      "name": "geometry collection",
+      "kind": "cell",
+      "input": "{\"geometry\":{\"type\":\"GeometryCollection\",\"geometries\":[{\"type\":\"Point\",\"coordinates\":[1,2]},{\"type\":\"MultiPoint\",\"coordinates\":[[1.5,2.5],[3,4]]}]}}",
+      "expected": "g:{\"geometries\":[{\"coordinates\":[1,2],\"type\":\"Point\"},{\"coordinates\":[[1.5,2.5],[3,4]],\"type\":\"MultiPoint\"}],\"type\":\"GeometryCollection\"}"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "not a number",
+      "kind": "number",
+      "literal": "NaN"
+    },
+    {
+      "name": "positive infinity",
+      "kind": "number",
+      "literal": "Infinity"
+    },
+    {
+      "name": "negative infinity",
+      "kind": "number",
+      "literal": "-Infinity"
+    }
+  ]
+}

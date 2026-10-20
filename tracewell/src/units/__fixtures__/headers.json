@@ -1,0 +1,218 @@
+{
+  "headers": [
+    {
+      "header": "Pressure (psia)",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "T [°F]", "name": "T", "unit": "degF", "confidence": "high", "method": "header-brackets" },
+    { "header": "rate_kg_h", "name": "rate", "unit": "kg/h", "confidence": "medium", "method": "header-suffix" },
+    { "header": "Depth ft", "name": "Depth", "unit": "ft", "confidence": "medium", "method": "header-suffix" },
+    { "header": "Comments", "name": "Comments", "unit": null },
+    { "header": "Gas (MMscf/d)", "name": "Gas", "unit": "MMscf/d", "confidence": "high", "method": "header-brackets" },
+    { "header": "Oil (bbl/d)", "name": "Oil", "unit": "bbl/d", "confidence": "high", "method": "header-brackets" },
+    { "header": "Gas (Mcf/d)", "name": "Gas", "unit": "Mscf/d", "confidence": "high", "method": "header-brackets" },
+    { "header": "Flow (Sm³/d)", "name": "Flow", "unit": "Sm3/d", "confidence": "high", "method": "header-brackets" },
+    {
+      "header": "Density (kg/m³)",
+      "name": "Density",
+      "unit": "kg/m3",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Temperature (°C)",
+      "name": "Temperature",
+      "unit": "degC",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Temperature (deg F)",
+      "name": "Temperature",
+      "unit": "degF",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "Depth (m)", "name": "Depth", "unit": "m", "confidence": "high", "method": "header-brackets" },
+    { "header": "Water cut (%)", "name": "Water cut", "unit": "%", "confidence": "high", "method": "header-brackets" },
+    { "header": "C1 (mol%)", "name": "C1", "unit": "%", "confidence": "high", "method": "header-brackets" },
+    {
+      "header": "Pressure (kPa(g))",
+      "name": "Pressure",
+      "unit": "kPag",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure(psig)",
+      "name": "Pressure",
+      "unit": "psig",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure [psia] [avg]",
+      "name": "Pressure [avg]",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure (psia) avg",
+      "name": "Pressure avg",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "Choke (in)", "name": "Choke", "unit": "in", "confidence": "high", "method": "header-brackets" },
+    { "header": "Power (MW)", "name": "Power", "unit": "MW", "confidence": "high", "method": "header-brackets" },
+    { "header": "DP (inH2O)", "name": "DP", "unit": "inH2O", "confidence": "high", "method": "header-brackets" },
+    {
+      "header": "  Pressure (psia)  ",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "(psia)", "name": "(psia)", "unit": "psia", "confidence": "high", "method": "header-brackets" },
+    {
+      "header": "Pressure / psia",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-unit-row"
+    },
+    {
+      "header": "Wellhead / Pressure / barg",
+      "name": "Wellhead / Pressure",
+      "unit": "barg",
+      "confidence": "high",
+      "method": "header-unit-row"
+    },
+    {
+      "header": "Production / d",
+      "name": "Production",
+      "unit": "d",
+      "confidence": "medium",
+      "method": "header-unit-row"
+    },
+    {
+      "header": "oil_rate_bbl_d",
+      "name": "oil_rate",
+      "unit": "bbl/d",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    { "header": "Temp_degF", "name": "Temp", "unit": "degF", "confidence": "medium", "method": "header-suffix" },
+    {
+      "header": "temp_delta_degC",
+      "name": "temp",
+      "unit": "delta_degC",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Pressure, psia",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Pressure - kPa",
+      "name": "Pressure",
+      "unit": "kPa",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Temperature deg F",
+      "name": "Temperature",
+      "unit": "degF",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Gas rate MMscf per day",
+      "name": "Gas rate",
+      "unit": "MMscf/d",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    { "header": "Gas m3 / d", "name": "Gas", "unit": "m3/d", "confidence": "medium", "method": "header-suffix" },
+    { "header": "Gas_MMSCFD", "name": "Gas", "unit": "MMscf/d", "confidence": "medium", "method": "header-suffix" },
+    { "header": "Depth in ft", "name": "Depth", "unit": "ft", "confidence": "medium", "method": "header-suffix" },
+    { "header": "Time in hours", "name": "Time", "unit": "h", "confidence": "medium", "method": "header-suffix" },
+    { "header": "BS&W %", "name": "BS&W", "unit": "%", "confidence": "medium", "method": "header-suffix" },
+    {
+      "header": "Well (A) psia",
+      "name": "Well (A)",
+      "unit": "psia",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    { "header": "Temp C", "name": "Temp C", "unit": "degC", "confidence": "low", "method": "header-suffix" },
+    { "header": "Depth m", "name": "Depth m", "unit": "m", "confidence": "low", "method": "header-suffix" },
+    { "header": "WHP psig avg", "name": "WHP psig avg", "unit": "psig", "confidence": "low", "method": "header-word" },
+    {
+      "header": "Pressure (psia, avg)",
+      "name": "Pressure (psia, avg)",
+      "unit": "psia",
+      "confidence": "low",
+      "method": "header-word"
+    },
+    {
+      "header": "Temperature_degF_max",
+      "name": "Temperature_degF_max",
+      "unit": "degF",
+      "confidence": "low",
+      "method": "header-word"
+    },
+    { "header": "Hours on", "name": "Hours on", "unit": "h", "confidence": "low", "method": "header-word" },
+    { "header": "psia", "name": "psia", "unit": "psia", "confidence": "low", "method": "header-word" },
+    { "header": "Pressure min", "name": "Pressure min", "unit": null },
+    { "header": "HP separator pressure", "name": "HP separator pressure", "unit": null },
+    { "header": "Gas MW", "name": "Gas MW", "unit": null },
+    { "header": "Gas meter", "name": "Gas meter", "unit": null },
+    { "header": "Meter factor", "name": "Meter factor", "unit": null },
+    { "header": "Second stage temperature", "name": "Second stage temperature", "unit": null },
+    { "header": "Day", "name": "Day", "unit": null },
+    { "header": "Zone C", "name": "Zone C", "unit": "degC", "confidence": "low", "method": "header-suffix" },
+    { "header": "Revenue (M)", "name": "Revenue (M)", "unit": null },
+    { "header": "Rate (MM)", "name": "Rate (MM)", "unit": null },
+    { "header": "PA wells", "name": "PA wells", "unit": null },
+    { "header": "GOR (scf/stb)", "name": "GOR (scf/stb)", "unit": null },
+    { "header": "Well (A)", "name": "Well (A)", "unit": null },
+    { "header": "well_id", "name": "well_id", "unit": null },
+    { "header": "date", "name": "date", "unit": null },
+    { "header": "", "name": "", "unit": null }
+  ],
+  "cells": [
+    { "text": "12.5 psi", "value": "12.5", "unit": "psi" },
+    { "text": "83 kPa", "value": "83", "unit": "kPa" },
+    { "text": "12.5psi", "value": "12.5", "unit": "psi" },
+    { "text": "  -5 °C ", "value": "-5", "unit": "degC" },
+    { "text": "−40 °F", "value": "−40", "unit": "degF" },
+    { "text": "+3 m", "value": "+3", "unit": "m" },
+    { "text": ".5 bar", "value": ".5", "unit": "bar" },
+    { "text": "1,234.5 bbl/d", "value": "1,234.5", "unit": "bbl/d" },
+    { "text": "1 234,5 bar", "value": "1 234,5", "unit": "bar" },
+    { "text": "12,5 barg", "value": "12,5", "unit": "barg" },
+    { "text": "1.5e3kPa", "value": "1.5e3", "unit": "kPa" },
+    { "text": "2E-3 m", "value": "2E-3", "unit": "m" },
+    { "text": "50%", "value": "50", "unit": "%" },
+    { "text": "350 MMscf/d", "value": "350", "unit": "MMscf/d" },
+    { "text": "14.7 psi abs", "value": "14.7", "unit": "psia" },
+    { "text": "10 min", "value": "10", "unit": "min" },
+    { "text": "12.5", "value": null, "unit": null },
+    { "text": "psi 12.5", "value": null, "unit": null },
+    { "text": "<0.5 ppm", "value": null, "unit": null },
+    { "text": "12 widgets", "value": null, "unit": null },
+    { "text": "12e", "value": null, "unit": null },
+    { "text": "ND", "value": null, "unit": null },
+    { "text": "", "value": null, "unit": null }
+  ]
+}

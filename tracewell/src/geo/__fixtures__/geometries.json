@@ -1,0 +1,606 @@
+{
+  "description": "Named geometry validation cases for src/geo/validate.test.ts. Each case lists the problems geometryProblems must report, by code and path, in order; 'message' is a text the message must contain. JSON has no NaN or Infinity, so {\"$number\": \"NaN\"} stands for that number and the test loader replaces it.",
+  "cases": [
+    {
+      "name": "valid Point",
+      "geometry": { "type": "Point", "coordinates": [1.8, 57.5] },
+      "problems": []
+    },
+    {
+      "name": "valid Point with an elevation",
+      "geometry": { "type": "Point", "coordinates": [1.8, 57.5, 120.5] },
+      "problems": []
+    },
+    {
+      "name": "valid MultiPoint",
+      "geometry": {
+        "type": "MultiPoint",
+        "coordinates": [
+          [1.8, 57.5],
+          [2.1, 56.9]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid LineString",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [0, 0],
+          [1, 1],
+          [2, 0]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid LineString that crosses itself (lines may)",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [0, 0],
+          [2, 2],
+          [2, 0],
+          [0, 2]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid MultiLineString",
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 1]
+          ],
+          [
+            [2, 2],
+            [3, 3],
+            [4, 2]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid Polygon with a hole",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 10],
+            [0, 0]
+          ],
+          [
+            [2, 2],
+            [2, 8],
+            [8, 8],
+            [8, 2],
+            [2, 2]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid MultiPolygon",
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 1],
+              [0, 0]
+            ]
+          ],
+          [
+            [
+              [2, 2],
+              [6, 2],
+              [6, 6],
+              [2, 6],
+              [2, 2]
+            ],
+            [
+              [3, 3],
+              [3, 5],
+              [5, 5],
+              [5, 3],
+              [3, 3]
+            ]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid GeometryCollection",
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          { "type": "Point", "coordinates": [1.8, 57.5] },
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 0]
+              ]
+            ]
+          }
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid Polygon with a repeated vertex",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid clockwise Polygon (winding order is not enforced)",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [0, 1],
+            [1, 1],
+            [1, 0],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid concave Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [4, 0],
+            [4, 1],
+            [1, 1],
+            [1, 4],
+            [0, 4],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "valid Polygon across the North Sea in real coordinates",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [1.712, 57.338],
+            [1.905, 57.341],
+            [1.911, 57.452],
+            [1.744, 57.469],
+            [1.712, 57.338]
+          ]
+        ]
+      },
+      "problems": []
+    },
+    {
+      "name": "unclosed ring",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1]
+          ]
+        ]
+      },
+      "problems": [
+        { "code": "RING_NOT_CLOSED", "path": "coordinates[0]", "message": "[0, 1] differs from its first [0, 0]" }
+      ]
+    },
+    {
+      "name": "ring closed in longitude and latitude but not in elevation",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+            [0, 0, 2]
+          ]
+        ]
+      },
+      "problems": [{ "code": "RING_NOT_CLOSED", "path": "coordinates[0]" }]
+    },
+    {
+      "name": "3-position ring",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 1],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[0]", "message": "this one has 3" }]
+    },
+    {
+      "name": "unclosed 3-position ring",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1]
+          ]
+        ]
+      },
+      "problems": [
+        { "code": "TOO_FEW_POSITIONS", "path": "coordinates[0]" },
+        { "code": "RING_NOT_CLOSED", "path": "coordinates[0]" }
+      ]
+    },
+    {
+      "name": "ring with four positions at one place",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [1, 1],
+            [1, 1],
+            [1, 1],
+            [1, 1]
+          ]
+        ]
+      },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[0]", "message": "1 distinct corner," }]
+    },
+    {
+      "name": "bow-tie polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 1],
+            [1, 0],
+            [0, 1],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[0]", "message": "[0.5, 0.5]" }]
+    },
+    {
+      "name": "ring that touches itself at a vertex",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [2, 2],
+            [4, 0],
+            [4, 4],
+            [2, 2],
+            [0, 4],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[0]", "message": "[2, 2]" }]
+    },
+    {
+      "name": "ring whose vertex touches another edge",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [4, 0],
+            [4, 4],
+            [2, 0],
+            [0, 4],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[0]", "message": "[2, 0]" }]
+    },
+    {
+      "name": "ring with a spike that doubles back",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [2, 0],
+            [2, 2],
+            [2, 3],
+            [2, 2],
+            [0, 2],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[0]" }]
+    },
+    {
+      "name": "collinear ring with no area",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 0],
+            [2, 0],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[0]" }]
+    },
+    {
+      "name": "bow-tie hole",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 10],
+            [0, 0]
+          ],
+          [
+            [2, 2],
+            [8, 8],
+            [8, 2],
+            [2, 8],
+            [2, 2]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[1]", "message": "[5, 5]" }]
+    },
+    {
+      "name": "MultiPolygon whose second polygon is a bow-tie",
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 1],
+              [0, 0]
+            ]
+          ],
+          [
+            [
+              [2, 2],
+              [3, 3],
+              [3, 2],
+              [2, 3],
+              [2, 2]
+            ]
+          ]
+        ]
+      },
+      "problems": [{ "code": "SELF_INTERSECTION", "path": "coordinates[1][0]" }]
+    },
+    {
+      "name": "NaN ordinate",
+      "geometry": { "type": "Point", "coordinates": [{ "$number": "NaN" }, 1] },
+      "problems": [{ "code": "NON_FINITE", "path": "coordinates", "message": "[NaN, 1]" }]
+    },
+    {
+      "name": "null ordinate",
+      "geometry": { "type": "Point", "coordinates": [null, 1] },
+      "problems": [{ "code": "NON_FINITE", "path": "coordinates", "message": "[null, 1]" }]
+    },
+    {
+      "name": "text ordinate",
+      "geometry": { "type": "Point", "coordinates": ["1.5", 2] },
+      "problems": [{ "code": "NON_FINITE", "path": "coordinates", "message": "[\"1.5\", 2]" }]
+    },
+    {
+      "name": "Infinity in a LineString",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [0, 0],
+          [{ "$number": "Infinity" }, 1]
+        ]
+      },
+      "problems": [{ "code": "NON_FINITE", "path": "coordinates[1]", "message": "[Infinity, 1]" }]
+    },
+    {
+      "name": "several non-finite positions in one ring",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [{ "$number": "NaN" }, 0],
+            [1, { "$number": "-Infinity" }],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "NON_FINITE", "path": "coordinates[0][1]", "message": "2 entries in this list" }]
+    },
+    {
+      "name": "empty coordinates array",
+      "geometry": { "type": "Polygon", "coordinates": [] },
+      "problems": [{ "code": "EMPTY", "path": "coordinates" }]
+    },
+    {
+      "name": "empty Point",
+      "geometry": { "type": "Point", "coordinates": [] },
+      "problems": [{ "code": "EMPTY", "path": "coordinates" }]
+    },
+    {
+      "name": "empty GeometryCollection",
+      "geometry": { "type": "GeometryCollection", "geometries": [] },
+      "problems": [{ "code": "EMPTY", "path": "geometries" }]
+    },
+    {
+      "name": "MultiPolygon with an empty polygon",
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 0]
+            ]
+          ],
+          []
+        ]
+      },
+      "problems": [{ "code": "EMPTY", "path": "coordinates[1]" }]
+    },
+    {
+      "name": "LineString with one position",
+      "geometry": { "type": "LineString", "coordinates": [[0, 0]] },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates" }]
+    },
+    {
+      "name": "MultiLineString with an empty line",
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 1]
+          ],
+          []
+        ]
+      },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[1]" }]
+    },
+    {
+      "name": "Circle",
+      "geometry": { "type": "Circle" },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "type", "message": "\"Circle\" is not a GeoJSON geometry type" }]
+    },
+    {
+      "name": "lower-case type name",
+      "geometry": { "type": "point", "coordinates": [1, 2] },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "type", "message": "use \"Point\"" }]
+    },
+    {
+      "name": "Feature instead of a geometry",
+      "geometry": { "type": "Feature", "geometry": { "type": "Point", "coordinates": [1, 2] }, "properties": {} },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "type", "message": "not a geometry" }]
+    },
+    {
+      "name": "missing type",
+      "geometry": { "coordinates": [1, 2] },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "type" }]
+    },
+    {
+      "name": "missing coordinates",
+      "geometry": { "type": "LineString" },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "coordinates" }]
+    },
+    {
+      "name": "GeometryCollection without geometries",
+      "geometry": { "type": "GeometryCollection" },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "geometries" }]
+    },
+    {
+      "name": "null instead of a geometry",
+      "geometry": null,
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "" }]
+    },
+    {
+      "name": "bare position instead of a geometry",
+      "geometry": [1, 2],
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "", "message": "found an array" }]
+    },
+    {
+      "name": "position with one number",
+      "geometry": { "type": "Point", "coordinates": [1] },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "coordinates", "message": "has 1 value." }]
+    },
+    {
+      "name": "Point with LineString coordinates",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          [0, 0],
+          [1, 1]
+        ]
+      },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "coordinates", "message": "nested one level too deep" }]
+    },
+    {
+      "name": "MultiPoint nested one level too shallow",
+      "geometry": { "type": "MultiPoint", "coordinates": [1, 2] },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "coordinates[0]", "message": "too shallow" }]
+    },
+    {
+      "name": "ring that is not an array",
+      "geometry": { "type": "Polygon", "coordinates": [5] },
+      "problems": [{ "code": "BAD_STRUCTURE", "path": "coordinates[0]", "message": "Expected a ring" }]
+    },
+    {
+      "name": "GeometryCollection with an unclosed member ring",
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          { "type": "Point", "coordinates": [0, 0] },
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 1]
+              ]
+            ]
+          }
+        ]
+      },
+      "problems": [{ "code": "RING_NOT_CLOSED", "path": "geometries[1].coordinates[0]" }]
+    }
+  ]
+}

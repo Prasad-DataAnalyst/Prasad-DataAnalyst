@@ -1,0 +1,108 @@
+[
+  {
+    "why": "convert without a mode",
+    "base": 0,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/mode"
+      }
+    ]
+  },
+  {
+    "why": "convert with an unknown mode",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/mode",
+        "value": "overwrite"
+      }
+    ]
+  },
+  {
+    "why": "select no columns",
+    "doc": {
+      "kind": "select_columns",
+      "columnIds": []
+    }
+  },
+  {
+    "why": "select a column twice",
+    "doc": {
+      "kind": "select_columns",
+      "columnIds": ["c1", "c1"]
+    }
+  },
+  {
+    "why": "unknown operator",
+    "doc": {
+      "kind": "filter",
+      "predicate": {
+        "column": "c1",
+        "op": "like",
+        "value": "A%"
+      }
+    }
+  },
+  {
+    "why": "malformed column ID",
+    "doc": {
+      "kind": "filter",
+      "predicate": {
+        "column": "x3",
+        "op": "is_null"
+      }
+    }
+  },
+  {
+    "why": "unknown step kind",
+    "doc": {
+      "kind": "sort",
+      "columnIds": ["c1"]
+    }
+  },
+  {
+    "why": "between without high",
+    "doc": {
+      "kind": "filter",
+      "predicate": {
+        "column": "c3",
+        "op": "between",
+        "low": 1
+      }
+    }
+  },
+  {
+    "why": "comparison with null",
+    "doc": {
+      "kind": "filter",
+      "predicate": {
+        "column": "c3",
+        "op": "eq",
+        "value": null
+      }
+    }
+  },
+  {
+    "why": "bbox with three numbers",
+    "doc": {
+      "kind": "filter",
+      "predicate": {
+        "bbox": [1, 2, 3],
+        "geometry": "c9"
+      }
+    }
+  },
+  {
+    "why": "step identity on an input",
+    "doc": {
+      "kind": "convert_unit",
+      "columnId": "c3",
+      "toUnit": "kPa",
+      "mode": "replace",
+      "id": "s1",
+      "seq": 7
+    }
+  }
+]

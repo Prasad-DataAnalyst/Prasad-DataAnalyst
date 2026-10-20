@@ -1,0 +1,129 @@
+[
+  {
+    "why": "unknown check kind",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/0/check",
+        "value": {
+          "kind": "regex"
+        }
+      }
+    ]
+  },
+  {
+    "why": "duplicate rule IDs",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/1/id",
+        "value": "TW-DQ-001"
+      }
+    ]
+  },
+  {
+    "why": "unknown severity",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/0/severity",
+        "value": "fatal"
+      }
+    ]
+  },
+  {
+    "why": "pack version is not semantic",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/version",
+        "value": "1.0"
+      }
+    ]
+  },
+  {
+    "why": "flatline run shorter than two",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/3/check/minRun",
+        "value": 1
+      }
+    ]
+  },
+  {
+    "why": "missing explanation",
+    "base": 0,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/rules/0/explanation"
+      }
+    ]
+  },
+  {
+    "why": "parameter on a simple check",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/0/check",
+        "value": {
+          "kind": "not_null",
+          "factor": 2
+        }
+      }
+    ]
+  },
+  {
+    "why": "unknown import note code",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/5/check/code",
+        "value": "TW-IMP-009"
+      }
+    ]
+  },
+  {
+    "why": "unknown role in selector",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/0/appliesTo/roles",
+        "value": ["sensor"]
+      }
+    ]
+  },
+  {
+    "why": "selector with no filter",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/0/appliesTo",
+        "value": {}
+      }
+    ]
+  },
+  {
+    "why": "selector with an empty role list",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rules/0/appliesTo",
+        "value": {
+          "roles": []
+        }
+      }
+    ]
+  }
+]

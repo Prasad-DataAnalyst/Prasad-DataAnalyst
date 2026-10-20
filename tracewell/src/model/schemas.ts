@@ -11,18 +11,27 @@ import type { OverridableProperty, Decision } from './decisions';
 import type { ExportManifest, ExportProfileId, ValidationCheck } from './export';
 import type { ImportNoteCode } from './formats';
 import type { BBox, JsonValue } from './ids';
+import { isJsonValue } from './json';
 import { members } from './literals';
 import type { ProjectManifest } from './project';
 import type { CheckSpec, RuleCategory, RulePack, Severity } from './rules';
 import type { ColumnRole, QuantityKind } from './schema';
 import type { Predicate, StepInput } from './steps';
 import type { UnitConvention, UnitDef } from './units';
-import type { Geometry, LogicalType } from './values';
+import { DATE_TEXT, DATETIME_TEXT, type Geometry, type LogicalType } from './values';
 
 // ---------------------------------------------------------------------------------------------
 // Literal lists, proven complete against the model's unions
 
-const LOGICAL_TYPES = members<LogicalType>()(['string', 'integer', 'number', 'boolean', 'date', 'datetime', 'geometry']);
+const LOGICAL_TYPES = members<LogicalType>()([
+  'string',
+  'integer',
+  'number',
+  'boolean',
+  'date',
+  'datetime',
+  'geometry',
+]);
 const COLUMN_ROLES = members<ColumnRole>()([
   'measure',
   'id',
@@ -163,18 +172,15 @@ const EXPORT_FILE_ROLES = members<ExportManifest['files'][number]['role']>()([
 // ---------------------------------------------------------------------------------------------
 // Scalars
 
-const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 /** Rejects impossible instants such as 2026-02-30 or 24:00, which the pattern alone lets through. */
 function isUtcInstant(s: string): boolean {
-  if (!ISO_UTC.test(s)) return false;
+  if (!DATETIME_TEXT.test(s)) return false;
   const t = Date.parse(s);
   return Number.isFinite(t) && new Date(t).toISOString() === s;
 }
 
 function isCalendarDate(s: string): boolean {
-  return ISO_DATE.test(s) && isUtcInstant(`${s}T00:00:00.000Z`);
+  return DATE_TEXT.test(s) && isUtcInstant(`${s}T00:00:00.000Z`);
 }
 
 /** A relative ZIP entry path that cannot escape the package or name a directory. */
@@ -203,8 +209,22 @@ const issueId = z.string().regex(/^I-[0-9a-f]{12}$/, "Expected an issue ID: 'I-'
 const stepId = z.string().regex(/^s[1-9]\d*$/, "Expected a step ID such as 's1'.");
 const exportId = z.string().regex(/^e_[0-9a-f]{8}$/, "Expected an export ID: 'e_' and 8 lowercase hex characters.");
 
-const json: z.ZodType<JsonValue> = z.json();
-const bbox: z.ZodType<BBox> = z.tuple([z.number(), z.number(), z.number(), z.number()]);
+// Not z.json(): it rebuilds objects and drops an own '__proto__' key, so a parsed audit line would
+// no longer hash as written, and it lets a reference cycle through. This checks in place instead.
+const json: z.ZodType<JsonValue> = z.custom<JsonValue>(
+  isJsonValue,
+  'Expected a JSON value: null, a boolean, a finite number, a string, an array or a plain object.',
+);
+
+const longitude = z.number().min(-180).max(180);
+const latitude = z.number().min(-90).max(90);
+/** RFC 7946 section 5.2: a west edge east of the east edge means the box crosses the antimeridian. */
+const bbox: z.ZodType<BBox> = z
+  .tuple([longitude, latitude, longitude, latitude])
+  .refine(
+    ([, south, , north]) => south <= north,
+    'The south edge of a bounding box cannot lie north of its north edge.',
+  );
 
 // ---------------------------------------------------------------------------------------------
 // Values
@@ -300,14 +320,18 @@ const auditEntry = z.strictObject({
 // ---------------------------------------------------------------------------------------------
 // Rule-pack
 
+// A selector names at least one filter and no filter is an empty list. Both {} and { roles: [] }
+// could be read as "every column" or as "no column", and the two engines must not disagree on it.
 const columnSelector = z.union([
   z.strictObject({ dataset: z.literal(true) }),
-  z.strictObject({
-    roles: z.array(z.enum(COLUMN_ROLES)).exactOptional(),
-    types: z.array(z.enum(LOGICAL_TYPES)).exactOptional(),
-    quantities: z.array(z.enum(QUANTITY_KINDS)).exactOptional(),
-    all: z.literal(true).exactOptional(),
-  }),
+  z
+    .strictObject({
+      roles: z.array(z.enum(COLUMN_ROLES)).min(1).exactOptional(),
+      types: z.array(z.enum(LOGICAL_TYPES)).min(1).exactOptional(),
+      quantities: z.array(z.enum(QUANTITY_KINDS)).min(1).exactOptional(),
+      all: z.literal(true).exactOptional(),
+    })
+    .refine((s) => Object.keys(s).length > 0, 'Name at least one filter, or use { all: true } for every column.'),
 ]);
 
 const checkSpec = z.discriminatedUnion('kind', [
@@ -428,6 +452,8 @@ const decision = z.discriminatedUnion('kind', [
 // Manifests
 
 const rulePackRef = z.strictObject({ id: nonEmpty, version: semver, sha256 });
+/** Two versions of one pack may both be recorded (older check runs used the older one); one version twice may not. */
+const packKey = (ref: { id: string; version: string }): string => `${ref.id}@${ref.version}`;
 const registryRef = z.strictObject({ version: nonEmpty, sha256 });
 const auditHead = z.strictObject({ seq: auditSeq, hash: sha256 });
 const originalFileShape = { fileId: sha256, name: nonEmpty, size: count, mediaType: nonEmpty, addedSeq: auditSeq };
@@ -454,6 +480,7 @@ const projectManifest = z
     entries: z.array(z.strictObject({ path: packagePath, size: count, sha256 })),
   })
   .superRefine((m, ctx) => {
+    requireUnique<{ id: string; version: string }>('rulePacks', packKey)(m.rulePacks, ctx);
     requireUnique<{ fileId: string }>('originals', (o) => o.fileId)(m.originals, ctx);
     requireUnique<{ id: string }>('datasets', (d) => d.id)(m.datasets, ctx);
     requireUnique<{ path: string }>('entries', (e) => e.path)(m.entries, ctx);
@@ -468,7 +495,12 @@ const assumption = z.strictObject({
   evidence: z.string(),
 });
 
-const substitution = z.strictObject({ ruleId: z.literal('TW-EXP-002'), what: nonEmpty, why: nonEmpty, instead: nonEmpty });
+const substitution = z.strictObject({
+  ruleId: z.literal('TW-EXP-002'),
+  what: nonEmpty,
+  why: nonEmpty,
+  instead: nonEmpty,
+});
 
 const validationReport = z
   .strictObject({
@@ -522,13 +554,14 @@ const exportManifest = z
     openIssues: z.strictObject({ error: count, warning: count, note: count }),
     assumptions: z.array(assumption),
     substitutions: z.array(substitution),
-    files: z.array(
-      z.strictObject({ path: packagePath, size: count, sha256, role: z.enum(EXPORT_FILE_ROLES) }),
-    ),
+    files: z.array(z.strictObject({ path: packagePath, size: count, sha256, role: z.enum(EXPORT_FILE_ROLES) })),
     validation: validationReport,
     auditHead,
   })
   .superRefine((m, ctx) => {
+    requireUnique<{ id: string; version: string }>('rulePacks', packKey)(m.rulePacks, ctx);
+    requireUnique<{ fileId: string }>('sources', (o) => o.fileId)(m.sources, ctx);
+    requireUnique<{ id: string }>('steps', (st) => st.id)(m.steps, ctx);
     requireUnique<{ path: string }>('files', (f) => f.path)(m.files, ctx);
     requireUnique<{ id: string }>('columns', (c) => c.id)(m.dataset.columns, ctx);
   });
@@ -551,7 +584,11 @@ const unitDef = z.strictObject({
 function unitNamesUnique(units: readonly UnitDef[], ctx: z.RefinementCtx): void {
   const names = units.flatMap((u) => [...new Set([u.code, ...u.aliases])]);
   for (const name of duplicates(names)) {
-    ctx.addIssue({ code: 'custom', path: ['units'], message: `The unit name "${name}" is used by more than one unit.` });
+    ctx.addIssue({
+      code: 'custom',
+      path: ['units'],
+      message: `The unit name "${name}" is used by more than one unit.`,
+    });
   }
 }
 

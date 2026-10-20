@@ -1,0 +1,160 @@
+[
+  {
+    "why": "missing reason on edit_cell",
+    "base": 0,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/reason"
+      }
+    ]
+  },
+  {
+    "why": "accept no rows",
+    "base": 4,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rows",
+        "value": []
+      }
+    ]
+  },
+  {
+    "why": "malformed issue ID",
+    "base": 3,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/issueId",
+        "value": "I-xyz"
+      }
+    ]
+  },
+  {
+    "why": "unknown overridable property",
+    "base": 8,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/property",
+        "value": "colour"
+      }
+    ]
+  },
+  {
+    "why": "unknown decision kind",
+    "doc": {
+      "kind": "delete_rows",
+      "datasetId": "d1",
+      "rows": [1],
+      "reason": "Not wanted"
+    }
+  },
+  {
+    "why": "reason on a comment",
+    "doc": {
+      "kind": "comment_issue",
+      "issueId": "I-710abb165272",
+      "text": "Asked the field team to confirm.",
+      "reason": "Because"
+    }
+  },
+  {
+    "why": "bbox with three numbers",
+    "base": 10,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/bbox",
+        "value": [1, 2, 3]
+      }
+    ]
+  },
+  {
+    "why": "revert seq zero",
+    "base": 12,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/seq",
+        "value": 0
+      }
+    ]
+  },
+  {
+    "why": "cell input with both text and value",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/value",
+        "value": {
+          "text": "1",
+          "value": 1
+        }
+      }
+    ]
+  },
+  {
+    "why": "cell value that is not a cell",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/value",
+        "value": {
+          "value": [1, 2]
+        }
+      }
+    ]
+  },
+  {
+    "why": "impossible date in a cell value",
+    "base": 1,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/value",
+        "value": {
+          "value": {
+            "date": "2026-02-30"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "why": "fractional row ID",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/rowId",
+        "value": 1.5
+      }
+    ]
+  },
+  {
+    "why": "malformed dataset ID",
+    "base": 5,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/datasetId",
+        "value": "d0"
+      }
+    ]
+  },
+  {
+    "why": "project area longitude beyond 180",
+    "base": 10,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/bbox",
+        "value": [1.5, 56.0, 183.0, 57.5]
+      }
+    ]
+  }
+]

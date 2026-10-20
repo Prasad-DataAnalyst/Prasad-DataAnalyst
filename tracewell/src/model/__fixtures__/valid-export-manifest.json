@@ -1,0 +1,273 @@
+[
+  {
+    "format": "tracewell-export",
+    "formatVersion": "0.1",
+    "exportId": "e_0a1b2c3d",
+    "createdAt": "2026-10-19T09:20:00.000Z",
+    "appVersion": "0.1.0",
+    "owner": "Prasad",
+    "profile": "excel",
+    "project": {
+      "id": "p_0123456789abcdef",
+      "name": "North Sea wells"
+    },
+    "dataset": {
+      "id": "d1",
+      "name": "csv_well_daily_golden",
+      "rowCount": 998,
+      "partial": false,
+      "columns": [
+        {
+          "id": "c0",
+          "name": "Date",
+          "header": "Date",
+          "type": "date",
+          "unit": null,
+          "sha256": "122c597083bd438b7f6d72af75d025948899647711b806bdd2cd82fa69713db3"
+        },
+        {
+          "id": "c1",
+          "name": "Well",
+          "header": "Well",
+          "type": "string",
+          "unit": null,
+          "sha256": "d0f631ca1ddba8db3bcfcb9e057cdc98d0379f1bee00e75a545147a27dadd982"
+        },
+        {
+          "id": "c3~kPa",
+          "name": "Pressure",
+          "header": "Pressure [kPa]",
+          "type": "number",
+          "unit": "kPa",
+          "sha256": "261d5d7b284cef87ec7a0a8c8c23d93ca5f2214186f943fec94bde009fd70749"
+        }
+      ],
+      "viewDigest": "2bcb43cbc8f6b7ef66331532881143fcbae60a879db3a8fb853f645bb24c2b3c"
+    },
+    "sources": [
+      {
+        "fileId": "97b6be72e491a3472daf248fbd71035de929518372905aa9619add9a49145451",
+        "name": "csv_well_daily_golden.csv",
+        "size": 26,
+        "mediaType": "text/csv",
+        "addedSeq": 2
+      }
+    ],
+    "rulePacks": [
+      {
+        "id": "tracewell.generic-dq",
+        "version": "0.1.0",
+        "sha256": "880d43b08d7cbaaf6dd27060d6f61b62fffac655f62f1860d1dd65958d333803"
+      },
+      {
+        "id": "tracewell.system",
+        "version": "0.1.0",
+        "sha256": "4f014fed68a683fc51dbc08749f12f461a0d2fe6da75e505bb0741b161ec3c5d"
+      }
+    ],
+    "unitRegistry": {
+      "version": "2026.1",
+      "sha256": "75d1715fc17c1605a508b7ff1325087e6b6ee7aec13d74e7901a8c7ee38d2bd1"
+    },
+    "steps": [
+      {
+        "kind": "convert_unit",
+        "columnId": "c3",
+        "toUnit": "kPa",
+        "mode": "replace",
+        "id": "s1",
+        "seq": 7
+      },
+      {
+        "kind": "filter",
+        "predicate": {
+          "column": "c1",
+          "op": "ne",
+          "value": "Test well"
+        },
+        "id": "s2",
+        "seq": 9
+      }
+    ],
+    "excludedRows": 2,
+    "openIssues": {
+      "error": 0,
+      "warning": 3,
+      "note": 1
+    },
+    "assumptions": [
+      {
+        "datasetId": "d1",
+        "columnId": null,
+        "property": "encoding",
+        "value": "windows-1252",
+        "confidence": "medium",
+        "evidence": "Bytes 0x80-0x9F decode as Windows-1252 punctuation."
+      }
+    ],
+    "substitutions": [],
+    "files": [
+      {
+        "path": "data/csv_well_daily_golden.xlsx",
+        "size": 40960,
+        "sha256": "1c980b22bca31941462855e560db3053e7772efb4b8bc7c4d5d8bb799a1abc6c",
+        "role": "data"
+      },
+      {
+        "path": "README.txt",
+        "size": 2048,
+        "sha256": "711a6108ba2ce6ca93dd47d6817f2361db10d8ab6eec89460b2dfc2c325efabe",
+        "role": "readme"
+      },
+      {
+        "path": "audit.jsonl",
+        "size": 4096,
+        "sha256": "b81f37a043a6f767e7c94d105f4bd31282f3ecc20680bb9d09bd93461cf4c863",
+        "role": "audit"
+      },
+      {
+        "path": "issues.csv",
+        "size": 512,
+        "sha256": "02e3fe5aad80ca85ace4db35008faabe7950c53998160c66c9072b6fd33dec0f",
+        "role": "issues"
+      }
+    ],
+    "validation": {
+      "ok": true,
+      "checks": [
+        {
+          "id": "RB-OPEN",
+          "ok": true,
+          "detail": "The workbook opened."
+        },
+        {
+          "id": "RB-ROWS",
+          "ok": true,
+          "detail": "998 data rows, as expected.",
+          "file": "data.xlsx"
+        },
+        {
+          "id": "RB-HEADER",
+          "ok": true,
+          "detail": "Headers match."
+        },
+        {
+          "id": "RB-VALUES",
+          "ok": true,
+          "detail": "Every column digest matches."
+        },
+        {
+          "id": "RB-PKG-CHECKSUMS",
+          "ok": true,
+          "detail": "CHECKSUMS.sha256 verified."
+        }
+      ]
+    },
+    "auditHead": {
+      "seq": 8,
+      "hash": "0cfb06d36cc0b1372f34e90e588169c9695d7d17985f391cf681b4184115afab"
+    }
+  },
+  {
+    "format": "tracewell-export",
+    "formatVersion": "0.1",
+    "exportId": "e_ffff0000",
+    "createdAt": "2026-10-19T09:20:00.000Z",
+    "appVersion": "0.1.0",
+    "owner": "Prasad",
+    "profile": "csv",
+    "project": {
+      "id": "p_0123456789abcdef",
+      "name": "North Sea wells"
+    },
+    "dataset": {
+      "id": "d1",
+      "name": "csv_well_daily_golden",
+      "rowCount": 998,
+      "partial": true,
+      "columns": [],
+      "viewDigest": "2bcb43cbc8f6b7ef66331532881143fcbae60a879db3a8fb853f645bb24c2b3c"
+    },
+    "sources": [
+      {
+        "fileId": "97b6be72e491a3472daf248fbd71035de929518372905aa9619add9a49145451",
+        "name": "csv_well_daily_golden.csv",
+        "size": 26,
+        "mediaType": "text/csv",
+        "addedSeq": 2
+      }
+    ],
+    "rulePacks": [
+      {
+        "id": "tracewell.generic-dq",
+        "version": "0.1.0",
+        "sha256": "880d43b08d7cbaaf6dd27060d6f61b62fffac655f62f1860d1dd65958d333803"
+      },
+      {
+        "id": "tracewell.system",
+        "version": "0.1.0",
+        "sha256": "4f014fed68a683fc51dbc08749f12f461a0d2fe6da75e505bb0741b161ec3c5d"
+      }
+    ],
+    "unitRegistry": {
+      "version": "2026.1",
+      "sha256": "75d1715fc17c1605a508b7ff1325087e6b6ee7aec13d74e7901a8c7ee38d2bd1"
+    },
+    "steps": [],
+    "excludedRows": 2,
+    "openIssues": {
+      "error": 0,
+      "warning": 3,
+      "note": 1
+    },
+    "assumptions": [],
+    "substitutions": [
+      {
+        "ruleId": "TW-EXP-002",
+        "what": "Notes column",
+        "why": "A value is longer than 32,767 characters, the Excel cell limit.",
+        "instead": "The column is delivered in notes.csv."
+      }
+    ],
+    "files": [
+      {
+        "path": "data/csv_well_daily_golden.xlsx",
+        "size": 40960,
+        "sha256": "1c980b22bca31941462855e560db3053e7772efb4b8bc7c4d5d8bb799a1abc6c",
+        "role": "data"
+      },
+      {
+        "path": "README.txt",
+        "size": 2048,
+        "sha256": "711a6108ba2ce6ca93dd47d6817f2361db10d8ab6eec89460b2dfc2c325efabe",
+        "role": "readme"
+      },
+      {
+        "path": "audit.jsonl",
+        "size": 4096,
+        "sha256": "b81f37a043a6f767e7c94d105f4bd31282f3ecc20680bb9d09bd93461cf4c863",
+        "role": "audit"
+      },
+      {
+        "path": "issues.csv",
+        "size": 512,
+        "sha256": "02e3fe5aad80ca85ace4db35008faabe7950c53998160c66c9072b6fd33dec0f",
+        "role": "issues"
+      }
+    ],
+    "validation": {
+      "ok": false,
+      "checks": [
+        {
+          "id": "RB-ROWS",
+          "ok": false,
+          "detail": "Row count differs."
+        }
+      ]
+    },
+    "auditHead": {
+      "seq": 8,
+      "hash": "0cfb06d36cc0b1372f34e90e588169c9695d7d17985f391cf681b4184115afab"
+    }
+  }
+]

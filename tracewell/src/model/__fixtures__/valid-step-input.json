@@ -1,0 +1,100 @@
+[
+  {
+    "kind": "convert_unit",
+    "columnId": "c3",
+    "toUnit": "kPa",
+    "mode": "replace"
+  },
+  {
+    "kind": "convert_unit",
+    "columnId": "c4",
+    "toUnit": "degC",
+    "mode": "add_column"
+  },
+  {
+    "kind": "select_columns",
+    "columnIds": ["c0", "c3~kPa", "c1"]
+  },
+  {
+    "kind": "filter",
+    "label": "Producing wells in the licence block, 2026",
+    "predicate": {
+      "all": [
+        {
+          "column": "c0",
+          "op": "between",
+          "low": {
+            "date": "2026-01-01"
+          },
+          "high": {
+            "date": "2026-12-31"
+          }
+        },
+        {
+          "any": [
+            {
+              "column": "c1",
+              "op": "in",
+              "values": ["A-12", "B-07", 42]
+            },
+            {
+              "column": "c1",
+              "op": "contains",
+              "text": "west"
+            }
+          ]
+        },
+        {
+          "not": {
+            "column": "c3~kPa",
+            "op": "is_null"
+          }
+        },
+        {
+          "column": "c3~kPa",
+          "op": "gt",
+          "value": 0
+        },
+        {
+          "column": "c5",
+          "op": "le",
+          "value": {
+            "datetime": "2026-06-30T23:59:59.999Z"
+          }
+        },
+        {
+          "column": "c6",
+          "op": "eq",
+          "value": true
+        },
+        {
+          "column": "c1",
+          "op": "contains",
+          "text": "A-",
+          "caseSensitive": true
+        },
+        {
+          "bbox": [1.5, 56.0, 3.0, 57.5],
+          "lat": "c7",
+          "lon": "c8"
+        },
+        {
+          "bbox": [1.5, 56.0, 3.0, 57.5],
+          "geometry": "c9"
+        },
+        {
+          "column": "c2",
+          "op": "not_null"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "filter",
+    "predicate": {
+      "column": "c1",
+      "op": "ne",
+      "value": "Test well"
+    }
+  }
+]

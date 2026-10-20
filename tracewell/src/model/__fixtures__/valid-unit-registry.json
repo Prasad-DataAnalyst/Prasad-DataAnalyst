@@ -1,0 +1,137 @@
+[
+  {
+    "version": "2026.1",
+    "units": [
+      {
+        "code": "m",
+        "label": "metre",
+        "aliases": ["meter", "meters", "metres"],
+        "quantity": "length",
+        "toSI": {
+          "factor": 1,
+          "offset": 0
+        },
+        "exact": true,
+        "convention": null,
+        "source": "SI Brochure (2019)"
+      },
+      {
+        "code": "ft",
+        "label": "foot",
+        "aliases": ["feet"],
+        "quantity": "length",
+        "toSI": {
+          "factor": 0.3048,
+          "offset": 0
+        },
+        "exact": true,
+        "convention": null,
+        "source": "NIST SP 811 (2008) Appendix B.8"
+      },
+      {
+        "code": "kPa",
+        "label": "kilopascal",
+        "aliases": ["kpa(a)"],
+        "quantity": "pressure_abs",
+        "toSI": {
+          "factor": 1000,
+          "offset": 0
+        },
+        "exact": true,
+        "convention": null,
+        "source": "SI Brochure (2019)"
+      },
+      {
+        "code": "psia",
+        "label": "pound-force per square inch, absolute",
+        "aliases": ["psi(a)"],
+        "quantity": "pressure_abs",
+        "toSI": {
+          "factor": 6894.757293168361,
+          "offset": 0
+        },
+        "exact": false,
+        "convention": null,
+        "source": "NIST SP 811 (2008) Appendix B.8"
+      },
+      {
+        "code": "psig",
+        "label": "pound-force per square inch, gauge",
+        "aliases": ["psi(g)"],
+        "quantity": "pressure_gauge",
+        "toSI": {
+          "factor": 6894.757293168361,
+          "offset": 0
+        },
+        "exact": false,
+        "convention": "gauge",
+        "source": "NIST SP 811 (2008) Appendix B.8"
+      },
+      {
+        "code": "degC",
+        "label": "degree Celsius",
+        "aliases": ["°C", "C"],
+        "quantity": "temperature",
+        "toSI": {
+          "factor": 1,
+          "offset": 273.15
+        },
+        "exact": true,
+        "convention": null,
+        "source": "SI Brochure (2019)"
+      },
+      {
+        "code": "degF",
+        "label": "degree Fahrenheit",
+        "aliases": ["°F", "F"],
+        "quantity": "temperature",
+        "toSI": {
+          "factor": 0.5555555555555556,
+          "offset": 255.37222222222223
+        },
+        "exact": false,
+        "convention": null,
+        "source": "NIST SP 811 (2008) Appendix B.8"
+      },
+      {
+        "code": "scf",
+        "label": "standard cubic foot",
+        "aliases": ["SCF"],
+        "quantity": "std_volume",
+        "toSI": {
+          "factor": 0.028316846592,
+          "offset": 0
+        },
+        "exact": true,
+        "convention": "std-60F-14.696psia",
+        "source": "API MPMS Chapter 14.5"
+      },
+      {
+        "code": "Sm3",
+        "label": "standard cubic metre",
+        "aliases": ["sm3", "Sm³"],
+        "quantity": "std_volume",
+        "toSI": {
+          "factor": 1,
+          "offset": 0
+        },
+        "exact": true,
+        "convention": "std-15C-101.325kPa",
+        "source": "ISO 13443"
+      },
+      {
+        "code": "bbl",
+        "label": "barrel",
+        "aliases": ["BBL", "bbl"],
+        "quantity": "volume",
+        "toSI": {
+          "factor": 0.158987294928,
+          "offset": 0
+        },
+        "exact": true,
+        "convention": null,
+        "source": "API MPMS Chapter 1"
+      }
+    ]
+  }
+]
