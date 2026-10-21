@@ -167,6 +167,14 @@ describe('bboxContains', () => {
     expect(bboxContains(fiji, 0, -17)).toBe(false);
     expect(bboxContains(fiji, 178, -21)).toBe(false);
   });
+
+  it('excludes longitudes beyond ±180 from a box that crosses the antimeridian, as from any other box', () => {
+    const fiji: BBox = [177, -20, -178, -15];
+    expect(bboxContains(fiji, 200, -17)).toBe(false);
+    expect(bboxContains(fiji, -500, -17)).toBe(false);
+    expect(bboxContains(fiji, 180.000001, -17)).toBe(false);
+    expect(bboxContains(northSea, 200, 55)).toBe(false);
+  });
 });
 
 describe('bboxIntersectsGeometry', () => {
@@ -342,6 +350,17 @@ describe('bboxIntersectsGeometry', () => {
     fc.assert(
       fc.property(coordinate, coordinate, (lon, lat) => {
         expect(bboxIntersectsGeometry(box, point(lon, lat))).toBe(bboxContains(box, lon, lat));
+      }),
+    );
+  });
+
+  it('agrees with bboxContains for random points and a box that crosses the antimeridian', () => {
+    const fiji: BBox = [177, -20, -178, -15];
+    const lon = fc.oneof(fc.double({ min: -400, max: 400, noNaN: true }), fc.constantFrom(-180, 180, 177, -178, 200));
+    const lat = fc.double({ min: -25, max: -10, noNaN: true });
+    fc.assert(
+      fc.property(lon, lat, (x, y) => {
+        expect(bboxIntersectsGeometry(fiji, point(x, y))).toBe(bboxContains(fiji, x, y));
       }),
     );
   });

@@ -7,8 +7,9 @@ import {
   closedError,
   execute,
   isRpcEvent,
-  Listeners,
   isRpcResponse,
+  Listeners,
+  reportAsync,
   transferables,
   unsendableCallError,
   unsendableResultError,
@@ -93,19 +94,29 @@ export function portTransport(port: MessagePortLike): Transport {
 
 /**
  * Talks to an engine running in a Web Worker. The transport owns the worker: close() terminates it.
- * An error event usually means the worker script failed to load or crashed, and no answer will come,
- * so calls waiting at that moment are rejected rather than left hanging.
+ * An error event before the worker's first message means its script failed to load or start, and
+ * no answer will come, so calls waiting at that moment are rejected rather than left hanging.
  */
 export function workerTransport(worker: Worker): Transport {
   const connection = new PortConnection(worker);
-  const onError = (ev: ErrorEvent): void => {
-    connection.failPending(workerError(typeof ev.message === 'string' ? ev.message : ''));
+  // After the first message, an error is an uncaught exception in a running worker (serve()
+  // reports unsendable events that way): calls in flight are still answered, and rejecting them
+  // would report as failed a change the engine went on to make. The browser reports the error
+  // itself, since nothing here cancels it.
+  let started = false;
+  const onMessage = (): void => {
+    started = true;
   };
+  const onError = (ev: ErrorEvent): void => {
+    if (!started) connection.failPending(workerError(typeof ev.message === 'string' ? ev.message : ''));
+  };
+  worker.addEventListener('message', onMessage);
   worker.addEventListener('error', onError);
   return {
     call: (method, params) => connection.call(method, params),
     onEvent: (cb) => connection.onEvent(cb),
     close: () => {
+      worker.removeEventListener('message', onMessage);
       worker.removeEventListener('error', onError);
       connection.close();
       worker.terminate();
@@ -123,7 +134,14 @@ export function inProcessTransport(impl: EngineImpl): Transport {
   const pending = new Set<Pending>();
   let closed = false;
   const offImpl = impl.on((event) => {
-    const copy = structuredClone(event);
+    let copy: EngineEvent;
+    try {
+      copy = structuredClone(event);
+    } catch (e) {
+      // As in serve(): an event that cannot be copied is an engine bug, reported without breaking the engine's emit.
+      reportAsync(e);
+      return;
+    }
     // Asynchronous like a posted message, so events never arrive inside the call that caused them.
     queueMicrotask(() => {
       if (!closed) listeners.emit(copy);

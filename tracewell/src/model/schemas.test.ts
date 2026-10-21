@@ -277,3 +277,106 @@ describe('JSON members', () => {
     expect(schemas.auditEntry.safeParse(withPayload({ a: shared, b: [shared, bare] })).success).toBe(true);
   });
 });
+
+describe('nesting depth', () => {
+  const [entry] = validSamples('auditEntry') as unknown as AuditEntry[];
+  const [edit] = validSamples('decision');
+  const arrays = (depth: number): unknown => JSON.parse(`${'['.repeat(depth)}1${']'.repeat(depth)}`);
+  const nots = (depth: number): unknown =>
+    JSON.parse(`${'{"not":'.repeat(depth)}{"column":"c1","op":"is_null"}${'}'.repeat(depth)}`);
+  const collections = (depth: number): unknown =>
+    JSON.parse(
+      `${'{"type":"GeometryCollection","geometries":['.repeat(depth)}{"type":"Point","coordinates":[1,2]}` +
+        ']}'.repeat(depth),
+    );
+
+  // JSON.parse builds these without complaint, so a tampered audit line or manifest can carry them.
+  const tooDeep: [string, SchemaName, (depth: number) => unknown][] = [
+    ['an audit payload', 'auditEntry', (d) => ({ ...(entry as object), payload: arrays(d) })],
+    ['a filter predicate', 'stepInput', (d) => ({ kind: 'filter', predicate: nots(d) })],
+    [
+      'a geometry cell value',
+      'decision',
+      (d) => ({ ...(edit as object), value: { value: { geometry: collections(d) } } }),
+    ],
+    [
+      'a detection override value',
+      'decision',
+      (d) => ({ ...(edit as object), kind: 'override_detection', value: arrays(d) }),
+    ],
+  ];
+
+  it.each(tooDeep)('rejects %s nested 200,000 levels deep without throwing', (_what, name, build) => {
+    const doc = build(200_000);
+    let success: boolean | undefined;
+    expect(() => (success = schemas[name].safeParse(doc).success)).not.toThrow();
+    expect(success).toBe(false);
+  });
+
+  it('accepts a document nested up to 256 levels and rejects one nested 257 levels', () => {
+    // The entry object adds one level around its payload.
+    expect(schemas.auditEntry.safeParse({ ...(entry as object), payload: arrays(255) }).success).toBe(true);
+    expect(schemas.auditEntry.safeParse({ ...(entry as object), payload: arrays(256) }).success).toBe(false);
+  });
+
+  it('accepts what canonicalJson can encode, so every valid entry can be hashed', () => {
+    const doc = { ...(entry as object), payload: arrays(255) } as unknown as JsonValue;
+    expect(schemas.auditEntry.safeParse(doc).success).toBe(true);
+    expect(() => canonicalJson(doc)).not.toThrow();
+  });
+
+  it('rejects a cycle reached through shared objects quickly', () => {
+    const a: Record<string, unknown> = {};
+    const b: Record<string, unknown> = { x: a, y: a, z: a };
+    Object.assign(a, { x: b, y: b, z: b });
+    expect(schemas.auditEntry.safeParse({ ...(entry as object), payload: a }).success).toBe(false);
+  });
+});
+
+describe('package paths', () => {
+  const [project] = validSamples('projectManifest') as unknown as ProjectManifest[];
+  const withEntryPath = (path: string): unknown => {
+    const doc = structuredClone(project) as ProjectManifest;
+    (doc.entries[0] as { path: string }).path = path;
+    return doc;
+  };
+
+  it('accepts nested relative paths with non-ASCII names', () => {
+    expect(schemas.projectManifest.safeParse(withEntryPath('originals/ab/Bohrloch \u00fc 10.csv')).success).toBe(true);
+  });
+
+  // The io ZIP writer and CHECKSUMS.sha256 refuse these, so a manifest naming one describes a package
+  // that cannot exist.
+  it.each([
+    ['a Windows drive letter', 'C:/data/x.csv'],
+    ['a line feed', 'audit\n.jsonl'],
+    ['a carriage return', 'audit\r.jsonl'],
+    ['a lone surrogate', 'originals/\ud800.csv'],
+    ['a backslash', 'originals\\x.csv'],
+    ['a trailing slash', 'originals/'],
+  ])('rejects a path with %s', (_why, path) => {
+    expect(schemas.projectManifest.safeParse(withEntryPath(path)).success).toBe(false);
+  });
+});
+
+describe('versions and unit codes', () => {
+  const [pack] = validSamples('rulePack');
+  const [registry] = validSamples('unitRegistry') as unknown as { version: string; units: { code: string }[] }[];
+  const packAt = (version: string): unknown => ({ ...(pack as object), version });
+
+  it.each(['0.1.0', '10.20.30', '1.0.0-beta.1', '1.0.0-rc-2'])('accepts the version %s', (version) => {
+    expect(schemas.rulePack.safeParse(packAt(version)).success).toBe(true);
+  });
+
+  // 0.1.0 and 00.1.0 would otherwise be two pack versions, and the manifests' uniqueness checks would let both in.
+  it.each(['00.1.0', '0.01.0', '1.0.0-', '1.0.0-beta..1', '1.0.0-.'])('rejects the version %s', (version) => {
+    expect(schemas.rulePack.safeParse(packAt(version)).success).toBe(false);
+  });
+
+  // A derived column is named '<column>~<unit code>', which the column ID pattern must accept.
+  it.each(['k Pa', 'kPa~a', ' kPa', 'kPa\t'])('rejects the unit code %j', (code) => {
+    const doc = structuredClone(registry) as { units: { code: string }[] };
+    (doc.units[2] as { code: string }).code = code;
+    expect(schemas.unitRegistry.safeParse(doc).success).toBe(false);
+  });
+});

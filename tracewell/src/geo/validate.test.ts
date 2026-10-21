@@ -246,6 +246,46 @@ describe('geometryProblems beyond the fixtures', () => {
       expect(codes(g)).toContain('BAD_STRUCTURE');
       expect(isGeometry(g)).toBe(false);
     });
+
+    it('is walked again where it sits shallower, so members its walk at the limit never reached are checked', () => {
+      const inner = { type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [NaN, 57.5] }] };
+      let deep: unknown = inner;
+      // 31 wrappers put the first appearance at depth 32, where the walk stops; the second is at depth 1.
+      for (let i = 0; i < 31; i++) deep = { type: 'GeometryCollection', geometries: [deep] };
+      const problems = geometryProblems({ type: 'GeometryCollection', geometries: [deep, inner] });
+      expect(problems.map(({ code, path }) => ({ code, path }))).toEqual([
+        { code: 'BAD_STRUCTURE', path: Array.from({ length: 32 }, () => 'geometries[0]').join('.') },
+        { code: 'NON_FINITE', path: 'geometries[1].geometries[0].coordinates' },
+      ]);
+    });
+
+    it('stays fast when shared members sit at many different depths', () => {
+      // Each level holds the one below directly and wrapped once more, so the paths to the bottom
+      // number in the billions and reach every depth; each collection is walked at most 65 times.
+      let g: unknown = { type: 'Point', coordinates: [1.8, 57.5] };
+      for (let i = 0; i < 45; i++) {
+        g = { type: 'GeometryCollection', geometries: [g, { type: 'GeometryCollection', geometries: [g] }] };
+      }
+      const started = performance.now();
+      const problems = geometryProblems(g);
+      expect(performance.now() - started).toBeLessThan(2000);
+      expect(new Set(problems.map((p) => p.code))).toEqual(new Set(['BAD_STRUCTURE']));
+      expect(problems.length).toBeLessThan(200);
+      expect(isGeometry(g)).toBe(false);
+    });
+
+    it('reports a problem of the collection itself once, however many times it is walked', () => {
+      const empty = { type: 'GeometryCollection', geometries: [] };
+      const lacking = { type: 'GeometryCollection' };
+      const g = {
+        type: 'GeometryCollection',
+        geometries: [empty, lacking, { type: 'GeometryCollection', geometries: [empty, lacking] }],
+      };
+      expect(geometryProblems(g).map(({ code, path }) => ({ code, path }))).toEqual([
+        { code: 'EMPTY', path: 'geometries[0].geometries' },
+        { code: 'BAD_STRUCTURE', path: 'geometries[1].geometries' },
+      ]);
+    });
   });
 
   it('cuts a long type name between characters, never inside one', () => {
@@ -275,6 +315,55 @@ describe('geometryProblems beyond the fixtures', () => {
 
   it('ignores foreign members, which RFC 7946 allows', () => {
     expect(geometryProblems({ type: 'Point', coordinates: [1, 2], bbox: [1, 2, 1, 2], title: 'Well A' })).toEqual([]);
+  });
+
+  it('finds a crossing in a ring with huge coordinates and names a finite crossing point', () => {
+    // Coordinate differences squared overflow here; a NoData sentinel such as -1.797e308 gets this far.
+    const m = Number.MAX_VALUE;
+    const problems = geometryProblems(
+      polygon([
+        [-m, -m],
+        [m, m],
+        [m, -m],
+        [-m, m],
+        [-m, -m],
+      ]),
+    );
+    expect(problems.map((p) => p.code)).toEqual(['SELF_INTERSECTION']);
+    expect(problems[0]?.message).toContain('at [0, 0]');
+    expect(
+      geometryProblems(
+        polygon([
+          [-m, -m],
+          [m, -m],
+          [m, m],
+          [-m, m],
+          [-m, -m],
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('judges a ring with tiny coordinates, whose products would underflow to zero, as at unit size', () => {
+    const s = 1e-200;
+    // Simple and concave. Underflow would make every triple look collinear, and corner [10s, 0]
+    // would then seem to lie on the diagonal edge.
+    const concave = polygon([
+      [0, 0],
+      [10 * s, 10 * s],
+      [10 * s, 0],
+      [5 * s, s],
+      [0, 0],
+    ]);
+    expect(geometryProblems(concave)).toEqual([]);
+    const bowTie = polygon([
+      [0, 0],
+      [s, s],
+      [s, 0],
+      [0, s],
+      [0, 0],
+    ]);
+    expect(codes(bowTie)).toEqual(['SELF_INTERSECTION']);
   });
 
   it('finds a crossing far from the first edges of a long ring', () => {
@@ -310,8 +399,10 @@ describe('the self-intersection size limit', () => {
     expect(geometryProblems(polygon(close(doubled)))).toEqual([]);
   });
 
-  it('handles a worst-case zigzag ring of the maximum size', () => {
-    // Every tooth spans the full width, so the longitude sweep prunes no pair at all.
+  it('handles a zigzag ring of the maximum size that the longitude sweep cannot prune', () => {
+    // Every tooth spans the full width, so the sweep visits all 50 million edge pairs. The
+    // latitude test still spares most of them the segment test; a ring whose edge boxes all
+    // overlap costs about 2 s on 4 CPUs.
     const teeth = MAX_INTERSECTION_VERTICES / 2 - 1;
     const ring: Position[] = [];
     for (let i = 0; i < teeth; i++) ring.push([0, i / 100], [100, (i + 0.5) / 100]);
@@ -368,6 +459,10 @@ function bruteForceSelfIntersects(corners: Pt[]): boolean {
   return false;
 }
 
+function distinctPoints(points: Pt[]): number {
+  return new Set(points.map(([x, y]) => `${x},${y}`)).size;
+}
+
 function withoutRepeats(points: Pt[]): Pt[] {
   const out: Pt[] = [];
   for (const p of points) {
@@ -389,10 +484,30 @@ describe('self-intersection properties', () => {
       fc.property(smallGrid, (points) => {
         const corners = withoutRepeats(points as Pt[]);
         fc.pre(corners.length >= 3);
-        const found = codes(polygon(close(corners))).includes('SELF_INTERSECTION');
-        expect(found).toBe(bruteForceSelfIntersects(corners));
+        const found = codes(polygon(close(corners)));
+        if (distinctPoints(corners) < 3) {
+          // A ring that only runs back and forth between two places encloses no area.
+          expect(found).toEqual(['TOO_FEW_POSITIONS']);
+        } else {
+          expect(found.includes('SELF_INTERSECTION')).toBe(bruteForceSelfIntersects(corners));
+        }
       }),
       { numRuns: 3000 },
+    );
+  });
+
+  it('gives the same verdict when every coordinate is scaled by a power of two, however large or small', () => {
+    fc.assert(
+      fc.property(smallGrid, fc.integer({ min: -1000, max: 1000 }), (points, exponent) => {
+        const corners = withoutRepeats(points as Pt[]);
+        fc.pre(corners.length >= 3);
+        const scale = 2 ** exponent;
+        const scaled = corners.map(([x, y]): Position => [x * scale, y * scale]);
+        const problems = geometryProblems(polygon(close(scaled)));
+        expect(problems.map((p) => p.code)).toEqual(codes(polygon(close(corners))));
+        for (const p of problems) expect(p.message).not.toMatch(/NaN|Infinity/);
+      }),
+      { numRuns: 1000 },
     );
   });
 

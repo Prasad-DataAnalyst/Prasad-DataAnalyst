@@ -181,3 +181,47 @@ function delimiterConfidence(best: Candidate, others: readonly Candidate[], riva
   const competitor = others.some((c) => c.width >= 2 && score(c) >= MESSY_SHARE);
   return best.consistency >= MESSY_SHARE && !competitor ? 'medium' : 'low';
 }
+
+/**
+ * Lines to skip before the header: the title block the candidate found, plus any blank lines
+ * around it. The header is the first line with the table's width, so the evidence is only as
+ * strong as the table's consistency.
+ */
+export function detectSkipLines(c: Candidate): Detection<number> {
+  const header = c.lines[c.headerIndex];
+  if (header === undefined) {
+    return detection(0, 'high', 'empty', 'The file has no lines with text, so there is nothing to skip.');
+  }
+  const skip = header.line - 1;
+  if (c.width < 2) return singleColumnSkip(skip);
+  if (c.headerIndex === 0) return noTitleSkip(c, skip);
+  return titleBlockSkip(c, skip);
+}
+
+function singleColumnSkip(skip: number): Detection<number> {
+  const evidence =
+    'No delimiter splits the lines into fields, so title rows cannot be told from the header by their ' +
+    `field count. The first line with text, line ${formatCount(skip + 1)}, is taken as the header.`;
+  return detection(skip, 'medium', 'single-column', evidence);
+}
+
+function noTitleSkip(c: Candidate, skip: number): Detection<number> {
+  const evidence =
+    skip === 0
+      ? `The first line already has the table's ${formatCount(c.width)} fields, so it is the header and no lines are skipped.`
+      : `The first ${plural(skip, 'line')} ${skip === 1 ? 'is' : 'are'} empty, so the header is on line ` +
+        `${formatCount(skip + 1)} and the empty ${skip === 1 ? 'line is' : 'lines are'} skipped.`;
+  return detection(skip, c.consistency >= PLAUSIBLE ? 'high' : 'medium', 'field-count-consistency', evidence);
+}
+
+function titleBlockSkip(c: Candidate, skip: number): Detection<number> {
+  const preamble = c.lines.slice(0, c.headerIndex);
+  const allShort = preamble.every((r) => r.fields.length < c.width);
+  const shape = allShort ? 'fewer fields than' : 'a different number of fields from';
+  const evidence =
+    `The first ${plural(preamble.length, 'line')} with text ${preamble.length === 1 ? 'has' : 'have'} ${shape} ` +
+    `the table's ${formatCount(c.width)}, so ${preamble.length === 1 ? 'it is' : 'they are'} read as a title block. ` +
+    `The header is on line ${formatCount(skip + 1)} and the ${plural(skip, 'line')} above it ${skip === 1 ? 'is' : 'are'} skipped.`;
+  const confidence = allShort && c.consistency >= CONSISTENT ? 'high' : 'medium';
+  return detection(skip, confidence, 'title-block', evidence);
+}

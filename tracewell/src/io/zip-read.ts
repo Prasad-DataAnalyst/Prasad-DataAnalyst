@@ -7,6 +7,7 @@
  * a zip bomb fails with a clear error instead of exhausting memory.
  */
 import { EngineError, type JsonValue } from '@tw/model';
+import { copyBytes } from './bytes';
 import { crc32 } from './crc32';
 import { formatCount, invalidArgument } from './errors';
 import { inflateExact } from './inflate';
@@ -34,7 +35,11 @@ import {
 } from './zip-format';
 
 export interface ZipReader {
-  /** Paths of the file entries in archive order; directory entries are left out. */
+  /**
+   * Paths of the file entries in archive order; directory entries are left out. Names are returned
+   * exactly as stored, so a foreign archive may hold '../x' or '/x': they are lookup keys for this
+   * reader, never file-system paths to write to.
+   */
   paths(): string[];
   has(path: string): boolean;
   /** Declared uncompressed size; read() fails if the data does not match it. */
@@ -430,7 +435,7 @@ function reader(data: Uint8Array, entries: readonly Entry[]): ZipReader {
 
 function inflateEntry(data: Uint8Array, entry: Entry): Uint8Array {
   const compressed = data.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
-  const bytes = entry.method === METHOD_STORED ? compressed.slice() : inflated(compressed, entry);
+  const bytes = entry.method === METHOD_STORED ? copyBytes(compressed) : inflated(compressed, entry);
   if (crc32(bytes) !== entry.crc) {
     throw damaged(`the entry "${entry.path}" fails its CRC-32 check.`, { path: entry.path });
   }

@@ -109,7 +109,8 @@ function differenceNote(a: UnitDef, b: UnitDef): string {
   if (kinds.has('temperature') && kinds.has('temperature_diff')) {
     return ' A temperature difference has no zero offset: 10 °C warmer is 10 K warmer, but 10 °C is 283.15 K.';
   }
-  if (kinds.has('pressure_diff')) {
+  // Only against a pressure: next to a length or a temperature the note would explain nothing.
+  if (kinds.has('pressure_diff') && (kinds.has('pressure_abs') || kinds.has('pressure_gauge'))) {
     return ' A pressure difference is not measured from vacuum or from the atmosphere, so it is not a pressure.';
   }
   return '';

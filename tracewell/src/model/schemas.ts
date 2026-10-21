@@ -11,14 +11,14 @@ import type { OverridableProperty, Decision } from './decisions';
 import type { ExportManifest, ExportProfileId, ValidationCheck } from './export';
 import type { ImportNoteCode } from './formats';
 import type { BBox, JsonValue } from './ids';
-import { isJsonValue } from './json';
+import { isJsonValue, MAX_JSON_DEPTH, withinDepth } from './json';
 import { members } from './literals';
 import type { ProjectManifest } from './project';
 import type { CheckSpec, RuleCategory, RulePack, Severity } from './rules';
 import type { ColumnRole, QuantityKind } from './schema';
 import type { Predicate, StepInput } from './steps';
 import type { UnitConvention, UnitDef } from './units';
-import { DATE_TEXT, DATETIME_TEXT, type Geometry, type LogicalType } from './values';
+import { isDateText, isDateTimeText, type Geometry, type LogicalType } from './values';
 
 // ---------------------------------------------------------------------------------------------
 // Literal lists, proven complete against the model's unions
@@ -172,20 +172,19 @@ const EXPORT_FILE_ROLES = members<ExportManifest['files'][number]['role']>()([
 // ---------------------------------------------------------------------------------------------
 // Scalars
 
-/** Rejects impossible instants such as 2026-02-30 or 24:00, which the pattern alone lets through. */
-function isUtcInstant(s: string): boolean {
-  if (!DATETIME_TEXT.test(s)) return false;
-  const t = Date.parse(s);
-  return Number.isFinite(t) && new Date(t).toISOString() === s;
-}
+const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:)/;
+/** Line breaks cannot be listed in CHECKSUMS.sha256; a backslash is a Windows separator. */
+const UNLISTABLE = /[\\\n\r]/;
+/** In a 'u' regex a well-formed surrogate pair is one code point, so this matches only lone halves. */
+const LONE_SURROGATE = /\p{Surrogate}/u;
 
-function isCalendarDate(s: string): boolean {
-  return DATE_TEXT.test(s) && isUtcInstant(`${s}T00:00:00.000Z`);
-}
-
-/** A relative ZIP entry path that cannot escape the package or name a directory. */
+/**
+ * A relative ZIP entry path that cannot escape the package or name a directory, and that the io ZIP
+ * writer and CHECKSUMS.sha256 both accept. A lone surrogate has no UTF-8 form, so the name written
+ * would differ from the name listed.
+ */
 function isPackagePath(p: string): boolean {
-  if (p.startsWith('/') || p.includes('\\') || p.includes('\u0000')) return false;
+  if (ABSOLUTE_PATH.test(p) || UNLISTABLE.test(p) || p.includes('\u0000') || LONE_SURROGATE.test(p)) return false;
   return p.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
@@ -195,11 +194,16 @@ const count = z.int().min(0);
 const rowId = z.int().min(0);
 const auditSeq = z.int().min(1);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/, 'Expected a SHA-256 digest: 64 lowercase hex characters.');
-const isoUtc = z.string().refine(isUtcInstant, 'Expected a UTC instant written as YYYY-MM-DDTHH:mm:ss.sssZ.');
-const calendarDate = z.string().refine(isCalendarDate, 'Expected a calendar date written as YYYY-MM-DD.');
+// The same checks canonicalCell applies, so a value these schemas accept can always be digested.
+const isoUtc = z.string().refine(isDateTimeText, 'Expected a UTC instant written as YYYY-MM-DDTHH:mm:ss.sssZ.');
+const calendarDate = z.string().refine(isDateText, 'Expected a calendar date written as YYYY-MM-DD.');
+/** Semantic Versioning 2.0.0 without build metadata: no leading zeros, so each version has one spelling. */
 const semver = z
   .string()
-  .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'Expected a version written as MAJOR.MINOR.PATCH.');
+  .regex(
+    /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+    'Expected a version written as MAJOR.MINOR.PATCH, without leading zeros.',
+  );
 const packagePath = z.string().refine(isPackagePath, 'Expected a relative path inside the package.');
 
 const projectId = z.string().regex(/^p_[0-9a-f]{16}$/, "Expected a project ID: 'p_' and 16 lowercase hex characters.");
@@ -517,6 +521,11 @@ const validationReport = z
   .refine((r) => !r.ok || r.checks.every((c) => c.ok), {
     message: 'A validation report cannot be ok while one of its checks failed.',
     path: ['ok'],
+  })
+  // An export is reported as validated only after it was read back, so "ok" with nothing checked is a hidden failure.
+  .refine((r) => !r.ok || r.checks.length > 0, {
+    message: 'A validation report cannot be ok without any check.',
+    path: ['ok'],
   });
 
 const exportColumn = z.strictObject({
@@ -570,7 +579,8 @@ const exportManifest = z
 // Unit registry
 
 const unitDef = z.strictObject({
-  code: nonEmpty,
+  // A derived column is named '<column>~<code>', so a code cannot hold whitespace or '~'.
+  code: z.string().regex(/^[^\s~]+$/, "Expected a unit code without whitespace or '~'."),
   label: nonEmpty,
   aliases: z.array(nonEmpty),
   quantity: z.enum(QUANTITY_KINDS),
@@ -612,6 +622,20 @@ type _SchemaProofs = [
   Proof<Same<z.output<typeof unitRegistry>, { version: string; units: UnitDef[] }>>,
 ];
 
+/**
+ * Measures the whole document before any recursive part of a schema walks it. Without this, input
+ * nested a few thousand levels deep (which JSON.parse accepts) makes safeParse throw a RangeError
+ * instead of returning a failure, and a tampered project file could not even be opened read-only.
+ */
+function bounded<T>(schema: z.ZodType<T>): z.ZodType<T> {
+  return z
+    .custom<unknown>(
+      (v) => withinDepth(v),
+      `Expected a document whose arrays and objects nest at most ${MAX_JSON_DEPTH} levels deep.`,
+    )
+    .pipe(schema);
+}
+
 export const schemas: {
   auditEntry: z.ZodType<AuditEntry>;
   rulePack: z.ZodType<RulePack>;
@@ -620,4 +644,12 @@ export const schemas: {
   projectManifest: z.ZodType<ProjectManifest>;
   exportManifest: z.ZodType<ExportManifest>;
   unitRegistry: z.ZodType<{ version: string; units: UnitDef[] }>;
-} = Object.freeze({ auditEntry, rulePack, stepInput, decision, projectManifest, exportManifest, unitRegistry });
+} = Object.freeze({
+  auditEntry: bounded(auditEntry),
+  rulePack: bounded(rulePack),
+  stepInput: bounded(stepInput),
+  decision: bounded(decision),
+  projectManifest: bounded(projectManifest),
+  exportManifest: bounded(exportManifest),
+  unitRegistry: bounded(unitRegistry),
+});

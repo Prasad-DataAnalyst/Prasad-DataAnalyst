@@ -130,6 +130,15 @@ const QUANTITIES: Readonly<Record<QuantityKind, QuantitySpec>> = {
   },
 };
 
+/**
+ * The spec of `q`, or undefined when `q` is not a quantity kind. Quantity kinds and unit systems
+ * also arrive from persisted documents, so a stray string such as 'toString' must not reach an
+ * inherited property of the table.
+ */
+function specOf(q: QuantityKind): QuantitySpec | undefined {
+  return Object.hasOwn(QUANTITIES, q) ? QUANTITIES[q] : undefined;
+}
+
 export function quantityLabel(q: QuantityKind): string {
   return QUANTITIES[q].label;
 }
@@ -150,12 +159,13 @@ function boundIn(unit: UnitDef, si: number): number {
 
 /**
  * The physical bounds of quantity `q` expressed in `unit` (a registry code), for rule TW-DQ-005.
- * Null when the quantity has no bounds, the unit is unknown, or the unit measures another quantity.
+ * Null when the quantity has no bounds or is unknown, the unit is unknown, or the unit measures
+ * another quantity.
  */
 export function physicalBounds(q: QuantityKind, unit: string): PhysicalBounds | null {
-  const bounds = QUANTITIES[q].bounds;
+  const bounds = specOf(q)?.bounds;
   const u = getUnit(unit);
-  if (bounds === null || u === undefined || !sameFamily(u.quantity, q)) return null;
+  if (bounds == null || u === undefined || !sameFamily(u.quantity, q)) return null;
   const result: PhysicalBounds = { source: bounds.source };
   if (bounds.min !== undefined) result.min = boundIn(u, bounds.min);
   if (bounds.max !== undefined) result.max = boundIn(u, bounds.max);
@@ -164,8 +174,10 @@ export function physicalBounds(q: QuantityKind, unit: string): PhysicalBounds | 
 
 /**
  * The unit a quantity is converted to by default in a project's unit system, or null when the
- * quantity does not depend on the system (time, fractions) or has no unit.
+ * quantity does not depend on the system (time, fractions), has no unit, or the quantity or system
+ * is unknown.
  */
 export function defaultTargetUnit(q: QuantityKind, system: UnitSystem): string | null {
-  return QUANTITIES[q].defaults[system];
+  const defaults = specOf(q)?.defaults;
+  return defaults !== undefined && Object.hasOwn(defaults, system) ? defaults[system] : null;
 }

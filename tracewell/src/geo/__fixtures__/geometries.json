@@ -289,6 +289,22 @@
       "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[0]", "message": "1 distinct corner," }]
     },
     {
+      "name": "ring that runs back and forth between two places",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 0],
+            [0, 0],
+            [1, 0],
+            [0, 0]
+          ]
+        ]
+      },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[0]", "message": "2 distinct corners," }]
+    },
+    {
       "name": "bow-tie polygon",
       "geometry": {
         "type": "Polygon",

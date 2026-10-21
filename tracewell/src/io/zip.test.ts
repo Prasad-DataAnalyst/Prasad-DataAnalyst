@@ -2,8 +2,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { deflateSync } from 'fflate';
-import { afterAll, describe, expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
+import { deflateSync, Inflate } from 'fflate';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EngineError, utf8 } from '@tw/model';
 import { checksumsFile, parseChecksumsFile } from './checksums';
 import { sha256Hex } from './sha256';
@@ -11,6 +12,7 @@ import { readZip, type ZipReader } from './zip-read';
 import { writeZip, type ZipEntryInput } from './zip-write';
 import {
   centralRecords,
+  padCompressedData,
   patchBoth,
   PYTHON_AVAILABLE,
   rawData,
@@ -22,6 +24,7 @@ import {
 } from './__fixtures__/zip-tools';
 
 const MiB = 1024 * 1024;
+const PINNED_ZIP_SHA256 = 'dd519279b456306a1a178acca4aa50307242fc6358ed88b29c0840367441b56d';
 
 const scratch = mkdtempSync(join(tmpdir(), 'tracewell-io-zip-'));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -104,6 +107,24 @@ describe('writeZip and readZip', () => {
     const second = writeZip(SAMPLE.map((e) => ({ ...e, data: e.data.slice() })));
     expect(second).toEqual(first);
     expect(sha256Hex(second)).toBe(sha256Hex(first));
+  });
+
+  it('give the same bytes in every time zone and on every machine (pinned digest)', () => {
+    // Pinned so that a change of output, such as one from a new fflate release, is a deliberate
+    // decision: exports and .twp files are meant to be byte-identical for the same inputs (NFR-06).
+    const entries: ZipEntryInput[] = [
+      { path: 'mimetype', data: utf8('application/vnd.tracewell.project+zip'), store: true },
+      { path: 'data/wells.csv', data: utf8('well,rate\r\nA-1,42\r\n'.repeat(100)) },
+      { path: 'données.txt', data: utf8('Temp °C') },
+    ];
+    const before = process.env.TZ;
+    const digests = ['UTC', 'Pacific/Kiritimati', 'America/St_Johns'].map((zone) => {
+      process.env.TZ = zone;
+      return sha256Hex(writeZip(entries));
+    });
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+    expect(new Set(digests)).toEqual(new Set([PINNED_ZIP_SHA256]));
   });
 
   it('keep the caller order by default and sort by code point when asked', () => {
@@ -253,6 +274,25 @@ describe.skipIf(!PYTHON_AVAILABLE)('interoperability with Python zipfile', () =>
     expect(reader.readText('caf\u00e9.txt')).toBe('Temp \u00b0C');
   });
 
+  it('finds the data after a local header extra field that the central directory does not repeat', () => {
+    // force_zip64 puts a ZIP64 extra field in each local header only, so the data offset depends
+    // on the local extra length; written to a pipe, the sizes also move to ZIP64 data descriptors.
+    const zip = runPython([
+      'import sys, zipfile',
+      'with zipfile.ZipFile(sys.stdout.buffer, "w", compression=zipfile.ZIP_DEFLATED) as z:',
+      '    for name, method in (("rates.csv", zipfile.ZIP_DEFLATED), ("raw.bin", zipfile.ZIP_STORED)):',
+      '        info = zipfile.ZipInfo(name)',
+      '        info.compress_type = method',
+      '        with z.open(info, "w", force_zip64=True) as f:',
+      '            f.write(b"well,rate\\n" * 300)',
+    ]);
+    const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    expect(v.getUint16(28, true), 'the first local header has an extra field').toBeGreaterThan(0);
+    const reader = readZip(zip);
+    expect(reader.paths()).toEqual(['rates.csv', 'raw.bin']);
+    for (const path of reader.paths()) expect(reader.readText(path)).toBe('well,rate\n'.repeat(300));
+  });
+
   it('accepts the ZIP64 rewriter used below as a valid archive', () => {
     const listing = pythonList(toZip64(writeZip(SAMPLE)));
     expect(listing.bad).toBeNull();
@@ -296,6 +336,13 @@ describe('readZip structure handling', () => {
     const reader = readZip(writeZip(SAMPLE));
     const first = reader.read('mimetype');
     first.fill(0);
+    expect(new TextDecoder().decode(reader.read('mimetype'))).toBe('application/vnd.tracewell.project+zip');
+  });
+
+  it('returns a fresh array for a stored entry of an archive held in a Node Buffer', () => {
+    // Buffer#slice returns a view sharing the archive's memory, unlike Uint8Array#slice.
+    const reader = readZip(Buffer.from(writeZip(SAMPLE)));
+    reader.read('mimetype').fill(0);
     expect(new TextDecoder().decode(reader.read('mimetype'))).toBe('application/vnd.tracewell.project+zip');
   });
 
@@ -455,6 +502,46 @@ describe('readZip guards (zip bombs)', () => {
     if (record === undefined) throw new Error('no entry');
     const reader = readZip(patchBoth(zeros, record, 'size', 10 * MiB + 1));
     expect(thrown(() => reader.read('zeros.bin')).detail).toMatchObject({ actualBytes: 10 * MiB });
+  });
+
+  describe('an entry whose compressed size runs far past the end of its DEFLATE stream', () => {
+    const data = utf8('well,rate\nA-1,42\n');
+    const padded = padCompressedData(writeZip([{ path: 'a.csv', data }]), 8 * MiB);
+
+    /** Counts the input slices handed to the inflater while `action` runs. */
+    function pushesDuring(action: () => void): number {
+      const push = vi.spyOn(Inflate.prototype, 'push');
+      try {
+        action();
+        return push.mock.calls.length;
+      } finally {
+        push.mockRestore();
+      }
+    }
+
+    it('is read without decoding or re-copying the bytes after the stream ends', () => {
+      // Bytes pushed after the end were appended to, and copied with, everything still pending on
+      // every push, so the cost grew with the square of their length: a CPU bomb in a few MB.
+      let read: Uint8Array | undefined;
+      const pushes = pushesDuring(() => {
+        read = readZip(padded).read('a.csv');
+      });
+      expect(read).toEqual(data);
+      expect(pushes).toBeLessThanOrEqual(2);
+    });
+
+    it('is reported as too short just as quickly when it declares more bytes than the stream holds', () => {
+      const [record] = centralRecords(padded);
+      if (record === undefined) throw new Error('no entry');
+      const reader = readZip(patchBoth(padded, record, 'size', data.length + 1));
+      let error: EngineError | undefined;
+      const pushes = pushesDuring(() => {
+        error = thrown(() => reader.read('a.csv'));
+      });
+      expect(error?.code).toBe('PROJECT_INVALID');
+      expect(error?.detail).toMatchObject({ actualBytes: data.length });
+      expect(pushes).toBeLessThanOrEqual(2);
+    });
   });
 
   it('rejects more entries than maxEntries', () => {

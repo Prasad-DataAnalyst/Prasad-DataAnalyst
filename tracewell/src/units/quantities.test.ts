@@ -80,6 +80,13 @@ describe('physicalBounds', () => {
     expect(physicalBounds('temperature', '°C')).toBeNull();
   });
 
+  it('gives null, not a TypeError, for a quantity outside the model', () => {
+    // Quantity kinds also arrive from persisted documents, where any string can appear.
+    for (const q of ['foo', 'toString', '__proto__', 'constructor', 'hasOwnProperty']) {
+      expect(physicalBounds(q as QuantityKind, 'kPa'), q).toBeNull();
+    }
+  });
+
   it('expresses every bound as the SI bound converted to the unit', () => {
     for (const u of allUnits()) {
       const bounds = physicalBounds(u.quantity, u.code);
@@ -105,6 +112,15 @@ describe('defaultTargetUnit', () => {
     for (const q of ['time', 'fraction', 'dimensionless'] as const) {
       expect(defaultTargetUnit(q, 'SI')).toBeNull();
       expect(defaultTargetUnit(q, 'Oilfield')).toBeNull();
+    }
+  });
+
+  it('gives null, not a TypeError or undefined, for a quantity or unit system outside the model', () => {
+    for (const q of ['foo', 'toString', '__proto__', 'constructor']) {
+      expect(defaultTargetUnit(q as QuantityKind, 'SI'), q).toBeNull();
+    }
+    for (const system of ['Metric', 'toString', '__proto__']) {
+      expect(defaultTargetUnit('length', system as 'SI'), system).toBeNull();
     }
   });
 

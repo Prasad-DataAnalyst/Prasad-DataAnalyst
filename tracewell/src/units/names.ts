@@ -29,6 +29,7 @@ const TIME_DENOMINATORS: readonly (readonly [RegExp, string])[] = [
  * The case-preserving normal form of a unit text:
  * - invisible format characters (zero-width space, word joiner, soft hyphen, BOM) are removed;
  * - look-alike degree signs (º U+00BA, ˚ U+02DA) become '°', before NFKC would turn them into 'o';
+ * - the increment sign ∆ (U+2206, which some keyboards type for 'delta') becomes the Greek Δ;
  * - NFKC turns superscripts into digits (m³ → m3) and ℃ into °C;
  * - look-alike slashes (U+2215, U+2044) become '/';
  * - the word 'per' becomes '/';
@@ -40,6 +41,7 @@ export function normalizeUnitText(text: string): string {
   let key = text
     .replace(/\p{Cf}/gu, '')
     .replace(/[\u00ba\u02da]/gu, '\u00b0')
+    .replace(/\u2206/gu, '\u0394')
     .normalize('NFKC')
     .replace(/[\u2215\u2044]/gu, '/')
     .replace(/(^|[\s_])per(?=[\s_]|$)/giu, '$1/')

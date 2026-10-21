@@ -148,8 +148,10 @@ function editCell(project: StubProject, d: DecisionOf<'edit_cell'>): Applied {
   const previous = ds.edits.get(key) ?? null;
   ds.edits.set(key, value);
   project.undo.set(entry.seq, {
+    // Undo restores the value before this edit, so it is safe only while no later edit of the cell
+    // is in effect; comparing values would let a later edit back to the same value be discarded.
     check: () => {
-      if (!sameCell(currentValue(ds, column, d.rowId), value)) {
+      if (laterEditInEffect(project, target, entry.seq)) {
         throw invalid(
           `A later edit changed this cell after entry ${entry.seq}.`,
           'Revert the later edit first, then this one.',
@@ -163,6 +165,19 @@ function editCell(project: StubProject, d: DecisionOf<'edit_cell'>): Applied {
   });
   project.afterChange(ds, entry.seq);
   return { entries: [entry], changed: ['datasets', 'issues', 'audit'], datasetId: ds.id };
+}
+
+/** Whether a cell.edit after `seq` of the same cell has not been reverted. */
+function laterEditInEffect(project: StubProject, cell: AuditTarget, seq: number): boolean {
+  return project.audit.some(
+    (e) =>
+      e.seq > seq &&
+      e.action === 'cell.edit' &&
+      e.target.datasetId === cell.datasetId &&
+      e.target.rowId === cell.rowId &&
+      e.target.columnId === cell.columnId &&
+      project.undo.has(e.seq),
+  );
 }
 
 const TYPE_HINTS: Record<string, string> = {
@@ -246,6 +261,12 @@ function excludeRows(project: StubProject, d: DecisionOf<'exclude_rows'>): Appli
       throw invalid(`Issue ${issue.id} belongs to another dataset.`, 'Choose an issue of this dataset.');
     rows = openRows(issue);
     target.issueId = issue.id;
+    if (rows.length === 0) {
+      throw invalid(
+        `Issue ${issue.id} has no open rows to exclude.`,
+        'Choose an issue that still has open rows, or choose the rows themselves.',
+      );
+    }
   }
   const fresh = rows.filter((r) => !ds.excluded.has(r));
   if (fresh.length === 0)

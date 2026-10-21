@@ -11,6 +11,7 @@ import {
   type UserProfile,
 } from '@tw/model';
 import { describe, expect, it } from 'vitest';
+import { fakeEngine } from './__fixtures__/fake-engine';
 import { EngineClient } from './client';
 import { ENGINE_METHODS, PROTOCOL_VERSION, type EngineApi, type EngineEvent } from './protocol';
 import { createStubEngine } from './stub';
@@ -301,6 +302,32 @@ describe('createStubEngine: canned project', () => {
     expect((await issueOf(c, 'TW-DQ-001')).counts.open).toBe(2);
   });
 
+  it('inProcessTransport copies results and parameters, so neither side can change the other through them', async () => {
+    // The stub builds fresh objects for most answers; an engine that returns its own state shows the copy.
+    const held = { name: 'kept', datasets: [{ id: 'd1' }] };
+    let received: { offset: number } | undefined;
+    const impl = fakeEngine({
+      getProject: async () => held as never,
+      getRows: async (q) => {
+        received = q;
+        q.offset = 99;
+        return {} as never;
+      },
+    });
+    const c = new EngineClient(inProcessTransport(impl));
+    const project = await c.getProject();
+    expect(project).toEqual(held);
+    expect(project).not.toBe(held);
+    project.name = 'changed';
+    project.datasets.length = 0;
+    expect(held).toEqual({ name: 'kept', datasets: [{ id: 'd1' }] });
+    const q = { datasetId: 'd1', stage: 'working' as const, offset: 0, limit: 1 };
+    await c.getRows(q);
+    expect(received).toEqual({ ...q, offset: 99 });
+    expect(q.offset).toBe(0);
+    c.close();
+  });
+
   it('reports job progress, the change and completion as events, in that order', async () => {
     const c = stubClient();
     const events: EngineEvent['type'][] = [];
@@ -432,6 +459,39 @@ describe('createStubEngine: review decisions', () => {
     const e = await rejection(c.decide({ kind: 'revert', seq: first?.seq ?? 0, reason: 'Undo first.' }));
     expect(e).toMatchObject({ code: 'INVALID_INPUT' });
     expect(e.fix).toContain('later');
+  });
+
+  it('refuses to revert an edit while a later edit of the cell is in effect, even one that set the same value', async () => {
+    const c = stubClient();
+    const base = { kind: 'edit_cell' as const, datasetId: 'd1', rowId: 6, columnId: 'c2' };
+    const [first] = await c.decide({ ...base, value: { text: '4' }, reason: 'Sign error in the report.' });
+    const [second] = await c.decide({ ...base, value: { text: '5' }, reason: 'Field log says 5.' });
+    const [third] = await c.decide({ ...base, value: { text: '4' }, reason: 'The report was right.' });
+    const revert = (seq: number | undefined) => c.decide({ kind: 'revert', seq: seq ?? 0, reason: 'Undo this one.' });
+    const value = async () =>
+      (await c.getRows({ datasetId: 'd1', stage: 'working', offset: 6, limit: 1 })).rows[0]?.cells[2];
+    // Reverting the first edit now would silently discard the second and third.
+    const e = await rejection(revert(first?.seq));
+    expect(e.code).toBe('INVALID_INPUT');
+    expect(e.fix).toContain('later');
+    expect(await value()).toBe(4);
+    await revert(third?.seq);
+    expect(await value()).toBe(5);
+    await revert(second?.seq);
+    expect(await value()).toBe(4);
+    await revert(first?.seq);
+    expect(await value()).toBe(-4);
+  });
+
+  it('says an issue has no open rows to exclude, rather than that its rows are already excluded', async () => {
+    const c = stubClient();
+    const issue = await issueOf(c, 'TW-DQ-006');
+    await c.decide({ kind: 'accept_issue', issueId: issue.id, rows: 'all', reason: 'Known shut-in markers.' });
+    const e = await rejection(
+      c.decide({ kind: 'exclude_rows', datasetId: 'd1', rows: { issueId: issue.id }, reason: 'Drop them.' }),
+    );
+    expect(e.code).toBe('INVALID_INPUT');
+    expect(e.message).toContain('no open rows');
   });
 
   it('accepts some rows (partly resolved), then excludes the rest (resolved, counted as excluded)', async () => {
@@ -704,6 +764,16 @@ describe('createStubEngine: steps', () => {
         )
       ).code,
     ).toBe('INVALID_INPUT');
+  });
+
+  it("filters a date column with 'in' the way it does with 'eq', instead of matching nothing", async () => {
+    const c = stubClient();
+    const rows = async (predicate: object) =>
+      (await c.previewStep('d1', { kind: 'filter', predicate } as never)).resultingRows;
+    expect(await rows({ column: 'c1', op: 'eq', value: '2026-01-01' })).toBe(2);
+    expect(await rows({ column: 'c1', op: 'in', values: ['2026-01-01', '2026-01-05'] })).toBe(4);
+    expect(await rows({ column: 'c0', op: 'in', values: ['W-02'] })).toBe(5);
+    expect(await rows({ column: 'c2', op: 'in', values: [98.3, -4] })).toBe(2);
   });
 
   it('keeps the output columns in the order a selection lists them', async () => {

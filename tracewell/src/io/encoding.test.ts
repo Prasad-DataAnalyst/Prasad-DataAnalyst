@@ -102,7 +102,8 @@ describe.skipIf(!MESSY_READY)('sniffEncoding on the messy fixtures', () => {
     expect(sniffEncoding(data)).toMatchObject({ value: 'windows-1252', confidence: 'low', assumed: true });
     const text = decodeAll(data, 'windows-1252', 0);
     // windows-1252 is one byte per character, so byte offsets are string offsets.
-    expect(data.indexOf(0xb0)).toBeGreaterThanOrEqual(0);
+    expect(data.indexOf(0xb0), 'the fixture contains byte 0xB0').toBeGreaterThanOrEqual(0);
+    expect(data.indexOf(0x80), 'the fixture contains byte 0x80').toBeGreaterThanOrEqual(0);
     data.forEach((byte, i) => {
       if (byte === 0xb0) expect(text[i]).toBe(DEGREE);
       if (byte === 0x80) expect(text[i]).toBe(EURO);

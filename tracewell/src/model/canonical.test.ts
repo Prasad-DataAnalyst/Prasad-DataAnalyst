@@ -58,6 +58,22 @@ function withoutNegativeZero(value: JsonValue): JsonValue {
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutNegativeZero(v)]));
 }
 
+/** `depth` arrays nested inside each other around the number 1, as JSON.parse builds them. */
+function nested(depth: number): JsonValue {
+  return JSON.parse(`${'['.repeat(depth)}1${']'.repeat(depth)}`) as JsonValue;
+}
+
+/** `depth` objects nested inside each other, each holding the next under the key "a". */
+function nestedObjects(depth: number): JsonValue {
+  return JSON.parse(`${'{"a":'.repeat(depth)}1${'}'.repeat(depth)}`) as JsonValue;
+}
+
+/** True when `text` names a real day (and time) in the proleptic Gregorian calendar, by a Date round trip. */
+function isRealInstant(text: string): boolean {
+  const t = Date.parse(text);
+  return Number.isFinite(t) && new Date(t).toISOString() === text;
+}
+
 /** Whitespace outside string literals; canonical JSON has none. */
 function structuralWhitespace(text: string): boolean {
   return /\s/.test(text.replace(/"(?:[^"\\]|\\.)*"/g, '""'));
@@ -166,6 +182,24 @@ describe('canonicalJson', () => {
     expect(canonicalJson({ a: shared, b: [shared, shared] })).toBe('{"a":{"k":1},"b":[{"k":1},{"k":1}]}');
   });
 
+  it('encodes containers nested up to 256 levels deep', () => {
+    expect(canonicalJson(nested(256))).toBe(`${'['.repeat(256)}1${']'.repeat(256)}`);
+    expect(canonicalJson(nestedObjects(256)).length).toBe(256 * 6 + 1);
+  });
+
+  // JSON.parse accepts far deeper text, so a tampered audit line must fail as bad input, not as a
+  // stack overflow that looks like an engine fault and differs between runtimes.
+  it.each([257, 5_000, 200_000])('throws INVALID_INPUT, not a stack overflow, for %i levels of nesting', (depth) => {
+    expect(errorCode(() => canonicalJson(nested(depth)))).toBe('INVALID_INPUT');
+    expect(errorCode(() => canonicalJson(nestedObjects(depth)))).toBe('INVALID_INPUT');
+  });
+
+  it('throws INVALID_INPUT for a geometry cell nested too deeply', () => {
+    let geometry: Geometry = { type: 'Point', coordinates: [1, 2] };
+    for (let i = 0; i < 5_000; i++) geometry = { type: 'GeometryCollection', geometries: [geometry] };
+    expect(errorCode(() => canonicalCell({ geometry }))).toBe('INVALID_INPUT');
+  });
+
   it('is stable under key permutation, parses back to the value and has no structural whitespace', () => {
     fc.assert(
       fc.property(fc.jsonValue(), fc.func(fc.integer()), (generated, rankFn) => {
@@ -249,8 +283,44 @@ describe('canonicalCell', () => {
     ['a date without zero padding', { date: '2026-3-1' }],
     ['a date with a time', { date: '2026-03-01T00:00:00.000Z' }],
     ['a date with an expanded year', { date: '+012026-03-01' }],
+    // A day or time that does not exist has no counterpart in another engine's date type.
+    ['30 February', { date: '2026-02-30' }],
+    ['29 February in a common year', { date: '2025-02-29' }],
+    ['29 February in a century year that is not a leap year', { date: '1900-02-29' }],
+    ['month 13', { date: '2026-13-01' }],
+    ['month 0', { date: '2026-00-10' }],
+    ['day 0', { date: '2026-03-00' }],
+    ['31 April', { date: '2026-04-31' }],
+    ['a datetime on 31 June', { datetime: '2026-06-31T12:00:00.000Z' }],
+    ['a datetime at hour 24', { datetime: '2026-03-01T24:00:00.000Z' }],
+    ['a datetime at minute 60', { datetime: '2026-03-01T23:60:00.000Z' }],
+    ['a datetime at a leap second', { datetime: '2016-12-31T23:59:60.000Z' }],
   ])('throws INVALID_INPUT for %s', (_name, value) => {
     expect(errorCode(() => canonicalCell(value as CellValue))).toBe('INVALID_INPUT');
+  });
+
+  it.each<[string, CellValue, string]>([
+    ['29 February in a leap year', { date: '2024-02-29' }, 'd:2024-02-29'],
+    ['29 February in a leap century year', { date: '2000-02-29' }, 'd:2000-02-29'],
+    ['the first day of year 0000', { date: '0000-01-01' }, 'd:0000-01-01'],
+    ['the last day of year 9999', { date: '9999-12-31' }, 'd:9999-12-31'],
+    ['the last millisecond of a day', { datetime: '2026-12-31T23:59:59.999Z' }, 't:2026-12-31T23:59:59.999Z'],
+  ])('encodes %s', (_name, value, expected) => {
+    expect(canonicalCell(value)).toBe(expected);
+  });
+
+  it('accepts exactly the dates and datetimes that survive a Date round trip', () => {
+    const digits = (n: number, max: number) => fc.integer({ min: 0, max }).map((v) => String(v).padStart(n, '0'));
+    const day = fc.tuple(digits(4, 9999), digits(2, 14), digits(2, 32)).map(([y, m, d]) => `${y}-${m}-${d}`);
+    const time = fc.tuple(digits(2, 25), digits(2, 61), digits(2, 61), digits(3, 999));
+    fc.assert(
+      fc.property(day, time, (date, [h, mi, s, ms]) => {
+        const datetime = `${date}T${h}:${mi}:${s}.${ms}Z`;
+        expect(errorCode(() => canonicalCell({ date })) === undefined).toBe(isRealInstant(`${date}T00:00:00.000Z`));
+        expect(errorCode(() => canonicalCell({ datetime })) === undefined).toBe(isRealInstant(datetime));
+      }),
+      { numRuns: 3000 },
+    );
   });
 });
 

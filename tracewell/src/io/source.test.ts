@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { EngineError, utf8, type ByteSource } from '@tw/model';
 import { sha256Hex } from './sha256';
@@ -81,6 +82,15 @@ describe('bytesSource', () => {
     expect(original).toEqual(sequence(1000));
   });
 
+  it('hands out copies of a Node Buffer too, whose own slice() shares memory', async () => {
+    const original = Buffer.from(sequence(1000));
+    const src = bytesSource(original, 'x');
+    (await src.slice(0, 1000)).fill(0);
+    const [chunk] = await chunksOf(src);
+    chunk?.fill(0);
+    expect(new Uint8Array(original)).toEqual(sequence(1000));
+  });
+
   it('streams an empty source as no chunks', async () => {
     expect(await chunksOf(bytesSource(new Uint8Array(0), 'empty'))).toEqual([]);
   });
@@ -116,6 +126,15 @@ describe('memorySink', () => {
     await sink.write(buffer);
     expect(new TextDecoder().decode(sink.bytes())).toBe('aaaabbbb');
     expect((await sink.close()).sha256).toBe(sha256Hex('aaaabbbb'));
+  });
+
+  it('copies a Node Buffer chunk too, so its bytes still match the SHA-256 it reports', async () => {
+    const sink = memorySink();
+    const buffer = Buffer.from('aaaa');
+    await sink.write(buffer);
+    buffer.fill(0x62);
+    expect(new TextDecoder().decode(sink.bytes())).toBe('aaaa');
+    expect((await sink.close()).sha256).toBe(sha256Hex('aaaa'));
   });
 
   it('returns what has been written so far, without later writes changing an earlier result', async () => {

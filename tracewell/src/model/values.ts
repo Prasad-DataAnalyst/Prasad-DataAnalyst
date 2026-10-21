@@ -36,10 +36,45 @@ export type CellValue = null | string | number | boolean | DateCell | DateTimeCe
 /** What readers emit: text, native numbers, booleans and dates where the format has them, or a format error cell. */
 export type RawField = string | number | boolean | null | DateCell | DateTimeCell | { error: string };
 
-/** The canonical text of a DateCell (internal; the module exports only the types and guards). */
-export const DATE_TEXT = /^\d{4}-\d{2}-\d{2}$/;
-/** The canonical text of a DateTimeCell (internal). */
-export const DATETIME_TEXT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DATETIME_TEXT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{3}Z$/;
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/** Captured digits as a number; a missing group gives NaN, which fails every range test below. */
+function digits(match: RegExpExecArray, group: number): number {
+  return Number(match[group]);
+}
+
+function isRealDay(match: RegExpExecArray): boolean {
+  const [year, month, day] = [digits(match, 1), digits(match, 2), digits(match, 3)];
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+}
+
+/**
+ * True for the canonical text of a DateCell: YYYY-MM-DD naming a day that exists in the proleptic
+ * Gregorian calendar (internal; the module exports only the types and guards). Arithmetic rather
+ * than a Date round trip, because column digests call this for every date cell.
+ */
+export function isDateText(s: string): boolean {
+  const match = DATE_TEXT.exec(s);
+  return match !== null && isRealDay(match);
+}
+
+/** True for the canonical text of a DateTimeCell: an existing UTC instant as YYYY-MM-DDTHH:mm:ss.sssZ (internal). */
+export function isDateTimeText(s: string): boolean {
+  const match = DATETIME_TEXT.exec(s);
+  if (match === null || !isRealDay(match)) return false;
+  // There are no leap seconds and no 24:00: Date and every engine's timestamp type refuse both.
+  return digits(match, 4) < 24 && digits(match, 5) < 60 && digits(match, 6) < 60;
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);

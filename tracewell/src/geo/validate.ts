@@ -6,7 +6,7 @@
  * million-vertex outline gives a short report instead of a million entries.
  */
 import type { Geometry } from '@tw/model';
-import { MAX_INTERSECTION_VERTICES, ringCorners, ringSelfIntersection } from './intersect';
+import { distinctCornerCount, MAX_INTERSECTION_VERTICES, ringCorners, ringSelfIntersection } from './intersect';
 import type { GeometryProblem, GeometryProblemCode } from './types';
 
 /** Collections nested deeper than this are refused (RFC 7946 advises against nesting them at all). */
@@ -19,18 +19,26 @@ const GEOMETRY_TYPES: readonly string[] = [...COORDINATE_TYPES, 'GeometryCollect
 /** Problems that mean the value does not have the Geometry shape at all. */
 const SHAPE_PROBLEMS: ReadonlySet<GeometryProblemCode> = new Set(['BAD_STRUCTURE', 'NON_FINITE']);
 
+/** The levels a collection has been walked at so far, and whether its own members array was checked. */
+interface CollectionWalks {
+  shallowest: number;
+  deepest: number;
+  membersChecked: boolean;
+}
+
 interface Context {
   problems: GeometryProblem[];
   /** False when only the shape matters (isGeometry), which skips the costly topology tests. */
   topology: boolean;
   /** The collections being walked, outermost first: meeting one again means it contains itself. */
   open: Set<object>;
-  /** Each geometry object already checked; for a collection, the deepest level it was checked at. */
-  checked: Map<object, number>;
+  /** Geometry objects other than collections already checked. */
+  checked: Set<object>;
+  collections: Map<object, CollectionWalks>;
 }
 
 function newContext(topology: boolean): Context {
-  return { problems: [], topology, open: new Set(), checked: new Map() };
+  return { problems: [], topology, open: new Set(), checked: new Set(), collections: new Map() };
 }
 
 type PositionFault = { code: 'BAD_STRUCTURE' | 'NON_FINITE'; message: string } | null;
@@ -263,12 +271,15 @@ function checkRing(ctx: Context, ring: readonly unknown[], path: string): void {
 
 function checkRingTopology(ctx: Context, ring: readonly number[][], path: string): void {
   const corners = ringCorners(ring);
-  if (corners.length < 3) {
+  // Distinct points, not just consecutive ones: a ring running back and forth between two places
+  // encloses no area either.
+  const distinct = distinctCornerCount(corners, 3);
+  if (distinct < 3) {
     report(
       ctx,
       'TOO_FEW_POSITIONS',
       path,
-      `The ring has only ${plural(corners.length, 'distinct corner')}, so it encloses no area.`,
+      `The ring has only ${plural(distinct, 'distinct corner')}, so it encloses no area.`,
     );
     return;
   }
@@ -352,40 +363,55 @@ function unknownTypeMessage(type: string): string {
   );
 }
 
-/**
- * Whether a geometry object still needs checking. A collection met again inside itself is reported.
- * An object reached again by another path (structured clone keeps shared references, JSON never
- * has them) was checked already, and its problems point at its first appearance. A collection is
- * checked again only where it sits deeper, since only the nesting limit can then add a problem.
- * Each object is thus walked at most MAX_NESTING + 1 times, where shared members could otherwise
- * make the walk exponential.
+/*
+ * Objects shared by reference (structured clone keeps sharing; JSON never has it). Each one is
+ * checked where it first appears, and its problems point there. A collection's problems depend on
+ * its depth only through the nesting limit: a deeper walk may meet the limit where an earlier one
+ * did not, and a shallower walk reaches members an earlier walk stopped short of at the limit. So a
+ * shared collection is walked again only at a new shallowest or deepest level, at most
+ * 2 × MAX_NESTING + 1 times in all, where shared members could otherwise make the walk exponential.
  */
-function needsCheck(ctx: Context, g: object, path: string, depth: number): boolean {
-  if (ctx.open.has(g)) {
-    report(ctx, 'BAD_STRUCTURE', path, 'This member is a GeometryCollection that contains itself, so it never ends.');
-    return false;
+
+/** The walks record of a collection when this visit can find something new, otherwise null. */
+function walksToMake(ctx: Context, g: object, depth: number): CollectionWalks | null {
+  const walks = ctx.collections.get(g);
+  if (walks === undefined) {
+    const first = { shallowest: depth, deepest: depth, membersChecked: false };
+    ctx.collections.set(g, first);
+    return first;
   }
-  const checkedAt = ctx.checked.get(g);
-  if (checkedAt !== undefined && checkedAt >= depth) return false;
-  ctx.checked.set(g, depth);
-  return true;
+  if (depth < walks.shallowest) walks.shallowest = depth;
+  else if (depth > walks.deepest) walks.deepest = depth;
+  else return null;
+  return walks;
+}
+
+/** The members of a collection, after reporting (once per collection) a missing or empty array. */
+function membersOf(ctx: Context, g: Record<string, unknown>, path: string, walks: CollectionWalks): unknown[] {
+  const members = g['geometries'];
+  const firstLook = !walks.membersChecked;
+  walks.membersChecked = true;
+  if (!Array.isArray(members)) {
+    if (firstLook) report(ctx, 'BAD_STRUCTURE', path, 'The GeometryCollection has no geometries array.');
+    return [];
+  }
+  if (members.length === 0 && firstLook) report(ctx, 'EMPTY', path, 'The GeometryCollection has no member geometries.');
+  return members;
 }
 
 function checkCollection(ctx: Context, g: Record<string, unknown>, path: string, depth: number): void {
+  if (ctx.open.has(g)) {
+    report(ctx, 'BAD_STRUCTURE', path, 'This member is a GeometryCollection that contains itself, so it never ends.');
+    return;
+  }
+  const walks = walksToMake(ctx, g, depth);
+  if (walks === null) return;
   if (depth >= MAX_NESTING) {
     report(ctx, 'BAD_STRUCTURE', path, `Geometry collections are nested more than ${MAX_NESTING} levels deep.`);
     return;
   }
-  const members = g['geometries'];
   const membersPath = member(path, 'geometries');
-  if (!Array.isArray(members)) {
-    report(ctx, 'BAD_STRUCTURE', membersPath, 'The GeometryCollection has no geometries array.');
-    return;
-  }
-  if (members.length === 0) {
-    report(ctx, 'EMPTY', membersPath, 'The GeometryCollection has no member geometries.');
-    return;
-  }
+  const members = membersOf(ctx, g, membersPath, walks);
   ctx.open.add(g);
   for (let i = 0; i < members.length; i++) checkGeometry(ctx, members[i], `${membersPath}[${i}]`, depth + 1);
   ctx.open.delete(g);
@@ -397,14 +423,14 @@ function checkGeometry(ctx: Context, g: unknown, path: string, depth: number): v
     return;
   }
   const type = g['type'];
-  // Depth only matters to a collection: no other object can break the nesting limit.
-  if (!needsCheck(ctx, g, path, type === 'GeometryCollection' ? depth : 0)) return;
-  if (typeof type !== 'string') {
-    report(ctx, 'BAD_STRUCTURE', member(path, 'type'), 'The object has no type name, so it is not a GeoJSON geometry.');
-    return;
-  }
   if (type === 'GeometryCollection') {
     checkCollection(ctx, g, path, depth);
+    return;
+  }
+  if (ctx.checked.has(g)) return;
+  ctx.checked.add(g);
+  if (typeof type !== 'string') {
+    report(ctx, 'BAD_STRUCTURE', member(path, 'type'), 'The object has no type name, so it is not a GeoJSON geometry.');
     return;
   }
   if (!isCoordinateType(type)) {

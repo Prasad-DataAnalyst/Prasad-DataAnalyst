@@ -157,6 +157,14 @@ describe('refusals', () => {
     expect(refusal('inH2O', 'psig').message).toContain('pressure difference');
   });
 
+  it('adds the pressure-difference note only when the other unit is a pressure', () => {
+    const note = 'A pressure difference is not measured from vacuum';
+    expect(refusal('delta_psi', 'psia').message).toContain(note);
+    expect(refusal('kPag', 'delta_kPa').message).toContain(note);
+    expect(refusal('delta_psi', 'degC').message).not.toContain(note);
+    expect(refusal('inH2O', 'm').message).not.toContain(note);
+  });
+
   it('unknown codes, including aliases, give UNIT_UNKNOWN', () => {
     expect(refusal('furlong', 'm').code).toBe('UNIT_UNKNOWN');
     expect(refusal('m', 'PSIA')).toMatchObject({ code: 'UNIT_UNKNOWN', message: expect.stringContaining('"PSIA"') });

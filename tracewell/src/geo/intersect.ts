@@ -73,11 +73,57 @@ function edgesMeet(a: Edge, b: Edge, cornerCount: number): XY | null {
   return segmentsMeet(a.from, a.to, b.from, b.to);
 }
 
+/** How many different points the corners hold, counting no further than `limit`. */
+export function distinctCornerCount(corners: readonly XY[], limit: number): number {
+  const found: XY[] = [];
+  for (const corner of corners) {
+    if (found.length >= limit) break;
+    if (!found.some((p) => samePoint(p, corner))) found.push(corner);
+  }
+  return found.length;
+}
+
+/*
+ * The orientation test multiplies coordinate differences, which overflows beyond about 1e154 and
+ * underflows to zero below about 1e-154, giving wrong verdicts and NaN crossing points. Scaling
+ * every coordinate by one power of two is exact and changes no verdict, so a ring outside the safe
+ * band is first scaled into it: a large ring down to about 2^500, keeping its smallest values
+ * clear of underflow, and a tiny ring up to about unit size.
+ */
+const SAFE_MAGNITUDE = 500;
+
+/** v × 2^exponent, exactly; split in two factors so that neither overflows on its own. */
+function timesPowerOfTwo(v: number, exponent: number): number {
+  const half = Math.trunc(exponent / 2);
+  return v * 2 ** half * 2 ** (exponent - half);
+}
+
+function rescalingExponent(corners: readonly XY[]): number {
+  let largest = 0;
+  for (const [x, y] of corners) largest = Math.max(largest, Math.abs(x), Math.abs(y));
+  if (largest === 0) return 0;
+  const magnitude = Math.floor(Math.log2(largest));
+  if (magnitude > SAFE_MAGNITUDE) return SAFE_MAGNITUDE - magnitude;
+  if (magnitude < -SAFE_MAGNITUDE) return -magnitude;
+  return 0;
+}
+
+function rescaled(point: XY, exponent: number): XY {
+  return [timesPowerOfTwo(point[0], exponent), timesPowerOfTwo(point[1], exponent)];
+}
+
 /**
  * The first point found where a ring crosses, touches or folds back on itself, or null when the
  * ring is simple. `corners` comes from ringCorners and holds at least 3 corners.
  */
 export function ringSelfIntersection(corners: readonly XY[]): XY | null {
+  const exponent = rescalingExponent(corners);
+  if (exponent === 0) return firstMeeting(corners);
+  const hit = firstMeeting(corners.map((corner) => rescaled(corner, exponent)));
+  return hit === null ? null : rescaled(hit, -exponent);
+}
+
+function firstMeeting(corners: readonly XY[]): XY | null {
   const edges = edgesOf(corners).sort((a, b) => a.west - b.west);
   for (const [k, a] of edges.entries()) {
     for (let next = k + 1; next < edges.length; next++) {

@@ -57,13 +57,65 @@ describe('parseHeaderUnit', () => {
     expect(parseHeaderUnit('Pressure (psia)').unit?.evidence).not.toContain('gauge');
   });
 
+  it('says when bare bar leaves gauge or absolute unstated, but not for bara', () => {
+    const { unit } = parseHeaderUnit('WHP (bar)');
+    expect(unit?.evidence).toContain('"bar" does not say whether the pressure is gauge or absolute');
+    expect(unit?.evidence).toContain('set the unit to barg');
+    expect(parseHeaderUnit('WHP (bara)').unit?.evidence).not.toContain('gauge');
+  });
+
+  it('names the unit to use when header words state another pressure reference', () => {
+    const cases: [string, string, string][] = [
+      ['Gauge pressure (kPa)', '"Gauge"', 'set the unit to kPag'],
+      ['Pressure [kPa] (g)', '"(g)"', 'set the unit to kPag'],
+      ['Pressure (psia) gauge', '"gauge"', 'set the unit to psig'],
+      ['DP (kPa)', '"DP"', 'set the unit to delta_kPa'],
+      ['Differential pressure (psia)', '"Differential"', 'set the unit to delta_psi'],
+      ['Absolute pressure (barg)', '"Absolute"', 'set the unit to bar'],
+      ['DP (MPa)', '"DP"', 'set the unit to delta_kPa, delta_psi or inH2O'],
+      ['Gauge pressure (Pa)', '"Gauge"', 'set the unit to kPag, barg or psig'],
+    ];
+    for (const [header, word, fix] of cases) {
+      const { unit } = parseHeaderUnit(header);
+      expect(unit?.confidence, header).not.toBe('high');
+      expect(unit?.evidence, header).toContain(`The header also says ${word}`);
+      expect(unit?.evidence, header).toContain(fix);
+    }
+  });
+
+  it('names the difference unit when header words say a temperature is a difference', () => {
+    const cases: [string, string][] = [
+      ['Delta T (°C)', 'set the unit to delta_degC'],
+      ['ΔT [°F]', 'set the unit to delta_degF'],
+      ['\u2206T (K)', 'set the unit to delta_K'],
+      ['dT (degC)', 'set the unit to delta_degC'],
+    ];
+    for (const [header, fix] of cases) {
+      const { unit } = parseHeaderUnit(header);
+      expect(unit?.confidence, header).toBe('medium');
+      expect(unit?.evidence, header).toContain('temperature difference');
+      expect(unit?.evidence, header).toContain(fix);
+    }
+  });
+
+  it('keeps high confidence when header words agree with the unit', () => {
+    for (const header of ['Gauge pressure (kPag)', 'DP gauge (inH2O)', 'Delta T (delta_degC)', 'Pressure (kPa(g))']) {
+      expect(parseHeaderUnit(header).unit?.confidence, header).toBe('high');
+    }
+    const { unit } = parseHeaderUnit('Absolute pressure (psi)');
+    expect(unit?.confidence).toBe('high');
+    expect(unit?.evidence).toContain('The header says "Absolute"');
+  });
+
   it('names the other unit when two brackets disagree', () => {
     expect(parseHeaderUnit('Pressure (psia) (kPa)').unit?.evidence).toContain('also names psia');
   });
 
   it('reads back every unit code in an exported header, "Name [code]"', () => {
+    // Bare psi and bar leave gauge or absolute unstated, so they are never high confidence.
+    const unstated = new Set(['psi', 'bar']);
     for (const u of allUnits()) {
-      const confidence = u.code === 'psi' ? 'medium' : 'high';
+      const confidence = unstated.has(u.code) ? 'medium' : 'high';
       expect(parseHeaderUnit(`Name [${u.code}]`), u.code).toMatchObject({
         name: 'Name',
         unit: { value: u.code, confidence },

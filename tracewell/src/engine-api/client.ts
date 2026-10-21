@@ -38,7 +38,7 @@ import {
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
-import { jobClosedError, reportAsync } from './messages';
+import { jobClosedError, reportAsync, unexpectedOutcomeError } from './messages';
 import type { EngineApi, EngineEvent, EngineInfo, Transport } from './protocol';
 
 export class EngineClient implements EngineApi {
@@ -253,9 +253,13 @@ class JobWaiter<T> {
     );
   }
 
-  private onOutcome(outcome: JobOutcome<unknown>): void {
+  private onOutcome(outcome: unknown): void {
     this.polling = false;
     if (this.settled) return;
+    if (!isJobOutcome(outcome)) {
+      this.fail(unexpectedOutcomeError(this.jobId));
+      return;
+    }
     switch (outcome.state) {
       case 'done':
         this.finish(() => this.resolve(outcome.result as T));
@@ -303,6 +307,18 @@ class JobWaiter<T> {
     this.onSettled(this);
     settle();
   }
+}
+
+const OUTCOME_STATES: ReadonlySet<unknown> = new Set<JobOutcome<unknown>['state']>([
+  'running',
+  'done',
+  'failed',
+  'cancelled',
+]);
+
+/** The answer comes from another program; a state outside the protocol would otherwise leave the waiter hanging. */
+function isJobOutcome(v: unknown): v is JobOutcome<unknown> {
+  return typeof v === 'object' && v !== null && OUTCOME_STATES.has((v as { state?: unknown }).state);
 }
 
 function cancelledError(jobId: JobId): EngineError {

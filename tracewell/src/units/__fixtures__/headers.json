@@ -255,7 +255,162 @@
     { "header": "Well (A)", "name": "Well (A)", "unit": null },
     { "header": "well_id", "name": "well_id", "unit": null },
     { "header": "date", "name": "date", "unit": null },
-    { "header": "", "name": "", "unit": null }
+    { "header": "", "name": "", "unit": null },
+    {
+      "header": "Gauge pressure (kPa)",
+      "name": "Gauge pressure",
+      "unit": "kPa",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure [kPa] (g)",
+      "name": "Pressure (g)",
+      "unit": "kPa",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure [psia] [g]",
+      "name": "Pressure [g]",
+      "unit": "psia",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    { "header": "DP (kPa)", "name": "DP", "unit": "kPa", "confidence": "medium", "method": "header-brackets" },
+    {
+      "header": "Differential pressure (psia)",
+      "name": "Differential pressure",
+      "unit": "psia",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "ΔP choke (bara)",
+      "name": "ΔP choke",
+      "unit": "bar",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Absolute pressure (barg)",
+      "name": "Absolute pressure",
+      "unit": "barg",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Gauge pressure kPa",
+      "name": "Gauge pressure",
+      "unit": "kPa",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Delta T (°C)",
+      "name": "Delta T",
+      "unit": "degC",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    { "header": "ΔT [°F]", "name": "ΔT", "unit": "degF", "confidence": "medium", "method": "header-brackets" },
+    {
+      "header": "Temperature difference (K)",
+      "name": "Temperature difference",
+      "unit": "K",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Gauge pressure (kPag)",
+      "name": "Gauge pressure",
+      "unit": "kPag",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "DP gauge (inH2O)",
+      "name": "DP gauge",
+      "unit": "inH2O",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Delta T (delta_degC)",
+      "name": "Delta T",
+      "unit": "delta_degC",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure (kPa(g))",
+      "name": "Pressure",
+      "unit": "kPag",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure (psi abs)",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Absolute pressure (psi)",
+      "name": "Absolute pressure",
+      "unit": "psi",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Gauge pressure (psi)",
+      "name": "Gauge pressure",
+      "unit": "psi",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Rain gauge (mm)",
+      "name": "Rain gauge",
+      "unit": "mm",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Dew point DP (°C)",
+      "name": "Dew point DP",
+      "unit": "degC",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "WHP (bar)", "name": "WHP", "unit": "bar", "confidence": "medium", "method": "header-brackets" },
+    { "header": "WHP (BAR)", "name": "WHP", "unit": "bar", "confidence": "medium", "method": "header-brackets" },
+    { "header": "WHP (bara)", "name": "WHP", "unit": "bar", "confidence": "high", "method": "header-brackets" },
+    { "header": "WHP (bar(a))", "name": "WHP", "unit": "bar", "confidence": "high", "method": "header-brackets" },
+    { "header": "Shut in psig", "name": "Shut in", "unit": "psig", "confidence": "medium", "method": "header-suffix" },
+    {
+      "header": "Shut-in pressure in psig",
+      "name": "Shut-in pressure",
+      "unit": "psig",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Pressure | psia",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "medium",
+      "method": "header-suffix"
+    },
+    {
+      "header": "Temperature (degrees F)",
+      "name": "Temperature",
+      "unit": "degF",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "Temp degrees C", "name": "Temp", "unit": "degC", "confidence": "medium", "method": "header-suffix" }
   ],
   "cells": [
     { "text": "12.5 psi", "value": "12.5", "unit": "psi" },

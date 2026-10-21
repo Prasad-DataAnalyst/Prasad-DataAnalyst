@@ -43,15 +43,30 @@ export function inflateExact(compressed: Uint8Array, expectedSize: number): Infl
   return { kind: 'ok', data: out };
 }
 
+/**
+ * Stops at the end of the DEFLATE stream: any bytes after it inside the entry's compressed size are
+ * never decoded, so they cannot change the result. Pushing them anyway is a CPU bomb, because
+ * fflate appends each push to its pending input and copies all of it again, every time.
+ */
 function pushInSlices(inflater: Inflate, compressed: Uint8Array): void {
   if (compressed.length === 0) {
     inflater.push(compressed, true);
     return;
   }
-  for (let start = 0; start < compressed.length; start += INPUT_SLICE_BYTES) {
+  for (let start = 0; start < compressed.length && !streamEnded(inflater); start += INPUT_SLICE_BYTES) {
     const end = Math.min(start + INPUT_SLICE_BYTES, compressed.length);
     inflater.push(compressed.subarray(start, end), end === compressed.length);
   }
+}
+
+/**
+ * True once the final block is complete. fflate has no public way to ask, so this reads the same
+ * state its own decoder tests before skipping input ("final block seen, no block open"). fflate is
+ * pinned to an exact version, and zip.test.ts counts pushes, so a change in that state shows up.
+ */
+function streamEnded(inflater: Inflate): boolean {
+  const state = (inflater as unknown as { s?: { f?: number; l?: unknown } }).s;
+  return state?.f === 1 && !state.l;
 }
 
 function grow(buffer: Uint8Array, needed: number, limit: number): Uint8Array {

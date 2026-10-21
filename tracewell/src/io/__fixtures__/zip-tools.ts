@@ -49,6 +49,26 @@ export function rawData(zip: Uint8Array, record: CentralRecord): Uint8Array {
   return zip.subarray(start, start + record.compressedSize);
 }
 
+/**
+ * Inserts `extra` bytes after the data of the only entry of a one-entry archive and grows its
+ * compressed size to cover them, as a producer that miscounts (or an attacker) would.
+ */
+export function padCompressedData(zip: Uint8Array, extra: number): Uint8Array {
+  const records = centralRecords(zip);
+  const [record] = records;
+  if (record === undefined || records.length !== 1) throw new Error('padCompressedData expects a one-entry archive');
+  const dataEnd = rawData(zip, record).byteOffset - zip.byteOffset + record.compressedSize;
+  const out = new Uint8Array(zip.length + extra).fill(0xa5, dataEnd, dataEnd + extra);
+  out.set(zip.subarray(0, dataEnd));
+  out.set(zip.subarray(dataEnd), dataEnd + extra);
+  const v = view(out);
+  const compressedSize = record.compressedSize + extra;
+  v.setUint32(record.localAt + 18, compressedSize, true);
+  v.setUint32(record.at + extra + 20, compressedSize, true);
+  v.setUint32(out.length - 22 + 16, record.at + extra, true);
+  return out;
+}
+
 export function withU16(zip: Uint8Array, at: number, value: number): Uint8Array {
   const copy = zip.slice();
   view(copy).setUint16(at, value, true);

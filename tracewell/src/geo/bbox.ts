@@ -28,12 +28,16 @@ export function geometryBbox(g: Geometry): BBox | null {
   return west === Infinity ? null : [west, south, east, north];
 }
 
-/** Whether the point lies in the box, edges included. */
+/**
+ * Whether the point lies in the box, edges included. A box crossing the antimeridian covers
+ * west..180 and -180..east, so a longitude beyond ±180 is in it no more than in any other box.
+ */
 export function bboxContains(b: BBox, lon: number, lat: number): boolean {
   if (!Number.isFinite(lon) || !Number.isFinite(lat)) return false;
   const [west, south, east, north] = b;
   if (lat < south || lat > north) return false;
-  return west <= east ? lon >= west && lon <= east : lon >= west || lon <= east;
+  if (west <= east) return lon >= west && lon <= east;
+  return (lon >= west && lon <= 180) || (lon >= -180 && lon <= east);
 }
 
 /** The box as one or two boxes that do not cross the antimeridian. */

@@ -3,6 +3,7 @@
  * over a Blob (a File picked by the user), over bytes already in memory, and into memory.
  */
 import type { ByteSink, ByteSource, Sha256Hex } from '@tw/model';
+import { copyBytes } from './bytes';
 import { invalidArgument, misuse } from './errors';
 import { sha256 } from './sha256';
 import { chunkedStream } from './streams';
@@ -56,7 +57,7 @@ export function bytesSource(bytes: Uint8Array, name: string): ByteSource {
     size: bytes.byteLength,
     slice(start: number, end: number): Promise<Uint8Array> {
       const [from, to] = clampRange(start, end, bytes.byteLength);
-      return Promise.resolve(bytes.slice(from, to));
+      return Promise.resolve(copyBytes(bytes, from, to));
     },
     stream: () => chunkedStream(bytes, STREAM_CHUNK_BYTES),
   };
@@ -76,7 +77,7 @@ export function memorySink(): ByteSink & { bytes(): Uint8Array } {
     async write(chunk: Uint8Array): Promise<void> {
       if (result !== null) throw misuse('Bytes were written to a sink after it was closed.');
       // Copied because writers commonly reuse one buffer for every chunk they produce.
-      const copy = chunk.slice();
+      const copy = copyBytes(chunk);
       chunks.push(copy);
       size += copy.byteLength;
       hasher.update(copy);

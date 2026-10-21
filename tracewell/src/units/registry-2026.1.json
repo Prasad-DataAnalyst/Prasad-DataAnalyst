@@ -342,7 +342,7 @@
     {
       "code": "degC",
       "label": "degree Celsius",
-      "aliases": ["°C", "C", "celsius", "centigrade"],
+      "aliases": ["°C", "C", "celsius", "centigrade", "degrees C", "degree C", "degrees Celsius", "degree Celsius"],
       "quantity": "temperature",
       "toSI": {
         "factor": 1,
@@ -355,7 +355,7 @@
     {
       "code": "degF",
       "label": "degree Fahrenheit",
-      "aliases": ["°F", "F", "fahrenheit"],
+      "aliases": ["°F", "F", "fahrenheit", "degrees F", "degree F", "degrees Fahrenheit", "degree Fahrenheit"],
       "quantity": "temperature",
       "toSI": {
         "factor": 0.5555555555555556,

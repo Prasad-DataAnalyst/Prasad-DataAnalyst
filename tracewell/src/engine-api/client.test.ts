@@ -1,6 +1,6 @@
 import { EngineError, type JobHandle, type JobOutcome, type JobProgress } from '@tw/model';
-import { describe, expect, it } from 'vitest';
-import { fakeEngine, settle, type FakeEngine } from './__fixtures__/fake-engine';
+import { describe, expect, it, vi } from 'vitest';
+import { deferred, fakeEngine, settle, type FakeEngine } from './__fixtures__/fake-engine';
 import { EngineClient } from './client';
 import type { EngineApi, Transport } from './protocol';
 import { inProcessTransport } from './transport';
@@ -69,6 +69,37 @@ describe('EngineClient.awaitJob', () => {
     const { client, setOutcome } = setup();
     setOutcome({ state: 'done', result: 'early' });
     await expect(client.awaitJob(JOB)).resolves.toBe('early');
+  });
+
+  it('asks again when job.done arrives while an earlier outcome request is still on its way', async () => {
+    const answers: ReturnType<typeof deferred<JobOutcome<unknown>>>[] = [];
+    const { client, impl } = setup({
+      jobOutcome: () => {
+        const d = deferred<JobOutcome<unknown>>();
+        answers.push(d);
+        return d.promise;
+      },
+    });
+    const result = client.awaitJob(JOB);
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    impl.emit({ type: 'job.done', jobId: 'j1' });
+    await settle();
+    // The first answer was computed before the job finished, so it still says 'running'.
+    answers[0]?.resolve({ state: 'running', progress: null });
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1]?.resolve({ state: 'done', result: 'finished' });
+    await expect(result).resolves.toBe('finished');
+  });
+
+  it('rejects with PROTOCOL_MISMATCH, instead of waiting forever, when the outcome is not one the protocol defines', async () => {
+    for (const outcome of [{ state: 'queued' }, null]) {
+      const { client, setOutcome, subscriptions } = setup();
+      setOutcome(outcome as never);
+      const e = await rejection(client.awaitJob(JOB));
+      expect(e.code).toBe('PROTOCOL_MISMATCH');
+      expect(e.message).toContain('j1');
+      expect(subscriptions()).toBe(0);
+    }
   });
 
   it('rejects with the job error on job.failed', async () => {

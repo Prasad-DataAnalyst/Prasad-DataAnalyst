@@ -395,7 +395,8 @@ export function matches(p: Predicate, columns: ViewColumn[], rowId: RowId): bool
     case 'contains':
       return typeof v === 'string' && contains(v, p.text, p.caseSensitive === true);
     case 'in':
-      return (typeof v === 'string' || typeof v === 'number') && p.values.includes(v);
+      // Each value compares as 'eq' does, so a date or datetime cell matches its text.
+      return p.values.some((w) => compare(v, w) === 0);
     case 'between':
       return compare(v, p.low) >= 0 && compare(v, p.high) <= 0;
     default:

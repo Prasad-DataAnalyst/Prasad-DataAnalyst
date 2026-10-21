@@ -87,6 +87,15 @@ export function jobClosedError(jobId: string): EngineError {
   );
 }
 
+/** awaitJob understands only the outcomes the protocol defines; waiting on anything else would never end. */
+export function unexpectedOutcomeError(jobId: string): EngineError {
+  return new EngineError(
+    'PROTOCOL_MISMATCH',
+    `The engine answered with an outcome for job ${jobId} that this version of Tracewell does not understand.`,
+    'Use a Tracewell user interface built for the same engine protocol version as the engine.',
+  );
+}
+
 export function unknownMethodError(method: unknown): EngineError {
   const name = typeof method === 'string' ? method : String(typeof method);
   return new EngineError(
@@ -138,7 +147,22 @@ export async function execute(impl: EngineImpl, method: keyof EngineApi, params:
     const value: unknown = await (fn as (...a: unknown[]) => unknown).apply(impl, params);
     return { ok: true, value };
   } catch (e) {
-    return { ok: false, error: EngineError.from(e).toData() };
+    return { ok: false, error: sendableError(EngineError.from(e).toData()) };
+  }
+}
+
+/**
+ * The error as it can cross the boundary. Only `detail` can hold something structured clone
+ * refuses; without this, the answer could not be posted and the caller would wait forever, so
+ * the detail is left out and the code, message and fix still arrive.
+ */
+function sendableError(error: EngineErrorData): EngineErrorData {
+  if (error.detail === undefined) return error;
+  try {
+    structuredClone(error.detail);
+    return error;
+  } catch {
+    return { code: error.code, message: error.message, fix: error.fix };
   }
 }
 

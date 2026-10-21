@@ -130,6 +130,11 @@ describe('registry file', () => {
     expect(REGISTRY_JSON).toBe(readFileSync(FILE_URL, 'utf8'));
   });
 
+  it('has no BOM and no carriage returns, so its SHA-256 is the same on every platform', () => {
+    expect(REGISTRY_JSON.charCodeAt(0)).not.toBe(0xfeff);
+    expect(REGISTRY_JSON).not.toContain('\r');
+  });
+
   it('has version 2026.1, matching its file name', () => {
     expect(REGISTRY_VERSION).toBe('2026.1');
     expect(FILE_NAME).toBe(`registry-${REGISTRY_VERSION}.json`);
@@ -295,6 +300,12 @@ describe('findUnit', () => {
     ['', undefined],
     ['   ', undefined],
     ['Comments', undefined],
+    ['degrees F', 'degF'],
+    ['Degrees C', 'degC'],
+    ['degree Celsius', 'degC'],
+    ['degrees Fahrenheit', 'degF'],
+    ['\u2206°C', 'delta_degC'],
+    ['\u2206psi', 'delta_psi'],
   ])('%j → %s', (text, code) => {
     expect(findUnit(text)?.code).toBe(code);
   });

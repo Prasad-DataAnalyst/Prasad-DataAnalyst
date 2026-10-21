@@ -1,4 +1,5 @@
 /** Internal stream helpers shared by hashing and the byte sources. */
+import { copyBytes } from './bytes';
 import { throwIfAborted } from './errors';
 
 /**
@@ -47,7 +48,7 @@ export function chunkedStream(bytes: Uint8Array, chunkSize: number): ReadableStr
           return;
         }
         const end = Math.min(offset + chunkSize, bytes.byteLength);
-        controller.enqueue(bytes.slice(offset, end));
+        controller.enqueue(copyBytes(bytes, offset, end));
         offset = end;
       },
     },

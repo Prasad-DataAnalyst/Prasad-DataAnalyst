@@ -51,6 +51,17 @@ describe('likelySwapped', () => {
     expect(likelySwapped(178.4, -18.1, { projectArea: fiji })).toBe(false);
   });
 
+  it('reads a crossing project area the antimeridian way when testing an in-range swapped pair', () => {
+    // The pair above is flagged by range alone. Here only the area can decide: the area covers
+    // longitudes 80 to 180 and -180 to -100, so a swapped longitude of 85 lands in it.
+    const wide: BBox = [80, 0, -100, 60];
+    expect(likelySwapped(30, 85, { projectArea: wide })).toBe(true);
+    // Swapped, (45, 30) falls in the gap between -100 and 80 that the area does not cover.
+    expect(likelySwapped(30, 45, { projectArea: wide })).toBe(false);
+    // Already inside the western part of the area.
+    expect(likelySwapped(-150, 30, { projectArea: wide })).toBe(false);
+  });
+
   it('never flags non-finite values', () => {
     expect(likelySwapped(NaN, 120)).toBe(false);
     expect(likelySwapped(30, Infinity)).toBe(false);

@@ -28,6 +28,17 @@
     ]
   },
   {
+    "why": "validation ok without any check",
+    "base": 0,
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/validation/checks",
+        "value": []
+      }
+    ]
+  },
+  {
     "why": "unknown profile",
     "base": 0,
     "patch": [

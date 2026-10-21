@@ -39,6 +39,25 @@ function connect(impl: FakeEngine | ReturnType<typeof createStubEngine>): {
   return { client: new EngineClient(transport), transport, stop };
 }
 
+/**
+ * Collects errors that the RPC reports by throwing from a microtask, which would otherwise fail
+ * the run as uncaught; every other microtask still runs normally.
+ */
+function captureReports(): unknown[] & { restore(): void } {
+  const reported: unknown[] = [];
+  const original = globalThis.queueMicrotask.bind(globalThis);
+  const spy = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation((cb) =>
+    original(() => {
+      try {
+        cb();
+      } catch (e) {
+        reported.push(e);
+      }
+    }),
+  );
+  return Object.assign(reported, { restore: () => spy.mockRestore() });
+}
+
 async function rejection(p: Promise<unknown>): Promise<EngineError> {
   const e: unknown = await p.then(
     () => undefined,
@@ -73,6 +92,16 @@ describe('serve() and portTransport over a MessageChannel', () => {
     expect(e.message).toBe(thrown.message);
     expect(e.fix).toBe(thrown.fix);
     expect(e.detail).toEqual({ from: 'psia' });
+  });
+
+  it('still answers a call whose error detail cannot cross the boundary, keeping code, message and fix', async () => {
+    const thrown = new EngineError('PARSE_FAILED', 'Line 7 is broken.', 'Fix line 7.', {
+      at: (() => 7) as never,
+    });
+    const { client } = connect(fakeEngine({ verifyAudit: () => Promise.reject(thrown) }));
+    const e = await rejection(client.verifyAudit());
+    expect(e).toMatchObject({ code: 'PARSE_FAILED', message: 'Line 7 is broken.', fix: 'Fix line 7.' });
+    expect(e.detail).toBeUndefined();
   });
 
   it('turns any other thrown value into an INTERNAL EngineError with a fix', async () => {
@@ -258,6 +287,21 @@ describe('workerTransport', () => {
     transport.close();
   });
 
+  it('keeps calls waiting when a worker that already answers reports an error, because their answers still come', async () => {
+    const worker = new FakeWorker();
+    const transport = workerTransport(worker as unknown as Worker);
+    const first = transport.call('hello', []);
+    worker.answer({ kind: 'result', id: 1, ok: true, value: INFO });
+    await expect(first).resolves.toEqual(INFO);
+    // An uncaught error in a running worker (serve() reports unsendable events this way) does not
+    // stop it: the decision below is still applied and answered, so rejecting it would hide that.
+    const decision = transport.call('decide', [{ kind: 'comment_issue', issueId: 'I-1', text: 'ok' }]);
+    worker.dispatchEvent(Object.assign(new Event('error'), { message: 'Uncaught DataCloneError' }));
+    worker.answer({ kind: 'result', id: 2, ok: true, value: [] });
+    await expect(decision).resolves.toEqual([]);
+    transport.close();
+  });
+
   it('terminates the worker on close() and rejects what is still waiting', async () => {
     const worker = new FakeWorker();
     const transport = workerTransport(worker as unknown as Worker);
@@ -304,6 +348,37 @@ describe('inProcessTransport', () => {
     const call = transport.call('verifyAudit', []);
     transport.close();
     expect((await rejection(call)).code).toBe('PROTOCOL_MISMATCH');
+  });
+
+  it('keeps code, message and fix of an error whose detail cannot be copied, as serve() does', async () => {
+    const thrown = new EngineError('PARSE_FAILED', 'Line 7 is broken.', 'Fix line 7.', {
+      at: (() => 7) as never,
+    });
+    const transport = inProcessTransport(fakeEngine({ verifyAudit: () => Promise.reject(thrown) }));
+    const e = await rejection(transport.call('verifyAudit', []));
+    expect(e).toMatchObject({ code: 'PARSE_FAILED', message: 'Line 7 is broken.', fix: 'Fix line 7.' });
+    expect(e.detail).toBeUndefined();
+    transport.close();
+  });
+
+  it('reports an event that cannot be copied without throwing into the engine, as serve() does', async () => {
+    const reported = captureReports();
+    try {
+      const impl = fakeEngine({});
+      const transport = inProcessTransport(impl);
+      const seen: EngineEvent[] = [];
+      transport.onEvent((e) => seen.push(e));
+      const bad = { type: 'log', level: 'info', message: (() => 'x') as never, at: '2026-10-19T08:00:00.000Z' };
+      expect(() => impl.emit(bad as EngineEvent)).not.toThrow();
+      impl.emit({ type: 'job.done', jobId: 'j1' });
+      await settle();
+      expect(seen).toEqual([{ type: 'job.done', jobId: 'j1' }]);
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toMatchObject({ name: 'DataCloneError' });
+      transport.close();
+    } finally {
+      reported.restore();
+    }
   });
 
   it('transfers byte arrays in results, as postMessage would', async () => {

@@ -8,10 +8,12 @@
  * A unit written as a single letter is one confidence step lower outside brackets, and never read
  * from a word in the middle of a header. A low-confidence guess keeps the whole header as the column
  * name, so rejecting the guess loses nothing. A unit that leaves something unstated (psi: gauge or
- * absolute?) or that conflicts with another bracket is never high confidence.
+ * absolute?), that the header's words contradict ('Gauge pressure (kPa)', 'Delta T (°C)'), or that
+ * conflicts with another bracket is never high confidence.
  */
 import { detection, type Confidence, type Detection, type UnitDef } from '@tw/model';
 import { normalizeUnitText } from './names';
+import { referenceNote } from './reference';
 import { findUnit } from './registry';
 
 export interface HeaderUnit {
@@ -38,18 +40,6 @@ const WORDS_NOT_UNITS: ReadonlySet<string> = new Set([
   'minute',
 ]);
 
-/**
- * Codes whose usual spelling leaves the pressure reference unstated. The registry reads them as
- * absolute; the detection says so and is marked assumed, because gauge readings are as common.
- */
-const REFERENCE_NOT_STATED: ReadonlyMap<string, string> = new Map([
-  [
-    'psi',
-    ' "psi" does not say whether the pressure is gauge or absolute, so it is read as absolute (psia).' +
-      ' If the readings are gauge, set the unit to psig.',
-  ],
-]);
-
 /** ASCII brackets and their full-width forms, which spreadsheets in East Asian locales use. */
 const OPENING = '([{\uff08\uff3b\uff5b';
 const CLOSING = ')]}\uff09\uff3d\uff5d';
@@ -67,7 +57,7 @@ const SUFFIX_TOKEN = /[^\s_,;]+/gu;
 const WORD = /[^\s_,;()[\]{}\uff08\uff09\uff3b\uff3d\uff5b\uff5d]+/gu;
 
 /** One separator that may be left at the end of a name once its unit is removed: 'Pressure, '. */
-const SEPARATOR = /[\s_,;:/\u2013\u2014-]/u;
+const SEPARATOR = /[\s_,;:/|\u2013\u2014-]/u;
 
 interface Group {
   start: number;
@@ -96,9 +86,14 @@ function stripTrailing(text: string): string {
   return text.slice(0, end);
 }
 
+/** 'Shut in' names a shut-in well or pressure; its 'in' does not introduce the unit. */
+const SHUT = /(?:^|[^\p{L}])shut$/iu;
+
 /** 'Depth in' → 'Depth': the preposition that introduced a suffix unit, as in 'Depth in ft'. */
 function dropDanglingIn(text: string): string {
-  return /\sin$/iu.test(text.slice(-3)) ? stripTrailing(text.slice(0, -2)) : text;
+  if (!/\sin$/iu.test(text.slice(-3))) return text;
+  const before = stripTrailing(text.slice(0, -2));
+  return SHUT.test(before.slice(-5)) ? text : before;
 }
 
 /** 'Pressure, ' → 'Pressure'. With `beforeSuffix`, also 'Time in ' → 'Time' ('Time in hours'). */
@@ -120,12 +115,22 @@ function quoted(raw: string, unit: UnitDef): string {
   return raw === unit.code ? `"${raw}"` : `"${raw}" (${unit.code})`;
 }
 
-/** Units whose text leaves something unstated are at most medium confidence, and say why. */
-function found(name: string, unit: UnitDef, confidence: Confidence, method: string, evidence: string): HeaderUnit {
-  const note = REFERENCE_NOT_STATED.get(unit.code);
-  if (note === undefined) return { name, unit: detection(unit.code, confidence, method, evidence) };
-  const capped = confidence === 'high' ? 'medium' : confidence;
-  return { name, unit: detection(unit.code, capped, method, evidence + note) };
+/** A unit read from `header`, written there as `raw`. */
+interface Finding {
+  header: string;
+  raw: string;
+  name: string;
+  unit: UnitDef;
+  confidence: Confidence;
+  method: string;
+  evidence: string;
+}
+
+/** A unit whose reference the header leaves in doubt is at most medium confidence, and says why. */
+function found(f: Finding): HeaderUnit {
+  const { doubt, note } = referenceNote(f.header, f.raw, f.unit);
+  const confidence = doubt && f.confidence === 'high' ? 'medium' : f.confidence;
+  return { name: f.name, unit: detection(f.unit.code, confidence, f.method, f.evidence + note) };
 }
 
 /** A unit-sized text that names a registry unit, or undefined. */
@@ -165,9 +170,10 @@ function fromBrackets(text: string): HeaderUnit | null {
   const name = withoutGroup(text, group) || text;
   const others = [...new Set(units.map((u) => u.unit.code))].filter((code) => code !== unit.code);
   const evidence = `The header "${text}" gives the unit ${quoted(raw, unit)} in brackets.`;
-  if (others.length === 0) return found(name, unit, 'high', 'header-brackets', evidence);
+  const finding = { header: text, raw, name, unit, method: 'header-brackets' };
+  if (others.length === 0) return found({ ...finding, confidence: 'high', evidence });
   const conflict = ` Another bracket also names ${others.join(', ')}, so the last one is taken as a guess.`;
-  return found(name, unit, 'medium', 'header-brackets', evidence + conflict);
+  return found({ ...finding, confidence: 'medium', evidence: evidence + conflict });
 }
 
 /** The unit a header suffix names; 'kg_h' is also tried as 'kg/h'. */
@@ -179,14 +185,16 @@ function suffixUnit(raw: string): UnitDef | undefined {
 function suffixDetection(text: string, name: string, raw: string, unit: UnitDef, unitRow: boolean): HeaderUnit {
   const single = isSingleLetter(raw);
   const guess = single ? ' A single letter is often not a unit, so this is a guess.' : '';
+  const finding = { header: text, raw, unit };
   if (unitRow) {
     const evidence = `The header "${text}" gives the unit ${quoted(raw, unit)} after " / ", as a units row does.${guess}`;
-    return found(name, unit, single ? 'medium' : 'high', 'header-unit-row', evidence);
+    return found({ ...finding, name, confidence: single ? 'medium' : 'high', method: 'header-unit-row', evidence });
   }
   const evidence = `The header "${text}" ends with ${quoted(raw, unit)}, read as its unit.${guess}`;
+  const suffix = { ...finding, method: 'header-suffix', evidence };
   return single
-    ? found(text, unit, 'low', 'header-suffix', evidence)
-    : found(name, unit, 'medium', 'header-suffix', evidence);
+    ? found({ ...suffix, name: text, confidence: 'low' })
+    : found({ ...suffix, name, confidence: 'medium' });
 }
 
 /** The longest suffix that is a unit wins, so 'rate_kg_h' gives kg/h rather than h. */
@@ -212,7 +220,7 @@ function fromWord(text: string): HeaderUnit | null {
     const unit = findUnit(word);
     if (unit === undefined) continue;
     const evidence = `The header "${text}" contains the word ${quoted(word, unit)}, which may be its unit.`;
-    return found(text, unit, 'low', 'header-word', evidence);
+    return found({ header: text, raw: word, name: text, unit, confidence: 'low', method: 'header-word', evidence });
   }
   return null;
 }
