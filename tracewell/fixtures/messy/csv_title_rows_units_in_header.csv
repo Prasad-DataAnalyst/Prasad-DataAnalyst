@@ -1,0 +1,12 @@
+Field Alpha - production well tests
+Exported 2026-02-10 from the well test database
+Separator: SEP-1
+well_id,test_date,Pressure (psia),T [°F],gas_rate_kg_h,Depth ft,Oil (bbl/d),Comments
+W-01,2025-11-05,1832.4,184.2,5210.5,8450,2210.4,routine test
+W-02,2025-11-06,1647.9,178.6,4388.0,7920,1876.3,routine test
+W-01,2025-12-04,1810.7,183.9,5122.8,8450,2174.9,after choke change
+W-02,2025-12-05,1631.2,178.1,4301.6,7920,1849.0,sand observed in sample
+W-01,2026-01-06,1789.5,183.5,5040.3,8450,2139.6,routine test
+W-02,2026-01-07,1612.8,177.4,4219.9,7920,1815.2,meter recalibrated
+W-01,2026-02-03,1770.1,183.0,4968.7,8450,2108.1,routine test
+W-02,2026-02-04,1598.3,177.0,4150.2,7920,1790.7,routine test

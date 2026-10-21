@@ -1,0 +1,145 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-01",
+        "Water depth (m)": 72.4
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.6214,
+          -20.1132
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-02",
+        "Water depth (m)": 74.9
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.6588,
+          -20.0871
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-03",
+        "Water depth (m)": 81.3
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -20.2245,
+          115.7402
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-04",
+        "Water depth (m)": 69.8
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.5931,
+          -20.0419
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-05",
+        "Water depth (m)": 88
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.8117,
+          -20.3306
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-06",
+        "Water depth (m)": 92.6
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -20.4012,
+          115.8743
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-07",
+        "Water depth (m)": 77.1
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.6995,
+          -20.1658
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-08",
+        "Water depth (m)": 85.5
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.7826,
+          -20.2871
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-09",
+        "Water depth (m)": 96.2
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -20.4655,
+          115.931
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "WA-10",
+        "Water depth (m)": 79.7
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          115.7208,
+          -20.198
+        ]
+      }
+    }
+  ]
+}

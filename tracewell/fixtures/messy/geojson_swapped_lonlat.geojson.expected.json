@@ -1,0 +1,14 @@
+{
+  "file": "geojson_swapped_lonlat.geojson",
+  "format": "geojson",
+  "detections": {"encoding": "utf-8", "crs": "OGC:CRS84"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "Water depth", "type": "number", "unit": "m", "role": "measure"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-GEO-002": 3, "TW-GEO-003": 3},
+  "notes": []
+}

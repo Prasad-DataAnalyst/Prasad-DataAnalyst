@@ -1,0 +1,19 @@
+{
+  "file": "csv_utf8_bom_crlf.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 12,
+  "columns": [
+    {"name": "cargo_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "vessel", "type": "string", "unit": null, "role": "text"},
+    {"name": "discharge_port", "type": "string", "unit": null, "role": "text"},
+    {"name": "arrival", "type": "datetime", "unit": null, "role": "time"},
+    {"name": "Volume", "type": "integer", "unit": "m3", "role": "measure"},
+    {"name": "Energy", "type": "integer", "unit": "MMBtu", "role": "measure"},
+    {"name": "Density", "type": "number", "unit": "kg/m3", "role": "measure"},
+    {"name": "Temperature", "type": "number", "unit": "degC", "role": "measure"}
+  ],
+  "issues": {},
+  "notes": []
+}

@@ -1,0 +1,21 @@
+Well_ID;Datum;Temperatur (°C);Druck (barg);Förderrate (m³/d);Gas (Sm³/d);Bemerkung
+DE-07;06.01.2026;78,27;45,4;182,9;12.444,3;Normalbetrieb
+DE-12;06.01.2026;80,95;52,7;211,5;14.840,3;Normalbetrieb
+DE-07;07.01.2026;78,59;45,3;183,5;12.418,2;Normalbetrieb
+DE-12;07.01.2026;81,51;52,9;211,2;14.811,6;Normalbetrieb
+DE-07;08.01.2026;78,84;45,1;181,6;12.484,8;Filterwechsel, Kosten 350 €
+DE-12;08.01.2026;81,07;52,5;209,1;14.854,0;Normalbetrieb
+DE-07;09.01.2026;78,25;44,8;181,2;12.396,5;Normalbetrieb
+DE-12;09.01.2026;81,04;52,3;210,0;14.848,0;Normalbetrieb
+DE-07;10.01.2026;78,72;44,7;181,0;12.444,2;Normalbetrieb
+DE-12;10.01.2026;81,91;52,6;207,3;14.818,2;Normalbetrieb
+DE-07;11.01.2026;78,65;44,9;181,7;12.397,7;Normalbetrieb
+DE-12;11.01.2026;81,72;52,3;208,1;14.804,4;Probe für Labor genommen
+DE-07;12.01.2026;78,85;44,5;180,3;12.407,4;Normalbetrieb
+DE-12;12.01.2026;81,22;52,2;207,3;14.831,3;Normalbetrieb
+DE-07;13.01.2026;79,14;44,4;179,2;12.452,8;Normalbetrieb
+DE-12;13.01.2026;82,08;51,8;206,6;14.786,0;Normalbetrieb
+DE-07;14.01.2026;78,80;44,2;178,7;12.353,4;Druckabfall nach Wartung
+DE-12;14.01.2026;82,08;51,8;207,2;14.757,6;Normalbetrieb
+DE-07;15.01.2026;78,95;44,4;179,1;12.438,1;Normalbetrieb
+DE-12;15.01.2026;82,27;51,7;206,0;14.715,8;Normalbetrieb

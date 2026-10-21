@@ -1,0 +1,20 @@
+{
+  "file": "csv_well_daily_golden.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1, "crs": "EPSG:4326"},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high", "crs": "medium"},
+  "rowCount": 271,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "date", "type": "datetime", "unit": null, "role": "time", "assumed": ["timezone"]},
+    {"name": "latitude", "type": "number", "unit": null, "role": "latitude"},
+    {"name": "longitude", "type": "number", "unit": null, "role": "longitude"},
+    {"name": "Pressure", "type": "number", "unit": "psia", "role": "measure"},
+    {"name": "Temperature", "type": "number", "unit": "degF", "role": "measure"},
+    {"name": "Oil", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Gas", "type": "number", "unit": "Mscf/d", "role": "measure"},
+    {"name": "Water cut", "type": "number", "unit": "%", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-003": 2, "TW-IMP-005": 1, "TW-TIME-001": 2, "TW-TIME-004": 1},
+  "notes": []
+}

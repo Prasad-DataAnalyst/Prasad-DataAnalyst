@@ -1,0 +1,16 @@
+{
+  "sheet": "Well tests",
+  "range": "A2:F9",
+  "headerRows": [1, 3],
+  "dataStartRow": 4,
+  "flattenedHeader": [
+    "Well",
+    "Test date",
+    "Pressure / Max [psi]",
+    "Pressure / Min [psi]",
+    "Temperature / Max [degF]",
+    "Temperature / Min [degF]"
+  ],
+  "notes": ["TW-IMP-003"],
+  "rowCount": 5
+}

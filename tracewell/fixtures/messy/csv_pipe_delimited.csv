@@ -1,0 +1,9 @@
+well_id|Well name|Operator|Spud date|TD (ft)|KB elevation (ft)|Status
+TX-1001|Mesa Verde 1H|Alder Basin Energy, Inc.|2019-04-12|14250|2875.4|Producing
+TX-1002|Mesa Verde 2H|Alder Basin Energy, Inc.|2019-06-03|14810|2879.1|Producing
+TX-1003|Coyote Draw 4|Brindle Creek Operating, LLC|2020-01-22|11320|3011.7|Shut-in
+TX-1004|Coyote Draw 5|Brindle Creek Operating, LLC|2020-03-15|11475|3008.2|Producing
+TX-1005|Salt Flat 7|Cobalt Flats Upstream|2021-08-09|9875|2650.0|Plugged and abandoned
+TX-1006|Salt Flat 8|Cobalt Flats Upstream|2021-10-30|10020|2655.6|Drilling
+TX-1007|Red Bluff 12|Alder Basin Energy, Inc.|2022-05-17|15420|2902.3|Producing
+TX-1008|Red Bluff 14|Alder Basin Energy, Inc.|2022-07-04|15130|2898.9|Temporarily abandoned

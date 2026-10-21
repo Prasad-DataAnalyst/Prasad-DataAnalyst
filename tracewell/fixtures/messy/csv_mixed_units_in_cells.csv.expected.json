@@ -1,0 +1,16 @@
+{
+  "file": "csv_mixed_units_in_cells.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 8,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Pressure", "type": "string", "unit": null, "role": "text"},
+    {"name": "Temperature", "type": "string", "unit": null, "role": "text"},
+    {"name": "Choke size", "type": "integer", "unit": null, "role": "measure"}
+  ],
+  "issues": {"TW-UNIT-001": 1, "TW-UNIT-002": 5},
+  "notes": []
+}

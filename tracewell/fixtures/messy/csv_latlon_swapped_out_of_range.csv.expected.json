@@ -1,0 +1,16 @@
+{
+  "file": "csv_latlon_swapped_out_of_range.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1, "crs": "EPSG:4326"},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high", "crs": "medium"},
+  "rowCount": 12,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "Area", "type": "string", "unit": null, "role": "text"},
+    {"name": "Latitude", "type": "number", "unit": null, "role": "latitude"},
+    {"name": "Longitude", "type": "number", "unit": null, "role": "longitude"},
+    {"name": "Water depth", "type": "number", "unit": "ft", "role": "measure"}
+  ],
+  "issues": {"TW-GEO-002": 4, "TW-GEO-003": 2, "TW-IMP-005": 1},
+  "notes": []
+}

@@ -1,0 +1,16 @@
+{
+  "file": "csv_duplicates_rows_and_keys.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 28,
+  "columns": [
+    {"name": "meter_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "timestamp", "type": "datetime", "unit": null, "role": "time"},
+    {"name": "Flow", "type": "number", "unit": "Sm3/d", "role": "measure"},
+    {"name": "Pressure", "type": "number", "unit": "kPa", "role": "measure"},
+    {"name": "Temperature", "type": "number", "unit": "degC", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-002": 4, "TW-DQ-003": 8, "TW-TIME-001": 8, "TW-TIME-002": 2},
+  "notes": []
+}

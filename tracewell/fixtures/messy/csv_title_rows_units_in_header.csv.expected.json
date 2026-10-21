@@ -1,0 +1,20 @@
+{
+  "file": "csv_title_rows_units_in_header.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 3, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 8,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "test_date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Pressure", "type": "number", "unit": "psia", "role": "measure"},
+    {"name": "T", "type": "number", "unit": "degF", "role": "measure"},
+    {"name": "gas_rate", "type": "number", "unit": "kg/h", "role": "measure", "assumed": ["unit"]},
+    {"name": "Depth", "type": "integer", "unit": "ft", "role": "measure", "assumed": ["unit"]},
+    {"name": "Oil", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Comments", "type": "string", "unit": null, "role": "text"}
+  ],
+  "issues": {"TW-IMP-005": 1},
+  "notes": [],
+  "locators": {"rows": [5, 6, 7, 8, 9, 10, 11, 12]}
+}

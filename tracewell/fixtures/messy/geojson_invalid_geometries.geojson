@@ -1,0 +1,329 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-01",
+        "kind": "well",
+        "note": "valid point"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          1.7501,
+          57.4802
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-02",
+        "kind": "lease",
+        "note": "ring not closed"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              1.79,
+              57.49
+            ],
+            [
+              1.81,
+              57.49
+            ],
+            [
+              1.81,
+              57.51
+            ],
+            [
+              1.79,
+              57.51
+            ],
+            [
+              1.795,
+              57.49
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-03",
+        "kind": "platform",
+        "note": "valid polygon with a hole"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              1.88,
+              57.58
+            ],
+            [
+              1.92,
+              57.58
+            ],
+            [
+              1.92,
+              57.620000000000005
+            ],
+            [
+              1.88,
+              57.620000000000005
+            ],
+            [
+              1.88,
+              57.58
+            ]
+          ],
+          [
+            [
+              1.895,
+              57.595
+            ],
+            [
+              1.895,
+              57.605000000000004
+            ],
+            [
+              1.9049999999999998,
+              57.605000000000004
+            ],
+            [
+              1.9049999999999998,
+              57.595
+            ],
+            [
+              1.895,
+              57.595
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-04",
+        "kind": "lease",
+        "note": "ring with three positions"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              2,
+              57.7
+            ],
+            [
+              2.01,
+              57.7
+            ],
+            [
+              2,
+              57.7
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-05",
+        "kind": "pipeline",
+        "note": "valid line"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            1.75,
+            57.48
+          ],
+          [
+            1.82,
+            57.52
+          ],
+          [
+            1.9,
+            57.6
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-06",
+        "kind": "exclusion zone",
+        "note": "bow-tie ring crosses itself"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              2.1,
+              57.8
+            ],
+            [
+              2.12,
+              57.82
+            ],
+            [
+              2.12,
+              57.8
+            ],
+            [
+              2.1,
+              57.82
+            ],
+            [
+              2.1,
+              57.8
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-07",
+        "kind": "pipeline",
+        "note": "line with one position"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            1.76,
+            57.49
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-08",
+        "kind": "well",
+        "note": "longitude is null"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          null,
+          57.1
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-09",
+        "kind": "lease",
+        "note": "valid multipolygon"
+      },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                2.1900000000000004,
+                57.89
+              ],
+              [
+                2.21,
+                57.89
+              ],
+              [
+                2.21,
+                57.91
+              ],
+              [
+                2.1900000000000004,
+                57.91
+              ],
+              [
+                2.1900000000000004,
+                57.89
+              ]
+            ]
+          ],
+          [
+            [
+              [
+                2.24,
+                57.89
+              ],
+              [
+                2.26,
+                57.89
+              ],
+              [
+                2.26,
+                57.91
+              ],
+              [
+                2.24,
+                57.91
+              ],
+              [
+                2.24,
+                57.89
+              ]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-10",
+        "kind": "lease",
+        "note": "multipolygon without coordinates"
+      },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": []
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-11",
+        "kind": "well",
+        "note": "geometry missing"
+      },
+      "geometry": null
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "A-12",
+        "kind": "exclusion zone",
+        "note": "unknown geometry type"
+      },
+      "geometry": {
+        "type": "Circle",
+        "coordinates": [
+          1.8,
+          57.5
+        ],
+        "radius": 500
+      }
+    }
+  ]
+}

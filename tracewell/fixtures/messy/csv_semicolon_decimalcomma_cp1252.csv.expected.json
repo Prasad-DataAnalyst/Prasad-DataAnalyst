@@ -1,0 +1,18 @@
+{
+  "file": "csv_semicolon_decimalcomma_cp1252.csv",
+  "format": "csv",
+  "detections": {"encoding": "windows-1252", "delimiter": ";", "decimalSeparator": ",", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "low", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 20,
+  "columns": [
+    {"name": "Well_ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "Datum", "type": "date", "unit": null, "role": "time"},
+    {"name": "Temperatur", "type": "number", "unit": "degC", "role": "measure"},
+    {"name": "Druck", "type": "number", "unit": "barg", "role": "measure"},
+    {"name": "Förderrate", "type": "number", "unit": "m3/d", "role": "measure"},
+    {"name": "Gas", "type": "number", "unit": "Sm3/d", "role": "measure"},
+    {"name": "Bemerkung", "type": "string", "unit": null, "role": "text"}
+  ],
+  "issues": {"TW-IMP-004": 1, "TW-IMP-005": 1},
+  "notes": ["TW-IMP-004"]
+}

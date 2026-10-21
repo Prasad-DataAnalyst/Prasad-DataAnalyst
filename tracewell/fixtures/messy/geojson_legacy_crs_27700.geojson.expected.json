@@ -1,0 +1,15 @@
+{
+  "file": "geojson_legacy_crs_27700.geojson",
+  "format": "geojson",
+  "detections": {"encoding": "utf-8", "crs": "EPSG:27700"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 6,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "site", "type": "string", "unit": null, "role": "text"},
+    {"name": "Elevation", "type": "number", "unit": "m", "role": "measure"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-GEO-004": 1},
+  "notes": []
+}

@@ -1,0 +1,316 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-01",
+        "asset_type": "well",
+        "operator": {
+          "name": "Alder Basin Energy",
+          "share": 0.6
+        },
+        "tags": [
+          "subsea",
+          "gas"
+        ],
+        "Capacity (MMscf/d)": 45.5,
+        "commissioned": "2015-06-01",
+        "active": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          1.81,
+          57.51
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-02",
+        "asset_type": "pipeline",
+        "operator": {
+          "name": "Alder Basin Energy",
+          "share": 0.6
+        },
+        "tags": [
+          "export"
+        ],
+        "Capacity (MMscf/d)": 310,
+        "commissioned": "2012-09-15",
+        "active": true
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            1.81,
+            57.51
+          ],
+          [
+            1.95,
+            57.6
+          ],
+          [
+            2.3,
+            57.75
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-03",
+        "asset_type": "platform",
+        "operator": {
+          "name": "Brindle Creek Operating",
+          "share": 1
+        },
+        "tags": [
+          "manned",
+          "oil"
+        ],
+        "Capacity (MMscf/d)": 120,
+        "commissioned": "2009-03-20",
+        "active": true
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              1.948,
+              57.598
+            ],
+            [
+              1.952,
+              57.598
+            ],
+            [
+              1.952,
+              57.602000000000004
+            ],
+            [
+              1.948,
+              57.602000000000004
+            ],
+            [
+              1.948,
+              57.598
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-04",
+        "asset_type": "well cluster",
+        "operator": {
+          "name": "Brindle Creek Operating",
+          "share": 1
+        },
+        "tags": [
+          "subsea"
+        ],
+        "Capacity (MMscf/d)": "pending",
+        "commissioned": "2024-11-05",
+        "active": false
+      },
+      "geometry": {
+        "type": "MultiPoint",
+        "coordinates": [
+          [
+            2.01,
+            57.62
+          ],
+          [
+            2.02,
+            57.63
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-05",
+        "asset_type": "flowlines",
+        "operator": {
+          "name": "Cobalt Flats Upstream",
+          "share": 0.35
+        },
+        "tags": [],
+        "Capacity (MMscf/d)": 60.25,
+        "commissioned": "2018-02-12",
+        "active": true
+      },
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [
+              2.01,
+              57.62
+            ],
+            [
+              1.95,
+              57.6
+            ]
+          ],
+          [
+            [
+              2.02,
+              57.63
+            ],
+            [
+              1.95,
+              57.6
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-06",
+        "asset_type": "field",
+        "operator": {
+          "name": "Cobalt Flats Upstream",
+          "share": 0.35
+        },
+        "tags": [
+          "gas",
+          "condensate"
+        ],
+        "Capacity (MMscf/d)": 250,
+        "commissioned": "2011-07-30",
+        "active": true
+      },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [
+                2.35,
+                57.75
+              ],
+              [
+                2.4499999999999997,
+                57.75
+              ],
+              [
+                2.4499999999999997,
+                57.849999999999994
+              ],
+              [
+                2.35,
+                57.849999999999994
+              ],
+              [
+                2.35,
+                57.75
+              ]
+            ]
+          ],
+          [
+            [
+              [
+                2.56,
+                57.81
+              ],
+              [
+                2.64,
+                57.81
+              ],
+              [
+                2.64,
+                57.89
+              ],
+              [
+                2.56,
+                57.89
+              ],
+              [
+                2.56,
+                57.81
+              ]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-07",
+        "asset_type": "facility",
+        "operator": {
+          "name": "Alder Basin Energy",
+          "share": 0.6
+        },
+        "tags": [
+          "onshore"
+        ],
+        "Capacity (MMscf/d)": 400,
+        "active": true
+      },
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          {
+            "type": "Point",
+            "coordinates": [
+              -2.1,
+              57.2
+            ]
+          },
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                -2.1,
+                57.2
+              ],
+              [
+                -2.05,
+                57.22
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "asset_id": "MX-08",
+        "asset_type": "well",
+        "operator": {
+          "name": "Brindle Creek Operating",
+          "share": 1
+        },
+        "tags": [
+          "subsea",
+          "oil"
+        ],
+        "Capacity (MMscf/d)": 38.75,
+        "commissioned": "2021-04-18",
+        "active": false
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.03,
+          57.64
+        ]
+      }
+    }
+  ]
+}

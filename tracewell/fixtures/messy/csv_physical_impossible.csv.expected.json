@@ -1,0 +1,19 @@
+{
+  "file": "csv_physical_impossible.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "test_date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Pressure", "type": "number", "unit": "psia", "role": "measure"},
+    {"name": "Temperature", "type": "number", "unit": "degC", "role": "measure"},
+    {"name": "Oil", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Gas", "type": "number", "unit": "Mscf/d", "role": "measure"},
+    {"name": "Water cut", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "WHP", "type": "number", "unit": "psig", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-005": 5},
+  "notes": []
+}

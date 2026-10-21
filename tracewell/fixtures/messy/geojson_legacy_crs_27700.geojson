@@ -1,0 +1,102 @@
+{
+  "type": "FeatureCollection",
+  "name": "onshore_wells_bng",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:EPSG::27700"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "UK-ON-01",
+        "site": "Kimmeridge Bay",
+        "Elevation (m)": 12.4
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          391820.5,
+          79410
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "UK-ON-02",
+        "site": "Wareham",
+        "Elevation (m)": 18.9
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          392505,
+          87230.5
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "UK-ON-03",
+        "site": "Arne",
+        "Elevation (m)": 7.6
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          397640,
+          88115
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "UK-ON-04",
+        "site": "Furzey Island",
+        "Elevation (m)": 4.1
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          401110.5,
+          87390
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "UK-ON-05",
+        "site": "Goathorn",
+        "Elevation (m)": 6.3
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          401870,
+          85780.5
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "well_id": "UK-ON-06",
+        "site": "Bestwall",
+        "Elevation (m)": 9.8
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          393725,
+          87845
+        ]
+      }
+    }
+  ]
+}

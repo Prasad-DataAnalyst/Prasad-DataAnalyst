@@ -1,0 +1,8 @@
+{
+  "sheet": "Report",
+  "tables": [
+    { "range": "A3:D8", "flattenedHeader": ["Well", "Date", "Oil [bbl/d]", "Gas [Mscf/d]"], "rowCount": 5 },
+    { "range": "A12:C15", "flattenedHeader": ["Well", "Test date", "Rate [bbl/d]"], "rowCount": 3 }
+  ],
+  "notes": ["TW-IMP-002"]
+}

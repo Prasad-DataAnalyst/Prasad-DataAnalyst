@@ -1,0 +1,17 @@
+{
+  "file": "csv_dates_ambiguous_and_mixed.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "event", "type": "string", "unit": null, "role": "text"},
+    {"name": "reported", "type": "date", "unit": null, "role": "time", "assumed": ["dateFormat"]},
+    {"name": "inspected", "type": "date", "unit": null, "role": "time"},
+    {"name": "logged", "type": "date", "unit": null, "role": "time", "assumed": ["type"]},
+    {"name": "shipped", "type": "date", "unit": null, "role": "time"},
+    {"name": "started", "type": "datetime", "unit": null, "role": "time", "assumed": ["timezone"]}
+  ],
+  "issues": {"TW-DQ-004": 2, "TW-IMP-005": 1, "TW-TIME-004": 1, "TW-TIME-005": 1},
+  "notes": []
+}

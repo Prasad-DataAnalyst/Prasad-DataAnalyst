@@ -1,0 +1,16 @@
+{
+  "file": "xlsx_two_tables_one_sheet.xlsx",
+  "format": "xlsx",
+  "detections": {"sheet": "Summary", "date1904": false, "skipLines": 0, "headerRows": 1},
+  "confidence": {"sheet": "high", "date1904": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 7,
+  "columns": [
+    {"name": "Well ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "Field", "type": "string", "unit": null, "role": "text"},
+    {"name": "Oil", "type": "number", "unit": "bbl", "role": "measure"},
+    {"name": "Gas", "type": "number", "unit": "Mscf", "role": "measure"},
+    {"name": "Water", "type": "number", "unit": "bbl", "role": "measure"}
+  ],
+  "issues": {"TW-IMP-002": 1},
+  "notes": ["TW-IMP-002"]
+}

@@ -111,7 +111,7 @@ function preferred(fileName: string): Delimiter {
   return /\.(?:tsv|tab)$/i.test(fileName) ? '\t' : ',';
 }
 
-/** Orders candidates best first: plausible ones by fewest preamble lines, the rest by fitting share. */
+/** Most lines from the header on fit a table of two or more columns. */
 function isPlausible(c: Candidate): boolean {
   return c.width >= 2 && c.consistency >= PLAUSIBLE;
 }
@@ -121,6 +121,10 @@ function score(c: Candidate): number {
   return c.lines.length === 0 ? 0 : c.fitting / c.lines.length;
 }
 
+/**
+ * Orders candidates best first: plausible ones by fewest preamble lines, the rest by fitting share;
+ * ties go to the wider table, then to the file type's usual delimiter, then to the list order.
+ */
 function compare(a: Candidate, b: Candidate, prefer: Delimiter): number {
   const plausibleA = isPlausible(a);
   if (plausibleA !== isPlausible(b)) return plausibleA ? -1 : 1;

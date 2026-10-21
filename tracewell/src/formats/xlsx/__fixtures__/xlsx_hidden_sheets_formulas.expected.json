@@ -1,0 +1,11 @@
+{
+  "sheets": [
+    { "name": "Calc notes", "state": "hidden" },
+    { "name": "Production", "state": "visible" },
+    { "name": "Lookup", "state": "hidden" },
+    { "name": "Summary", "state": "visible" }
+  ],
+  "defaultSheet": "Production",
+  "cachedValues": { "D2": 0.2, "E2": 4, "F2": "A-01-ok", "G2": true, "E4": { "error": "#DIV/0!" }, "D5": { "error": "#DIV/0!" } },
+  "rowCount": 4
+}

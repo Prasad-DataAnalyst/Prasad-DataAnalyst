@@ -1,0 +1,20 @@
+{
+  "file": "tsv_utf16le_bom.tsv",
+  "format": "tsv",
+  "detections": {"encoding": "utf-16le", "delimiter": "\t", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "sample_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "sampled_at", "type": "date", "unit": null, "role": "time"},
+    {"name": "analyst", "type": "string", "unit": null, "role": "text"},
+    {"name": "C1", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "C2", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "C3", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "CO2", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "N2", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "H2S", "type": "number", "unit": "ppm", "role": "measure"}
+  ],
+  "issues": {},
+  "notes": []
+}

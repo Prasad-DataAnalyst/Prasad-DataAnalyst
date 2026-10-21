@@ -1,0 +1,18 @@
+{
+  "file": "geojson_wells_points_wgs84.geojson",
+  "format": "geojson",
+  "detections": {"encoding": "utf-8", "crs": "OGC:CRS84"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "platform", "type": "string", "unit": null, "role": "text"},
+    {"name": "status", "type": "string", "unit": null, "role": "text"},
+    {"name": "spud_date", "type": "date", "unit": null, "role": "time"},
+    {"name": "TD", "type": "number", "unit": "m", "role": "measure"},
+    {"name": "Water depth", "type": "number", "unit": "m", "role": "measure"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {},
+  "notes": []
+}

@@ -1,0 +1,17 @@
+{
+  "file": "xlsx_text_and_serial_dates.xlsx",
+  "format": "xlsx",
+  "detections": {"sheet": "Readings", "date1904": false, "skipLines": 0, "headerRows": 1},
+  "confidence": {"sheet": "high", "date1904": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 8,
+  "columns": [
+    {"name": "Meter ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "Read date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Read time", "type": "datetime", "unit": null, "role": "time", "assumed": ["timezone"]},
+    {"name": "Install date", "type": "date", "unit": null, "role": "time", "assumed": ["type"]},
+    {"name": "Calibrated", "type": "date", "unit": null, "role": "time"},
+    {"name": "Volume", "type": "number", "unit": "m3", "role": "measure"}
+  ],
+  "issues": {"TW-IMP-005": 1, "TW-TIME-004": 1},
+  "notes": []
+}

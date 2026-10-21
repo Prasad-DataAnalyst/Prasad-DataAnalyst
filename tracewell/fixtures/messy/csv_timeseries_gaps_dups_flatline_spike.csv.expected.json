@@ -1,0 +1,16 @@
+{
+  "file": "csv_timeseries_gaps_dups_flatline_spike.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 88,
+  "columns": [
+    {"name": "asset_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "timestamp", "type": "datetime", "unit": null, "role": "time"},
+    {"name": "Pressure", "type": "number", "unit": "barg", "role": "measure"},
+    {"name": "Flow", "type": "number", "unit": "m3/h", "role": "measure"},
+    {"name": "Temperature", "type": "number", "unit": "degC", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-003": 2, "TW-TIME-001": 2, "TW-TIME-002": 1, "TW-TIME-003": 2, "TW-TIME-006": 8, "TW-TIME-007": 2},
+  "notes": []
+}

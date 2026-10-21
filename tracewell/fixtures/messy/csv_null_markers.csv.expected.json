@@ -1,0 +1,17 @@
+{
+  "file": "csv_null_markers.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 16,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Pressure", "type": "number", "unit": "psia", "role": "measure", "assumed": ["nullMarkers"]},
+    {"name": "Temperature", "type": "number", "unit": "degF", "role": "measure"},
+    {"name": "Oil", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Gas", "type": "number", "unit": "Mscf/d", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-001": 6, "TW-DQ-005": 1, "TW-DQ-006": 5, "TW-IMP-005": 1, "TW-TIME-007": 1},
+  "notes": []
+}

@@ -1,0 +1,15 @@
+{
+  "file": "xlsx_date1904.xlsx",
+  "format": "xlsx",
+  "detections": {"sheet": "Daily", "date1904": true, "skipLines": 0, "headerRows": 1},
+  "confidence": {"sheet": "high", "date1904": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "Well ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "Date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Oil", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Water", "type": "number", "unit": "bbl/d", "role": "measure"}
+  ],
+  "issues": {},
+  "notes": []
+}

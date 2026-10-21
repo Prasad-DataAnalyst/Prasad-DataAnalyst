@@ -1,0 +1,16 @@
+{
+  "file": "xlsx_numbers_as_text.xlsx",
+  "format": "xlsx",
+  "detections": {"sheet": "Wells", "date1904": false, "skipLines": 0, "headerRows": 1},
+  "confidence": {"sheet": "high", "date1904": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 8,
+  "columns": [
+    {"name": "Well ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "Test date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Oil", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Water", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Gas", "type": "number", "unit": "Mscf/d", "role": "measure"}
+  ],
+  "issues": {},
+  "notes": []
+}

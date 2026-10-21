@@ -39,7 +39,19 @@ const UNIT_PATTERN =
   /^(?:%|°[A-Za-z]?|[A-Za-zµμΩ°]{1,8}[23²³]?(?:\s?[/·.*]\s?[A-Za-zµμΩ°]{1,8}[23²³]?){0,3}(?:\s?\((?:a|g|abs)\))?)$/u;
 
 /** Words that fill an empty cell rather than name a unit. */
-const NULL_LIKE: ReadonlySet<string> = new Set(['na', 'n/a', '#n/a', 'null', 'nan', 'none', 'nd', 'n.d.', '-', '--', '?']);
+const NULL_LIKE: ReadonlySet<string> = new Set([
+  'na',
+  'n/a',
+  '#n/a',
+  'null',
+  'nan',
+  'none',
+  'nd',
+  'n.d.',
+  '-',
+  '--',
+  '?',
+]);
 
 /** Date and time format hints such as 'yyyy-mm-dd' or 'hh:mm', which a units row may hold above dates. */
 const FORMAT_HINT = /^[ymdhs]{1,4}(?:[-/.: T][ymdhs]{1,4})*$/i;

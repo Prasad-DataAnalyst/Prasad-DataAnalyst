@@ -1,0 +1,18 @@
+{
+  "file": "csv_pipe_delimited.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": "|", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 8,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "Well name", "type": "string", "unit": null, "role": "text"},
+    {"name": "Operator", "type": "string", "unit": null, "role": "text"},
+    {"name": "Spud date", "type": "date", "unit": null, "role": "time"},
+    {"name": "TD", "type": "integer", "unit": "ft", "role": "measure"},
+    {"name": "KB elevation", "type": "number", "unit": "ft", "role": "measure"},
+    {"name": "Status", "type": "string", "unit": null, "role": "text"}
+  ],
+  "issues": {},
+  "notes": []
+}

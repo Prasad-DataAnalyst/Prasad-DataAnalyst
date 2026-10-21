@@ -1,0 +1,18 @@
+{
+  "file": "csv_quoted_newlines_ragged.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "medium", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "wo_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "well", "type": "string", "unit": null, "role": "text"},
+    {"name": "opened", "type": "date", "unit": null, "role": "time"},
+    {"name": "priority", "type": "string", "unit": null, "role": "text"},
+    {"name": "description", "type": "string", "unit": null, "role": "text"},
+    {"name": "Downtime", "type": "number", "unit": "h", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-001": 1, "TW-IMP-001": 2, "TW-IMP-005": 1},
+  "notes": ["TW-IMP-001"],
+  "locators": {"rows": [2, 4, 5, 6, 8, 9, 13, 14, 15, 16], "notes": {"TW-IMP-001": [8, 13]}}
+}

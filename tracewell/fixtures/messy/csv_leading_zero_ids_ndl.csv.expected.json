@@ -1,0 +1,17 @@
+{
+  "file": "csv_leading_zero_ids_ndl.csv",
+  "format": "csv",
+  "detections": {"encoding": "utf-8", "delimiter": ",", "decimalSeparator": ".", "skipLines": 0, "headerRows": 1},
+  "confidence": {"encoding": "high", "delimiter": "high", "decimalSeparator": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 10,
+  "columns": [
+    {"name": "sample_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "batch", "type": "string", "unit": null, "role": "text"},
+    {"name": "sampled", "type": "date", "unit": null, "role": "time"},
+    {"name": "Benzene", "type": "number", "unit": "ppm", "role": "measure"},
+    {"name": "H2S", "type": "number", "unit": "ppm", "role": "measure"},
+    {"name": "Sulfur", "type": "number", "unit": "%", "role": "measure"}
+  ],
+  "issues": {"TW-DQ-007": 4},
+  "notes": []
+}

@@ -1,0 +1,19 @@
+{
+  "file": "geojson_mixed_geometry_nested_props.geojson",
+  "format": "geojson",
+  "detections": {"encoding": "utf-8", "crs": "OGC:CRS84"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 8,
+  "columns": [
+    {"name": "asset_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "asset_type", "type": "string", "unit": null, "role": "text"},
+    {"name": "operator", "type": "string", "unit": null, "role": "text", "assumed": ["type"]},
+    {"name": "tags", "type": "string", "unit": null, "role": "text", "assumed": ["type"]},
+    {"name": "Capacity", "type": "number", "unit": "MMscf/d", "role": "measure", "assumed": ["type"]},
+    {"name": "commissioned", "type": "date", "unit": null, "role": "time"},
+    {"name": "active", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-DQ-001": 1, "TW-DQ-004": 1, "TW-IMP-005": 1},
+  "notes": []
+}

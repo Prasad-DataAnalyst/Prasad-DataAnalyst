@@ -1,0 +1,15 @@
+{
+  "file": "geojson_invalid_geometries.geojson",
+  "format": "geojson",
+  "detections": {"encoding": "utf-8", "crs": "OGC:CRS84"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 12,
+  "columns": [
+    {"name": "asset_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "kind", "type": "string", "unit": null, "role": "text"},
+    {"name": "note", "type": "string", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-GEO-001": 7, "TW-GEO-006": 1},
+  "notes": []
+}

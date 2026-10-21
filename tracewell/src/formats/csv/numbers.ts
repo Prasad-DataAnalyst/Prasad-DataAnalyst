@@ -87,17 +87,26 @@ function votes(n: number, e: NumberEvidence, shapes: readonly Shape[]): string {
   return `${plural(n, 'value')} such as ${example(e, shapes)}`;
 }
 
+/** The verb form that agrees with a count: one value "uses", two values "use". */
+function agree(n: number, singular: string, pluralForm: string): string {
+  return n === 1 ? singular : pluralForm;
+}
+
 export function detectDecimal(e: NumberEvidence, delimiter: CsvOptions['delimiter']): Detection<Decimal> {
   const comma = total(e, COMMA_DECIMAL);
   const point = total(e, POINT_DECIMAL);
   if (comma > 0 && point > 0) return conflictingDecimal(e, comma, point, delimiter);
   if (comma > 0) {
-    const evidence = `${votes(comma, e, COMMA_DECIMAL)} use a comma before the fractional part.`;
+    const evidence = `${votes(comma, e, COMMA_DECIMAL)} ${agree(comma, 'uses', 'use')} a comma before the fractional part.`;
     return detection(',', comma >= 3 ? 'high' : 'medium', 'number-shapes', evidence);
   }
   if (point > 0) {
-    const evidence = `${votes(point, e, POINT_DECIMAL)} use a point before the fractional part.`;
-    return detection('.', point >= 3 ? 'high' : 'medium', 'number-shapes', evidence);
+    // In a comma-separated file a decimal comma needs quotes, so no quoted one is already evidence.
+    const commaFile = delimiter === ',';
+    const evidence =
+      `${votes(point, e, POINT_DECIMAL)} ${agree(point, 'uses', 'use')} a point before the fractional part.` +
+      (commaFile ? ' Fields are separated by commas, and no quoted value has a decimal comma.' : '');
+    return detection('.', point >= 3 || commaFile ? 'high' : 'medium', 'number-shapes', evidence);
   }
   return decimalWithoutProof(e, delimiter);
 }
@@ -109,9 +118,14 @@ function conflictingDecimal(
   delimiter: CsvOptions['delimiter'],
 ): Detection<Decimal> {
   const value: Decimal = comma > point || (comma === point && delimiter === ';') ? ',' : '.';
+  const choice =
+    comma === point
+      ? `Both are equally common, so the ${value === ',' ? 'comma, usual with semicolons,' : 'point'} is used.`
+      : `The more common ${value === ',' ? 'comma' : 'point'} is used.`;
   const evidence =
-    `The sample mixes both styles: ${votes(comma, e, COMMA_DECIMAL)} read as decimal commas and ` +
-    `${votes(point, e, POINT_DECIMAL)} as decimal points. The more common ${value === ',' ? 'comma' : 'point'} is used.`;
+    `The sample mixes both styles: ${votes(comma, e, COMMA_DECIMAL)} ` +
+    `${agree(comma, 'has a decimal comma', 'have decimal commas')} and ${votes(point, e, POINT_DECIMAL)} ` +
+    `${agree(point, 'has a decimal point', 'have decimal points')}. ${choice}`;
   return detection(value, 'low', 'number-shapes-conflict', evidence);
 }
 
@@ -163,13 +177,11 @@ const SEPARATOR_NAMES: Readonly<Record<Exclude<Thousands, ''>, string>> = {
 
 export function detectThousands(e: NumberEvidence, decimal: Decimal): Detection<Thousands> {
   const candidates: Exclude<Thousands, ''>[] = decimal === ',' ? ['.', ' '] : [',', ' '];
-  const scored = candidates
-    .map((sep) => ({ sep, n: total(e, GROUP_SHAPES[sep]) }))
-    .sort((a, b) => b.n - a.n);
+  const scored = candidates.map((sep) => ({ sep, n: total(e, GROUP_SHAPES[sep]) })).sort((a, b) => b.n - a.n);
   const [best, other] = scored;
   if (best !== undefined && best.n > 0) {
     const confidence = best.n >= 2 && (other?.n ?? 0) === 0 ? 'high' : 'medium';
-    const evidence = `${votes(best.n, e, GROUP_SHAPES[best.sep])} group digits with a ${SEPARATOR_NAMES[best.sep]}.`;
+    const evidence = `${votes(best.n, e, GROUP_SHAPES[best.sep])} ${agree(best.n, 'groups', 'group')} digits with a ${SEPARATOR_NAMES[best.sep]}.`;
     return detection(best.sep, confidence, 'number-shapes', evidence);
   }
   // With a decimal comma, '1.234' is a grouped whole number; with a decimal point, so is '1,234'.
@@ -178,7 +190,7 @@ export function detectThousands(e: NumberEvidence, decimal: Decimal): Detection<
   if (weak > 0) {
     const sep: Thousands = decimal === ',' ? '.' : ',';
     const evidence =
-      `${votes(weak, e, [weakShape])} read as whole numbers grouped with a ${SEPARATOR_NAMES[sep]}, ` +
+      `${votes(weak, e, [weakShape])} ${agree(weak, 'reads as a whole number', 'read as whole numbers')} grouped with a ${SEPARATOR_NAMES[sep]}, ` +
       `given the decimal ${decimal === ',' ? 'comma' : 'point'}.`;
     return detection(sep, 'medium', 'number-shapes-ambiguous', evidence);
   }
