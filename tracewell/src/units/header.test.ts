@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
-import type { Confidence } from '@tw/model';
+import { EXCEL_MAX_CELL_CHARS, type Confidence } from '@tw/model';
 import { describe, expect, it } from 'vitest';
-import { parseHeaderUnit, splitValueUnit } from './index';
+import { allUnits, parseHeaderUnit, splitValueUnit } from './index';
 
 interface HeaderCase {
   header: string;
@@ -48,6 +48,37 @@ describe('parseHeaderUnit', () => {
     expect(parseHeaderUnit('WHP psig avg').unit?.evidence).toContain('contains the word "psig"');
   });
 
+  it('says when psi leaves gauge or absolute unstated', () => {
+    for (const header of ['Pressure (psi)', 'BHP psi', 'Pressure / psi']) {
+      const { unit } = parseHeaderUnit(header);
+      expect(unit?.evidence, header).toContain('does not say whether the pressure is gauge or absolute');
+      expect(unit?.evidence, header).toContain('psig');
+    }
+    expect(parseHeaderUnit('Pressure (psia)').unit?.evidence).not.toContain('gauge');
+  });
+
+  it('names the other unit when two brackets disagree', () => {
+    expect(parseHeaderUnit('Pressure (psia) (kPa)').unit?.evidence).toContain('also names psia');
+  });
+
+  it('reads back every unit code in an exported header, "Name [code]"', () => {
+    for (const u of allUnits()) {
+      const confidence = u.code === 'psi' ? 'medium' : 'high';
+      expect(parseHeaderUnit(`Name [${u.code}]`), u.code).toMatchObject({
+        name: 'Name',
+        unit: { value: u.code, confidence },
+      });
+    }
+  });
+
+  it('reads every registry alias in brackets', () => {
+    for (const u of allUnits()) {
+      for (const alias of u.aliases) {
+        expect(parseHeaderUnit(`Name (${alias})`), alias).toMatchObject({ name: 'Name', unit: { value: u.code } });
+      }
+    }
+  });
+
   it('covers the plan cases', () => {
     expect(parseHeaderUnit('Pressure (psia)')).toMatchObject({
       name: 'Pressure',
@@ -57,6 +88,35 @@ describe('parseHeaderUnit', () => {
     expect(parseHeaderUnit('rate_kg_h')).toMatchObject({ name: 'rate', unit: { value: 'kg/h', confidence: 'medium' } });
     expect(parseHeaderUnit('Depth ft')).toMatchObject({ name: 'Depth', unit: { value: 'ft', confidence: 'medium' } });
     expect(parseHeaderUnit('Comments')).toEqual({ name: 'Comments', unit: null });
+  });
+});
+
+describe('parseHeaderUnit on long headers', () => {
+  // An XLSX header cell holds up to 32,767 characters and a CSV header up to the 1 MiB preview, so
+  // parsing must stay linear: these took 3 to 20 seconds each when every suffix was tried.
+  const n = EXCEL_MAX_CELL_CHARS;
+  const cases: [string, string][] = [
+    ['many short words', `${'a '.repeat(n / 2)}zz`],
+    ['many underscores', `${'a_'.repeat(n / 2)}zz`],
+    ['many separators', `a${' -'.repeat(n / 2)}b (psia)`],
+    ['many bracket groups', '(a) '.repeat(n / 4)],
+    ['a long space run before "in"', `a${' '.repeat(n)}inx (psia)`],
+    ['a long space run', `a${' '.repeat(n)}b`],
+  ];
+
+  it.each(cases)('%s', (_, header) => {
+    const start = performance.now();
+    parseHeaderUnit(header);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it('still finds the unit at the end of a long header', () => {
+    const words = 'word '.repeat(n / 5);
+    expect(parseHeaderUnit(`${words}Pressure (psia)`).unit).toMatchObject({ value: 'psia', confidence: 'high' });
+    expect(parseHeaderUnit(`${words}Depth ft`)).toMatchObject({
+      name: `${words}Depth`,
+      unit: { value: 'ft', confidence: 'medium' },
+    });
   });
 });
 

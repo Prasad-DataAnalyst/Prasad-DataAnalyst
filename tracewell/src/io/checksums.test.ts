@@ -49,6 +49,10 @@ describe('checksumsFile', () => {
     expect(thrown(() => checksumsFile([{ path, sha256: A }])).code).toBe('INVALID_INPUT');
   });
 
+  it('refuses a path with a lone surrogate, which has no UTF-8 form', () => {
+    expect(thrown(() => checksumsFile([{ path: 'a\ud800.csv', sha256: A }])).code).toBe('INVALID_INPUT');
+  });
+
   it('refuses a digest that is not 64 lowercase hex characters', () => {
     expect(thrown(() => checksumsFile([{ path: 'a', sha256: A.toUpperCase() }])).code).toBe('INVALID_INPUT');
     expect(thrown(() => checksumsFile([{ path: 'a', sha256: 'abc' }])).code).toBe('INVALID_INPUT');
@@ -79,6 +83,17 @@ describe('parseChecksumsFile', () => {
     ]);
   });
 
+  it('reads back every path checksumsFile writes, including Unicode line and paragraph separators', () => {
+    // JavaScript's '.' does not match U+2028 or U+2029, but sha256sum treats them as ordinary bytes.
+    const entries = [
+      { path: 'line sep.csv', sha256: A },
+      { path: 'para sep.csv', sha256: B },
+      { path: 'next\u0085line.csv', sha256: A },
+    ];
+    const parsed = parseChecksumsFile(checksumsFile(entries));
+    expect(new Map(parsed.map((e) => [e.path, e.sha256]))).toEqual(new Map(entries.map((e) => [e.path, e.sha256])));
+  });
+
   it('keeps spaces and asterisks that belong to the path', () => {
     expect(parseChecksumsFile(`${A}   leading space.txt\n${B}  *star.txt\n`)).toEqual([
       { path: ' leading space.txt', sha256: A },
@@ -95,6 +110,12 @@ describe('parseChecksumsFile', () => {
     const error = thrown(() => parseChecksumsFile(`${B}  ok.csv\n${text}`));
     expect(error.code).toBe('PARSE_FAILED');
     expect(error.detail).toEqual({ line: 2 });
+  });
+
+  it('refuses CR-only line ends instead of reading the whole file as one path', () => {
+    const error = thrown(() => parseChecksumsFile(`${A}  a.csv\r${B}  b.csv\r`));
+    expect(error.code).toBe('PARSE_FAILED');
+    expect(error.detail).toEqual({ line: 1 });
   });
 
   it('refuses names escaped with a backslash by GNU sha256sum', () => {

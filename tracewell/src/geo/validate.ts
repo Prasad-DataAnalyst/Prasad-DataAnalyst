@@ -9,7 +9,7 @@ import type { Geometry } from '@tw/model';
 import { MAX_INTERSECTION_VERTICES, ringCorners, ringSelfIntersection } from './intersect';
 import type { GeometryProblem, GeometryProblemCode } from './types';
 
-/** Collections nested deeper than this are refused, which also stops runaway recursion on cycles. */
+/** Collections nested deeper than this are refused (RFC 7946 advises against nesting them at all). */
 const MAX_NESTING = 32;
 
 const COORDINATE_TYPES = ['Point', 'MultiPoint', 'LineString', 'MultiLineString', 'Polygon', 'MultiPolygon'] as const;
@@ -23,6 +23,14 @@ interface Context {
   problems: GeometryProblem[];
   /** False when only the shape matters (isGeometry), which skips the costly topology tests. */
   topology: boolean;
+  /** The collections being walked, outermost first: meeting one again means it contains itself. */
+  open: Set<object>;
+  /** Each geometry object already checked; for a collection, the deepest level it was checked at. */
+  checked: Map<object, number>;
+}
+
+function newContext(topology: boolean): Context {
+  return { problems: [], topology, open: new Set(), checked: new Map() };
 }
 
 type PositionFault = { code: 'BAD_STRUCTURE' | 'NON_FINITE'; message: string } | null;
@@ -50,8 +58,15 @@ function plural(count: number, noun: string): string {
 // ---------------------------------------------------------------------------------------------
 // Describing values in messages
 
+const MAX_QUOTED_CHARACTERS = 40;
+
 function quote(text: string): string {
-  return JSON.stringify(text.length > 40 ? `${text.slice(0, 40)}…` : text);
+  // Cut by code point: cutting by UTF-16 unit could split an emoji into a lone surrogate, which
+  // JSON.stringify would then write as an escape such as \ud83d.
+  const head = Array.from(text.slice(0, 2 * MAX_QUOTED_CHARACTERS + 1))
+    .slice(0, MAX_QUOTED_CHARACTERS)
+    .join('');
+  return JSON.stringify(head.length < text.length ? `${head}…` : text);
 }
 
 function describeValue(v: unknown): string {
@@ -186,18 +201,37 @@ function eachArrayPart(
 // ---------------------------------------------------------------------------------------------
 // Lines and rings
 
-function checkLine(ctx: Context, line: readonly unknown[], path: string): void {
-  checkPositions(ctx, line, path);
-  if (line.length < 2) {
-    report(ctx, 'TOO_FEW_POSITIONS', path, `A line needs at least 2 positions, but this one has ${line.length}.`);
-  }
+/** For positions already known to be valid: whether they hold identical values. */
+function samePosition(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-/** Positions already known to be valid: closed when first and last hold identical values. */
 function isClosed(ring: readonly unknown[][]): boolean {
-  const first = ring[0] ?? [];
-  const last = ring.at(-1) ?? [];
-  return first.length === last.length && first.every((v, i) => v === last[i]);
+  return samePosition(ring[0] ?? [], ring.at(-1) ?? []);
+}
+
+/**
+ * Every ordinate counts, so a vertical well path (one place, several depths) keeps its length;
+ * only a line whose positions are identical in full has none.
+ */
+function allSame(line: readonly unknown[][]): boolean {
+  const first = line[0] ?? [];
+  return line.every((p) => samePosition(first, p));
+}
+
+function checkLine(ctx: Context, line: readonly unknown[], path: string): void {
+  const valid = checkPositions(ctx, line, path);
+  if (line.length < 2) {
+    report(ctx, 'TOO_FEW_POSITIONS', path, `A line needs at least 2 positions, but this one has ${line.length}.`);
+  } else if (valid && allSame(line as unknown[][])) {
+    report(
+      ctx,
+      'TOO_FEW_POSITIONS',
+      path,
+      `A line needs at least 2 distinct positions, but all ${line.length} positions of this one are the same, ` +
+        'so it has no length.',
+    );
+  }
 }
 
 function checkRing(ctx: Context, ring: readonly unknown[], path: string): void {
@@ -294,18 +328,47 @@ function checkCoordinates(ctx: Context, type: CoordinateType, coords: unknown[],
   }
 }
 
+/** A type name without case, spaces or invisible format characters (such as a byte order mark). */
+function looseName(name: string): string {
+  return name.replace(/[\s\p{Cf}]/gu, '').toLowerCase();
+}
+
 function unknownTypeMessage(type: string): string {
-  if (type === 'Feature' || type === 'FeatureCollection') {
+  const loose = looseName(type);
+  if (loose === 'feature' || loose === 'featurecollection') {
     return `${quote(type)} is a GeoJSON object but not a geometry; check the geometry it holds instead.`;
   }
-  const likely = GEOMETRY_TYPES.find((t) => t.toLowerCase() === type.toLowerCase());
+  const likely = GEOMETRY_TYPES.find((t) => t.toLowerCase() === loose);
   if (likely !== undefined) {
-    return `${quote(type)} is not a GeoJSON geometry type. Type names are case-sensitive: use ${quote(likely)}.`;
+    const why =
+      likely.toLowerCase() === type.toLowerCase()
+        ? 'Type names are case-sensitive'
+        : 'The name holds spaces or invisible characters';
+    return `${quote(type)} is not a GeoJSON geometry type. ${why}: use ${quote(likely)}.`;
   }
   return (
     `${quote(type)} is not a GeoJSON geometry type. The types are Point, MultiPoint, LineString, ` +
     'MultiLineString, Polygon, MultiPolygon and GeometryCollection.'
   );
+}
+
+/**
+ * Whether a geometry object still needs checking. A collection met again inside itself is reported.
+ * An object reached again by another path (structured clone keeps shared references, JSON never
+ * has them) was checked already, and its problems point at its first appearance. A collection is
+ * checked again only where it sits deeper, since only the nesting limit can then add a problem.
+ * Each object is thus walked at most MAX_NESTING + 1 times, where shared members could otherwise
+ * make the walk exponential.
+ */
+function needsCheck(ctx: Context, g: object, path: string, depth: number): boolean {
+  if (ctx.open.has(g)) {
+    report(ctx, 'BAD_STRUCTURE', path, 'This member is a GeometryCollection that contains itself, so it never ends.');
+    return false;
+  }
+  const checkedAt = ctx.checked.get(g);
+  if (checkedAt !== undefined && checkedAt >= depth) return false;
+  ctx.checked.set(g, depth);
+  return true;
 }
 
 function checkCollection(ctx: Context, g: Record<string, unknown>, path: string, depth: number): void {
@@ -323,7 +386,9 @@ function checkCollection(ctx: Context, g: Record<string, unknown>, path: string,
     report(ctx, 'EMPTY', membersPath, 'The GeometryCollection has no member geometries.');
     return;
   }
+  ctx.open.add(g);
   for (let i = 0; i < members.length; i++) checkGeometry(ctx, members[i], `${membersPath}[${i}]`, depth + 1);
+  ctx.open.delete(g);
 }
 
 function checkGeometry(ctx: Context, g: unknown, path: string, depth: number): void {
@@ -332,6 +397,8 @@ function checkGeometry(ctx: Context, g: unknown, path: string, depth: number): v
     return;
   }
   const type = g['type'];
+  // Depth only matters to a collection: no other object can break the nesting limit.
+  if (!needsCheck(ctx, g, path, type === 'GeometryCollection' ? depth : 0)) return;
   if (typeof type !== 'string') {
     report(ctx, 'BAD_STRUCTURE', member(path, 'type'), 'The object has no type name, so it is not a GeoJSON geometry.');
     return;
@@ -359,7 +426,7 @@ function checkGeometry(ctx: Context, g: unknown, path: string, depth: number): v
  * SKIPPED_TOO_LARGE is a note that one test was not run, not a defect.
  */
 export function geometryProblems(g: unknown): GeometryProblem[] {
-  const ctx: Context = { problems: [], topology: true };
+  const ctx = newContext(true);
   checkGeometry(ctx, g, '', 0);
   return ctx.problems;
 }
@@ -371,7 +438,7 @@ export function geometryProblems(g: unknown): GeometryProblem[] {
  * imported and flagged (TW-GEO-001), not dropped. Use geometryProblems for validity.
  */
 export function isGeometry(g: unknown): g is Geometry {
-  const ctx: Context = { problems: [], topology: false };
+  const ctx = newContext(false);
   checkGeometry(ctx, g, '', 0);
   return !ctx.problems.some((p) => SHAPE_PROBLEMS.has(p.code));
 }

@@ -57,6 +57,19 @@ describe('nodeFileSource', () => {
     expect((await failure(nodeFileSource(join(dir, 'missing.csv')))).code).toBe('NOT_FOUND');
     expect((await failure(nodeFileSource(dir))).code).toBe('NOT_FOUND');
   });
+
+  it('reports a file removed after the source was made as NOT_FOUND, from slice and from stream', async () => {
+    const path = join(dir, 'removed.csv');
+    writeFileSync(path, 'a,b\n');
+    const src = await nodeFileSource(path);
+    rmSync(path);
+    expect((await failure(src.slice(0, 2))).code).toBe('NOT_FOUND');
+    expect((await failure(sha256OfSource(src))).code).toBe('NOT_FOUND');
+  });
+
+  it('reports a path that runs through a regular file as NOT_FOUND', async () => {
+    expect((await failure(nodeFileSource(join(FILE, 'inner.csv')))).code).toBe('NOT_FOUND');
+  });
 });
 
 describe('nodeFs', () => {
@@ -79,5 +92,10 @@ describe('nodeFs', () => {
 
   it('reports a missing file as NOT_FOUND', async () => {
     expect((await failure(nodeFs().readFile(join(dir, 'missing.bin')))).code).toBe('NOT_FOUND');
+  });
+
+  it('reports a directory or a path through a regular file as NOT_FOUND, like nodeFileSource', async () => {
+    expect((await failure(nodeFs().readFile(dir))).code).toBe('NOT_FOUND');
+    expect((await failure(nodeFs().readFile(join(FILE, 'inner.bin')))).code).toBe('NOT_FOUND');
   });
 });

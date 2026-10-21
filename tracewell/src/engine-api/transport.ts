@@ -7,8 +7,8 @@ import {
   closedError,
   execute,
   isRpcEvent,
+  Listeners,
   isRpcResponse,
-  reportAsync,
   transferables,
   unsendableCallError,
   unsendableResultError,
@@ -21,34 +21,6 @@ interface Pending {
   method: keyof EngineApi;
   resolve(value: unknown): void;
   reject(error: EngineError): void;
-}
-
-/** Event subscribers. Each subscription is its own entry, so subscribing one callback twice works as expected. */
-class Listeners {
-  private readonly entries = new Set<{ cb: (e: EngineEvent) => void }>();
-
-  add(cb: (e: EngineEvent) => void): () => void {
-    const entry = { cb };
-    this.entries.add(entry);
-    return () => {
-      this.entries.delete(entry);
-    };
-  }
-
-  emit(event: EngineEvent): void {
-    // A snapshot, so a listener may unsubscribe (itself or others) while the event is delivered.
-    for (const { cb } of [...this.entries]) {
-      try {
-        cb(event);
-      } catch (e) {
-        reportAsync(e);
-      }
-    }
-  }
-
-  clear(): void {
-    this.entries.clear();
-  }
 }
 
 /** The client end of the RPC over one port; workerTransport adds worker-specific failure handling. */

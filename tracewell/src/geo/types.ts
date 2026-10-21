@@ -4,8 +4,8 @@
  * - EMPTY: the geometry has no coordinates (or no member geometries), or a member polygon of a
  *   MultiPolygon has no rings. RFC 7946 lets readers treat such a geometry as null.
  * - NON_FINITE: an ordinate is not a finite number (NaN, Infinity, null, a string).
- * - TOO_FEW_POSITIONS: a line with fewer than 2 positions, or a ring with fewer than 4 positions
- *   or fewer than 3 distinct corners.
+ * - TOO_FEW_POSITIONS: a line with fewer than 2 positions or with all its positions identical,
+ *   or a ring with fewer than 4 positions or fewer than 3 distinct corners.
  * - RING_NOT_CLOSED: a ring whose last position differs from its first.
  * - SELF_INTERSECTION: a ring that crosses, touches or doubles back on itself.
  * - BAD_STRUCTURE: not a GeoJSON geometry object: unknown type, missing or malformed members.

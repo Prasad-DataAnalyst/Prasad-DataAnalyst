@@ -1,7 +1,7 @@
 /**
- * Path ordering shared by ZIP writing and checksum files. Paths are compared by Unicode code
- * point, which is also the order of their UTF-8 bytes, so the result agrees with Python's sorted()
- * and with `LC_ALL=C sort` that people use to inspect a package by hand.
+ * Path ordering and checks shared by ZIP writing and checksum files. Paths are compared by Unicode
+ * code point, which is also the order of their UTF-8 bytes, so the result agrees with Python's
+ * sorted() and with `LC_ALL=C sort` that people use to inspect a package by hand.
  */
 
 const SURROGATE_FIRST = 0xd800;
@@ -26,4 +26,15 @@ export function comparePaths(a: string, b: string): number {
     if (x !== y) return codePointRank(x) - codePointRank(y);
   }
   return a.length - b.length;
+}
+
+/** In a 'u' regex a well-formed surrogate pair is one code point, so this matches only lone halves. */
+const LONE_SURROGATE = /\p{Surrogate}/u;
+
+/**
+ * True when `path` holds half of a surrogate pair on its own. Such a string has no UTF-8 form:
+ * encoding turns each lone half into U+FFFD, so the bytes written would no longer name the path.
+ */
+export function hasLoneSurrogate(path: string): boolean {
+  return LONE_SURROGATE.test(path);
 }

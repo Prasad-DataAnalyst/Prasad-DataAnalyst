@@ -7,7 +7,7 @@
  */
 import { EngineError, type Sha256Hex } from '@tw/model';
 import { invalidArgument } from './errors';
-import { comparePaths } from './paths';
+import { comparePaths, hasLoneSurrogate } from './paths';
 
 export interface ChecksumEntry {
   path: string;
@@ -15,8 +15,12 @@ export interface ChecksumEntry {
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
-/** Hash, a space, then ' ' (text mode, which this module writes) or '*' (binary mode), then the path. */
-const LINE = /^([0-9A-Fa-f]{64}) ([ *])(.+)$/;
+/**
+ * Hash, a space, then ' ' (text mode, which this module writes) or '*' (binary mode), then the path.
+ * The path is "anything but CR" rather than '.', which would also refuse U+2028 and U+2029 that
+ * sha256sum treats as ordinary bytes. Lines are split at LF, and a stray CR (an old Mac file) fails.
+ */
+const LINE = /^([0-9A-Fa-f]{64}) ([ *])([^\r]+)$/;
 const UNWRITABLE_PATH = /[\n\r\\]/;
 
 /** '<hex>  <path>\n' per entry, sorted by path in Unicode code point order. */
@@ -31,10 +35,10 @@ export function checksumsFile(entries: { path: string; sha256: Sha256Hex }[]): s
 
 function checkEntry(entry: ChecksumEntry, seen: Set<string>): void {
   const { path, sha256 } = entry;
-  if (path === '' || UNWRITABLE_PATH.test(path) || path.includes('\u0000')) {
+  if (path === '' || UNWRITABLE_PATH.test(path) || path.includes('\u0000') || hasLoneSurrogate(path)) {
     throw invalidArgument(
       `The path "${path}" cannot be listed in a checksum file: it is empty or contains a line break, ` +
-        'a backslash or a NUL character.',
+        'a backslash, a NUL character or a lone surrogate (which has no UTF-8 form).',
       { path },
     );
   }

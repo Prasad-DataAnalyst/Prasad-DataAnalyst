@@ -7,7 +7,8 @@
  *   - a unit-like word elsewhere, 'WHP psig avg': low.
  * A unit written as a single letter is one confidence step lower outside brackets, and never read
  * from a word in the middle of a header. A low-confidence guess keeps the whole header as the column
- * name, so rejecting the guess loses nothing.
+ * name, so rejecting the guess loses nothing. A unit that leaves something unstated (psi: gauge or
+ * absolute?) or that conflicts with another bracket is never high confidence.
  */
 import { detection, type Confidence, type Detection, type UnitDef } from '@tw/model';
 import { normalizeUnitText } from './names';
@@ -37,17 +38,36 @@ const WORDS_NOT_UNITS: ReadonlySet<string> = new Set([
   'minute',
 ]);
 
-const OPENING = '([{';
-const CLOSING = ')]}';
+/**
+ * Codes whose usual spelling leaves the pressure reference unstated. The registry reads them as
+ * absolute; the detection says so and is marked assumed, because gauge readings are as common.
+ */
+const REFERENCE_NOT_STATED: ReadonlyMap<string, string> = new Map([
+  [
+    'psi',
+    ' "psi" does not say whether the pressure is gauge or absolute, so it is read as absolute (psia).' +
+      ' If the readings are gauge, set the unit to psig.',
+  ],
+]);
+
+/** ASCII brackets and their full-width forms, which spreadsheets in East Asian locales use. */
+const OPENING = '([{\uff08\uff3b\uff5b';
+const CLOSING = ')]}\uff09\uff3d\uff5d';
+
+/**
+ * Longest text that is tried as a unit. Every registry name is far shorter; the bound keeps parsing
+ * linear, so a header of any length cannot stall the import preview.
+ */
+const MAX_UNIT_TEXT = 64;
 
 /** Splits a header into the tokens a unit suffix can start at. */
 const SUFFIX_TOKEN = /[^\s_,;]+/gu;
 
 /** Words for the low-confidence pass; brackets are separators here, so '(psia,' yields 'psia'. */
-const WORD = /[^\s_,;()[\]{}]+/gu;
+const WORD = /[^\s_,;()[\]{}\uff08\uff09\uff3b\uff3d\uff5b\uff5d]+/gu;
 
-/** Separators left at the end of a name once its unit is removed: 'Pressure, ' or 'Pressure /'. */
-const TRAILING_SEPARATORS = /[\s_,;:/\u2013\u2014-]+$/u;
+/** One separator that may be left at the end of a name once its unit is removed: 'Pressure, '. */
+const SEPARATOR = /[\s_,;:/\u2013\u2014-]/u;
 
 interface Group {
   start: number;
@@ -69,13 +89,22 @@ function bracketGroups(text: string): Group[] {
   return groups;
 }
 
+/** Removes trailing separators. A loop rather than a regex, which would be quadratic on long runs. */
 function stripTrailing(text: string): string {
-  return text.replace(TRAILING_SEPARATORS, '');
+  let end = text.length;
+  while (end > 0 && SEPARATOR.test(text.charAt(end - 1))) end--;
+  return text.slice(0, end);
 }
 
-/** 'Depth, in ' → 'Depth': trailing separators and a dangling 'in' ('Time in hours') go. */
-function cleanName(text: string): string {
-  return stripTrailing(stripTrailing(text).replace(/\s+in$/iu, '')).trim();
+/** 'Depth in' → 'Depth': the preposition that introduced a suffix unit, as in 'Depth in ft'. */
+function dropDanglingIn(text: string): string {
+  return /\sin$/iu.test(text.slice(-3)) ? stripTrailing(text.slice(0, -2)) : text;
+}
+
+/** 'Pressure, ' → 'Pressure'. With `beforeSuffix`, also 'Time in ' → 'Time' ('Time in hours'). */
+function cleanName(text: string, beforeSuffix = false): string {
+  const stripped = stripTrailing(text);
+  return (beforeSuffix ? dropDanglingIn(stripped) : stripped).trim();
 }
 
 function isSingleLetter(raw: string): boolean {
@@ -91,26 +120,54 @@ function quoted(raw: string, unit: UnitDef): string {
   return raw === unit.code ? `"${raw}"` : `"${raw}" (${unit.code})`;
 }
 
+/** Units whose text leaves something unstated are at most medium confidence, and say why. */
 function found(name: string, unit: UnitDef, confidence: Confidence, method: string, evidence: string): HeaderUnit {
-  return { name, unit: detection(unit.code, confidence, method, evidence) };
+  const note = REFERENCE_NOT_STATED.get(unit.code);
+  if (note === undefined) return { name, unit: detection(unit.code, confidence, method, evidence) };
+  const capped = confidence === 'high' ? 'medium' : confidence;
+  return { name, unit: detection(unit.code, capped, method, evidence + note) };
 }
 
-function fromBrackets(text: string): HeaderUnit | null {
-  for (const group of bracketGroups(text).reverse()) {
+/** A unit-sized text that names a registry unit, or undefined. */
+function unitText(raw: string): UnitDef | undefined {
+  return raw.length > MAX_UNIT_TEXT ? undefined : findUnit(raw);
+}
+
+interface BracketUnit {
+  group: Group;
+  raw: string;
+  unit: UnitDef;
+}
+
+function bracketUnits(text: string): BracketUnit[] {
+  const units: BracketUnit[] = [];
+  for (const group of bracketGroups(text)) {
     const raw = group.content.trim();
-    const unit = findUnit(raw);
-    if (unit === undefined) continue;
-    const rest = `${cleanName(text.slice(0, group.start))} ${text.slice(group.end).trim()}`;
-    const name = cleanName(rest) || text;
-    return found(
-      name,
-      unit,
-      'high',
-      'header-brackets',
-      `The header "${text}" gives the unit ${quoted(raw, unit)} in brackets.`,
-    );
+    const unit = unitText(raw);
+    if (unit !== undefined) units.push({ group, raw, unit });
   }
-  return null;
+  return units;
+}
+
+/** The header without the group: 'Pressure (psia) avg' → 'Pressure avg', 'P (psia), avg' → 'P, avg'. */
+function withoutGroup(text: string, group: Group): string {
+  const after = text.slice(group.end).trim();
+  const glue = /^[,;:.]/u.test(after) ? '' : ' ';
+  return cleanName(`${cleanName(text.slice(0, group.start))}${glue}${after}`);
+}
+
+/** The last bracketed unit wins; another bracket naming a different unit makes it a guess. */
+function fromBrackets(text: string): HeaderUnit | null {
+  const units = bracketUnits(text);
+  const last = units.at(-1);
+  if (last === undefined) return null;
+  const { group, raw, unit } = last;
+  const name = withoutGroup(text, group) || text;
+  const others = [...new Set(units.map((u) => u.unit.code))].filter((code) => code !== unit.code);
+  const evidence = `The header "${text}" gives the unit ${quoted(raw, unit)} in brackets.`;
+  if (others.length === 0) return found(name, unit, 'high', 'header-brackets', evidence);
+  const conflict = ` Another bracket also names ${others.join(', ')}, so the last one is taken as a guess.`;
+  return found(name, unit, 'medium', 'header-brackets', evidence + conflict);
 }
 
 /** The unit a header suffix names; 'kg_h' is also tried as 'kg/h'. */
@@ -137,10 +194,12 @@ function fromSuffix(text: string): HeaderUnit | null {
   const tokens = [...text.matchAll(SUFFIX_TOKEN)];
   for (let i = 1; i < tokens.length; i++) {
     const start = tokens[i]?.index ?? 0;
+    if (text.length - start > MAX_UNIT_TEXT) continue;
     const raw = text.slice(start).trim();
     const unit = suffixUnit(raw);
-    const name = cleanName(text.slice(0, start));
-    if (unit === undefined || name === '') continue;
+    if (unit === undefined) continue;
+    const name = cleanName(text.slice(0, start), true);
+    if (name === '') continue;
     return suffixDetection(text, name, raw, unit, tokens[i - 1]?.[0] === '/');
   }
   return null;
@@ -149,7 +208,7 @@ function fromSuffix(text: string): HeaderUnit | null {
 function fromWord(text: string): HeaderUnit | null {
   const words = [...text.matchAll(WORD)].map((m) => m[0]).reverse();
   for (const word of words) {
-    if (isSingleLetter(word) || isWordNotUnit(word)) continue;
+    if (word.length > MAX_UNIT_TEXT || isSingleLetter(word) || isWordNotUnit(word)) continue;
     const unit = findUnit(word);
     if (unit === undefined) continue;
     const evidence = `The header "${text}" contains the word ${quoted(word, unit)}, which may be its unit.`;

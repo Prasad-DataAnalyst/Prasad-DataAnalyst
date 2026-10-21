@@ -7,12 +7,19 @@ import { basename } from 'node:path';
 import { EngineError, type ByteSource } from '@tw/model';
 import { clampRange, STREAM_CHUNK_BYTES } from './source';
 
+/**
+ * Errors meaning "there is no regular file at this path": it does not exist, a parent in the path
+ * is a regular file (ENOTDIR), or the path names a directory (EISDIR).
+ */
+const NO_FILE_CODES: ReadonlySet<unknown> = new Set(['ENOENT', 'ENOTDIR', 'EISDIR']);
+
 function isMissingFile(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'ENOENT';
+  return typeof e === 'object' && e !== null && NO_FILE_CODES.has((e as { code?: unknown }).code);
 }
 
 function notFound(path: string): EngineError {
-  return new EngineError('NOT_FOUND', `The file "${path}" does not exist.`, 'Check the path and try again.', { path });
+  const message = `The file "${path}" does not exist or is not a regular file.`;
+  return new EngineError('NOT_FOUND', message, 'Check the path and try again.', { path });
 }
 
 /**
@@ -36,7 +43,9 @@ export async function nodeFileSource(path: string): Promise<ByteSource> {
 
 async function readRange(path: string, from: number, to: number): Promise<Uint8Array> {
   const out = new Uint8Array(to - from);
-  const handle = await open(path, 'r');
+  const handle = await open(path, 'r').catch((e: unknown) => {
+    throw isMissingFile(e) ? notFound(path) : e;
+  });
   try {
     let filled = 0;
     while (filled < out.length) {
@@ -97,7 +106,10 @@ function plainBytes(buffer: Uint8Array): Uint8Array {
   return copy;
 }
 
-/** Whole-file reads and writes. readFile returns a plain Uint8Array rather than a Node Buffer. */
+/**
+ * Whole-file reads and writes. readFile returns a plain Uint8Array rather than a Node Buffer and
+ * throws EngineError('NOT_FOUND') when the path does not exist or is not a regular file.
+ */
 export function nodeFs(): {
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, bytes: Uint8Array): Promise<void>;

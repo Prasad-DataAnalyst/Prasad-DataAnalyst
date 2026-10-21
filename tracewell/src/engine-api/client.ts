@@ -38,10 +38,13 @@ import {
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
-import { reportAsync } from './messages';
+import { jobClosedError, reportAsync } from './messages';
 import type { EngineApi, EngineEvent, EngineInfo, Transport } from './protocol';
 
 export class EngineClient implements EngineApi {
+  /** Jobs being awaited; close() settles them, since no event or answer will reach them afterwards. */
+  private readonly waiters = new Set<{ abandon(): void }>();
+
   constructor(private readonly t: Transport) {}
 
   onEvent(cb: (e: EngineEvent) => void): () => void {
@@ -52,14 +55,18 @@ export class EngineClient implements EngineApi {
    * Waits for a job and returns its result. Rejects with the job's EngineError when it fails and
    * with CANCELLED when it is cancelled. Aborting `signal` asks the engine to cancel; the promise
    * then settles with the engine's verdict, because a job that finished before the cancel arrived
-   * has changed the project, and reporting it as cancelled would hide that.
+   * has changed the project, and reporting it as cancelled would hide that. close() rejects it
+   * with PROTOCOL_MISMATCH, as it does every pending call.
    */
   awaitJob<T>(h: JobHandle, onProgress?: (p: JobProgress) => void, signal?: AbortSignal): Promise<T> {
-    return new JobWaiter<T>(this, h.jobId, onProgress, signal).promise;
+    const waiter = new JobWaiter<T>(this, h.jobId, onProgress, signal, (w) => this.waiters.delete(w));
+    this.waiters.add(waiter);
+    return waiter.promise;
   }
 
   close(): void {
     this.t.close();
+    for (const w of [...this.waiters]) w.abandon();
   }
 
   hello(): Promise<EngineInfo> {
@@ -193,6 +200,7 @@ class JobWaiter<T> {
     private readonly jobId: JobId,
     private readonly onProgress: ((p: JobProgress) => void) | undefined,
     private readonly signal: AbortSignal | undefined,
+    private readonly onSettled: (w: { abandon(): void }) => void,
   ) {
     this.promise = new Promise<T>((resolve, reject) => {
       this.resolve = resolve;
@@ -278,6 +286,11 @@ class JobWaiter<T> {
     }
   }
 
+  /** The connection closed while waiting: nothing will ever settle this waiter otherwise. */
+  abandon(): void {
+    this.fail(jobClosedError(this.jobId));
+  }
+
   private fail(error: EngineError): void {
     this.finish(() => this.reject(error));
   }
@@ -287,6 +300,7 @@ class JobWaiter<T> {
     this.settled = true;
     this.offEvents();
     this.signal?.removeEventListener('abort', this.onAbort);
+    this.onSettled(this);
     settle();
   }
 }

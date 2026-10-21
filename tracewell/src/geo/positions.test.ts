@@ -90,6 +90,19 @@ describe('positionsOf', () => {
     expect([...positionsOf(g)]).toHaveLength(2);
     expect([...positionsOf(g)]).toHaveLength(2);
   });
+
+  it('can be iterated more than once from a single call, as an Iterable promises', () => {
+    const g: Geometry = {
+      type: 'MultiPoint',
+      coordinates: [
+        [0, 0],
+        [1, 1],
+      ],
+    };
+    const positions = positionsOf(g);
+    expect([...positions]).toHaveLength(2);
+    expect([...positions]).toHaveLength(2);
+  });
 });
 
 describe('pointFromLatLon', () => {

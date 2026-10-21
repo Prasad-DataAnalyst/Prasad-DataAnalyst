@@ -11,6 +11,12 @@
  */
 const CASE_SENSITIVE: ReadonlySet<string> = new Set(['mm', 'pa']);
 
+/**
+ * A lower-case 'm' before a capital is the SI prefix milli ('mW', 'mPa', 'mJ'). Folded to lower
+ * case it would match mega ('MW', 'MPa', 'MJ'), a factor of 10^9, so such text is matched as written.
+ */
+const MILLI_PREFIX = /^m\p{Lu}/u;
+
 /** Spelled-out time denominators reduce to their symbols, so 'bbl/day' and 'bbl/d' share a key. */
 const TIME_DENOMINATORS: readonly (readonly [RegExp, string])[] = [
   [/\/(?:days?)$/iu, '/d'],
@@ -21,6 +27,7 @@ const TIME_DENOMINATORS: readonly (readonly [RegExp, string])[] = [
 
 /**
  * The case-preserving normal form of a unit text:
+ * - invisible format characters (zero-width space, word joiner, soft hyphen, BOM) are removed;
  * - look-alike degree signs (º U+00BA, ˚ U+02DA) become '°', before NFKC would turn them into 'o';
  * - NFKC turns superscripts into digits (m³ → m3) and ℃ into °C;
  * - look-alike slashes (U+2215, U+2044) become '/';
@@ -31,6 +38,7 @@ const TIME_DENOMINATORS: readonly (readonly [RegExp, string])[] = [
  */
 export function normalizeUnitText(text: string): string {
   let key = text
+    .replace(/\p{Cf}/gu, '')
     .replace(/[\u00ba\u02da]/gu, '\u00b0')
     .normalize('NFKC')
     .replace(/[\u2215\u2044]/gu, '/')
@@ -42,7 +50,7 @@ export function normalizeUnitText(text: string): string {
 
 function isCaseSensitive(normalized: string): boolean {
   const lower = normalized.toLowerCase();
-  return lower.length === 1 || CASE_SENSITIVE.has(lower);
+  return lower.length === 1 || CASE_SENSITIVE.has(lower) || MILLI_PREFIX.test(normalized);
 }
 
 /** The key under which a unit name is indexed and looked up: the normal form, lower-cased unless case matters. */

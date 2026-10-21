@@ -6,6 +6,7 @@ import { EngineError, type EngineErrorData } from '@tw/model';
 import {
   isEngineMethod,
   type EngineApi,
+  type EngineEvent,
   type EngineImpl,
   type RpcEvent,
   type RpcRequest,
@@ -77,6 +78,15 @@ export function closedError(method: keyof EngineApi): EngineError {
   );
 }
 
+/** awaitJob has no call of its own in flight while it waits for events, so close() settles it with this. */
+export function jobClosedError(jobId: string): EngineError {
+  return new EngineError(
+    'PROTOCOL_MISMATCH',
+    `The connection to the engine was closed before job ${jobId} finished.`,
+    'Reload Tracewell to restart the engine, then check the Jobs panel before repeating the operation.',
+  );
+}
+
 export function unknownMethodError(method: unknown): EngineError {
   const name = typeof method === 'string' ? method : String(typeof method);
   return new EngineError(
@@ -103,7 +113,8 @@ export function unsendableResultError(method: keyof EngineApi, e: unknown): Engi
 }
 
 export function workerError(message: string): EngineError {
-  const text = message === '' ? 'The engine worker reported an error.' : `The engine worker reported an error: ${message}`;
+  const text =
+    message === '' ? 'The engine worker reported an error.' : `The engine worker reported an error: ${message}`;
   return new EngineError('INTERNAL', text, 'Reload Tracewell to restart the engine, then repeat the operation.');
 }
 
@@ -116,9 +127,11 @@ export type CallOutcome = { ok: true; value: unknown } | { ok: false; error: Eng
 
 /**
  * Runs one call on an implementation and never rejects: whatever the implementation throws comes
- * back as EngineErrorData, the only error form that crosses the protocol.
+ * back as EngineErrorData, the only error form that crosses the protocol. Only protocol methods
+ * run, whichever transport asks, so a name such as `on` or `constructor` never reaches the engine.
  */
 export async function execute(impl: EngineImpl, method: keyof EngineApi, params: unknown[]): Promise<CallOutcome> {
+  if (!isEngineMethod(method)) return { ok: false, error: unknownMethodError(method).toData() };
   const fn: unknown = impl[method];
   if (typeof fn !== 'function') return { ok: false, error: unknownMethodError(method).toData() };
   try {
@@ -137,4 +150,32 @@ export function reportAsync(e: unknown): void {
   queueMicrotask(() => {
     throw e;
   });
+}
+
+/** Event subscribers. Each subscription is its own entry, so subscribing one callback twice works as expected. */
+export class Listeners {
+  private readonly entries = new Set<{ cb: (e: EngineEvent) => void }>();
+
+  add(cb: (e: EngineEvent) => void): () => void {
+    const entry = { cb };
+    this.entries.add(entry);
+    return () => {
+      this.entries.delete(entry);
+    };
+  }
+
+  emit(event: EngineEvent): void {
+    // A snapshot, so a listener may unsubscribe (itself or others) while the event is delivered.
+    for (const { cb } of [...this.entries]) {
+      try {
+        cb(event);
+      } catch (e) {
+        reportAsync(e);
+      }
+    }
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
 }

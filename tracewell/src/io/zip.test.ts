@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { deflateSync } from 'fflate';
 import { afterAll, describe, expect, it } from 'vitest';
 import { EngineError, utf8 } from '@tw/model';
 import { checksumsFile, parseChecksumsFile } from './checksums';
@@ -16,6 +17,7 @@ import {
   renameBoth,
   runPython,
   toZip64,
+  withU16,
   withU32,
 } from './__fixtures__/zip-tools';
 
@@ -174,8 +176,17 @@ describe('writeZip and readZip', () => {
     ['an empty segment', 'data//wells.csv'],
     ['a directory path', 'data/'],
     ['a NUL character', 'wells\u0000.csv'],
+    ['a lone high surrogate', 'wells\ud800.csv'],
+    ['a lone low surrogate', '\udc00wells.csv'],
   ])('refuses %s', (_label, path) => {
     expect(thrown(() => writeZip([{ path, data: utf8('x') }])).code).toBe('INVALID_INPUT');
+  });
+
+  it('writes 65,534 entries but refuses 65,535, which would need ZIP64', () => {
+    const entries = Array.from({ length: 65_535 }, (_, i) => ({ path: `f${i}`, data: new Uint8Array(0), store: true }));
+    const zip = writeZip(entries.slice(0, 65_534));
+    expect(readZip(zip, { maxEntries: 65_534 }).paths()).toHaveLength(65_534);
+    expect(thrown(() => writeZip(entries)).code).toBe('INVALID_INPUT');
   });
 
   it('refuses duplicate paths', () => {
@@ -184,6 +195,31 @@ describe('writeZip and readZip', () => {
       { path: 'a.txt', data: utf8('2') },
     ];
     expect(thrown(() => writeZip(entries)).message).toContain('more than once');
+  });
+
+  it('never writes an archive its own reader refuses: distinct lone surrogates would both become U+FFFD', () => {
+    const entries = [
+      { path: 'a\ud800', data: utf8('1') },
+      { path: 'a\udbff', data: utf8('2') },
+    ];
+    expect(thrown(() => writeZip(entries)).code).toBe('INVALID_INPUT');
+  });
+
+  it('deflates with fflate at level 6', () => {
+    const zip = writeZip(SAMPLE);
+    for (const record of centralRecords(zip).filter((r) => r.method === 8)) {
+      const input = SAMPLE.find((e) => e.path === record.name);
+      expect(rawData(zip, record)).toEqual(deflateSync(input?.data ?? new Uint8Array(0), { level: 6 }));
+    }
+  });
+
+  it('reads an archive that sits inside a larger buffer (a non-zero byte offset)', () => {
+    const zip = writeZip(SAMPLE);
+    const padded = new Uint8Array(zip.length + 64).fill(0x50);
+    padded.set(zip, 32);
+    const reader = readZip(padded.subarray(32, 32 + zip.length));
+    expect(contents(reader)).toEqual(contents(readZip(zip)));
+    expect(contents(readZip(toZip64(padded.subarray(32, 32 + zip.length))))).toEqual(contents(reader));
   });
 });
 
@@ -317,6 +353,53 @@ describe('readZip structure handling', () => {
     const patched = zip.slice();
     patched.set(utf8('b'), record.localAt + 30);
     expect(thrown(() => readZip(patched)).code).toBe('PROJECT_INVALID');
+  });
+
+  it('finds the end record behind an archive comment, even one that contains a fake end signature', () => {
+    const zip = writeZip(SAMPLE);
+    // The comment holds a decoy end record that claims a 100-byte comment running past the file.
+    const decoy = new Uint8Array(22);
+    new DataView(decoy.buffer).setUint32(0, 0x06054b50, true);
+    new DataView(decoy.buffer).setUint16(20, 100, true);
+    const comment = Uint8Array.from([...utf8('note '), ...decoy, ...utf8(' end')]);
+    const withComment = new Uint8Array(zip.length + comment.length);
+    withComment.set(zip);
+    withComment.set(comment, zip.length);
+    new DataView(withComment.buffer).setUint16(zip.length - 2, comment.length, true);
+    expect(contents(readZip(withComment))).toEqual(contents(readZip(zip)));
+  });
+
+  it('refuses a multi-disk archive', () => {
+    const zip = writeZip(SAMPLE);
+    const error = thrown(() => readZip(withU16(zip, zip.length - 22 + 4, 1)));
+    expect(error.code).toBe('FORMAT_UNSUPPORTED');
+    expect(error.message).toContain('multi-disk');
+  });
+
+  it('refuses a name flagged as UTF-8 that is not valid UTF-8', () => {
+    const zip = writeZip([{ path: 'caf?.txt', data: utf8('x') }]);
+    const [record] = centralRecords(zip);
+    if (record === undefined) throw new Error('no entry');
+    const renamed = renameBoth(zip, record, Uint8Array.from([0x63, 0x61, 0x66, 0x82, 0x2e, 0x74, 0x78, 0x74]));
+    expect(thrown(() => readZip(patchBoth(renamed, record, 'flags', 0x0800))).code).toBe('PROJECT_INVALID');
+  });
+
+  it('refuses a stored entry whose compressed and uncompressed sizes differ', () => {
+    const zip = writeZip(SAMPLE);
+    const record = centralRecords(zip).find((r) => r.name === 'mimetype');
+    if (record === undefined) throw new Error('no entry');
+    const error = thrown(() => readZip(patchBoth(zip, record, 'size', record.size + 1)));
+    expect(error.code).toBe('PROJECT_INVALID');
+    expect(error.message).toContain('different compressed and uncompressed sizes');
+  });
+
+  it('refuses a size marked as ZIP64 without a ZIP64 extra field', () => {
+    const zip = writeZip(SAMPLE);
+    const record = centralRecords(zip).find((r) => r.name === 'manifest.json');
+    if (record === undefined) throw new Error('no entry');
+    const error = thrown(() => readZip(withU32(zip, record.at + 24, 0xffffffff)));
+    expect(error.code).toBe('PROJECT_INVALID');
+    expect(error.message).toContain('ZIP64 extra field');
   });
 
   it.each([

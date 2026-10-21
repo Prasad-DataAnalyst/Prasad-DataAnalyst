@@ -82,6 +82,7 @@ function sniffUtf8(head: Uint8Array): EncodingDetection | null {
       detection('utf-8', 'high', 'empty', 'The file is empty, so any encoding reads it the same.'),
     );
   }
+  if (scan.multiByte === 0 && scan.cutOffAt >= 0) return cutOffOnly(head, scan.cutOffAt);
   if (scan.multiByte === 0) {
     const evidence = `The first ${formatCount(head.length)} bytes are plain ASCII, which reads the same in UTF-8.`;
     return withBom('utf-8', 0, detection('utf-8', 'high', 'ascii', evidence));
@@ -90,6 +91,19 @@ function sniffUtf8(head: Uint8Array): EncodingDetection | null {
     `The first ${formatCount(head.length)} bytes are valid UTF-8 and contain ` +
     `${formatCount(scan.multiByte)} multi-byte characters.`;
   return withBom('utf-8', 0, detection('utf-8', 'high', 'utf8-valid', evidence));
+}
+
+/**
+ * ASCII followed by the start of a multi-byte sequence at the very end proves nothing: it is UTF-8
+ * if the file goes on past the bytes read, but if the file ends there it is not UTF-8 at all (a
+ * windows-1252 file ending in, say, 'a-acute' looks exactly like this). UTF-8 stays the better guess
+ * for a head cut from a longer file, so it is applied, but marked as assumed.
+ */
+function cutOffOnly(head: Uint8Array, at: number): EncodingDetection {
+  const evidence =
+    `The bytes read are plain ASCII except for an incomplete multi-byte sequence at offset ${formatCount(at)}, ` +
+    'the very end. UTF-8 is assumed; if the file ends there, it is not UTF-8 and is probably windows-1252.';
+  return withBom('utf-8', 0, detection('utf-8', 'medium', 'utf8-cut-off', evidence));
 }
 
 function fallback(head: Uint8Array): EncodingDetection {
@@ -104,8 +118,10 @@ function fallback(head: Uint8Array): EncodingDetection {
 interface Utf8Scan {
   /** Offset of the first byte that breaks UTF-8, or -1 when the bytes are valid. */
   invalidAt: number;
-  /** Count of characters encoded in more than one byte. */
+  /** Count of complete characters encoded in more than one byte. */
   multiByte: number;
+  /** Offset of a valid but incomplete sequence cut off by the end of the bytes, or -1. */
+  cutOffAt: number;
 }
 
 /**
@@ -123,11 +139,12 @@ function scanUtf8(bytes: Uint8Array): Utf8Scan {
       continue;
     }
     const length = sequenceLength(bytes, i);
-    if (length === 0) return { invalidAt: i, multiByte };
+    if (length === 0) return { invalidAt: i, multiByte, cutOffAt: -1 };
+    if (i + length > bytes.length) return { invalidAt: -1, multiByte, cutOffAt: i };
     multiByte++;
     i += length;
   }
-  return { invalidAt: -1, multiByte };
+  return { invalidAt: -1, multiByte, cutOffAt: -1 };
 }
 
 /** Allowed range of the second byte for each lead byte; later bytes are always 0x80-0xBF. */
@@ -142,13 +159,15 @@ function secondByteRange(lead: number): [number, number, number] | null {
   return null;
 }
 
-/** Length of the valid multi-byte sequence starting at `i`, or 0 when it is invalid. */
+/**
+ * Length of the valid multi-byte sequence starting at `i`, or 0 when it is invalid. A sequence cut
+ * off by the end of `bytes` whose bytes so far are valid still reports its full length.
+ */
 function sequenceLength(bytes: Uint8Array, i: number): number {
   const range = secondByteRange(bytes[i] ?? 0);
   if (range === null) return 0;
   const [length, low, high] = range;
-  for (let k = 1; k < length; k++) {
-    if (i + k >= bytes.length) return bytes.length - i; // cut off by the end of the head
+  for (let k = 1; k < length && i + k < bytes.length; k++) {
     const b = bytes[i + k] ?? 0;
     const [min, max] = k === 1 ? [low, high] : [0x80, 0xbf];
     if (b < min || b > max) return 0;

@@ -30,7 +30,8 @@ function* walk(g: Geometry): Generator<Position, void, undefined> {
  * copies, so callers must not change them.
  */
 export function positionsOf(g: Geometry): Iterable<Position> {
-  return walk(g);
+  // Not the generator itself, which runs once: each loop over the result starts a fresh walk.
+  return { [Symbol.iterator]: () => walk(g) };
 }
 
 /**

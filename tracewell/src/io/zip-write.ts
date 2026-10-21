@@ -11,7 +11,7 @@ import { deflateSync } from 'fflate';
 import { utf8 } from '@tw/model';
 import { crc32 } from './crc32';
 import { formatCount, invalidArgument } from './errors';
-import { comparePaths } from './paths';
+import { comparePaths, hasLoneSurrogate } from './paths';
 import {
   CENTRAL_HEADER_BYTES,
   DOS_DATE_1980_01_01,
@@ -51,8 +51,9 @@ interface PreparedEntry {
 /**
  * Builds a ZIP archive. Entries are written in the caller's order unless `sort` is set, in which
  * case they are ordered by path (Unicode code point order).
- * Throws EngineError('INVALID_INPUT') for an empty, absolute, backslashed, dot-segment or duplicate
- * path, and for archives that would need ZIP64 (4 GiB or 65,535 entries).
+ * Throws EngineError('INVALID_INPUT') for an empty, absolute, backslashed, dot-segment, duplicate
+ * or not well-formed (lone surrogate) path, and for archives that would need ZIP64 (4 GiB or
+ * 65,535 entries).
  */
 export function writeZip(entries: ZipEntryInput[], o: { sort?: boolean } = {}): Uint8Array {
   const ordered = o.sort === true ? [...entries].sort((a, b) => comparePaths(a.path, b.path)) : entries;
@@ -89,6 +90,8 @@ function checkEntryPath(path: string, seen: Set<string>): void {
   };
   if (path === '') reject('is empty');
   if (path.includes('\u0000')) reject('contains a NUL character');
+  // Two paths differing only in lone surrogates would both be written as U+FFFD: a duplicate name.
+  if (hasLoneSurrogate(path)) reject('contains a lone surrogate, which has no UTF-8 form');
   if (path.includes('\\')) reject('contains a backslash; ZIP paths use forward slashes');
   if (path.startsWith('/') || /^[A-Za-z]:/.test(path)) reject('is absolute');
   if (path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {

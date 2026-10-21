@@ -7,6 +7,7 @@ import {
   canonicalJson,
   EngineError,
   type Actor,
+  type Assumption,
   type AuditDraft,
   type AuditEntry,
   type AuditSeq,
@@ -49,6 +50,12 @@ export class StubClock {
   }
 }
 
+/** How to undo one audit entry. check() throws when a later change makes the undo unsafe. */
+export interface Revert {
+  check(): void;
+  apply(): void;
+}
+
 const DETECTOR: Actor = { kind: 'system', component: 'detector' };
 
 /** Model types are JSON data by construction; this states it where the compiler cannot see it. */
@@ -60,16 +67,21 @@ function entryHash(body: Omit<AuditEntry, 'hash'>): string {
   return stubHex(canonicalJson(asJson(body)));
 }
 
+export function actorName(actor: Actor): string {
+  return actor.kind === 'user' ? actor.name : `system (${actor.component})`;
+}
+
 export class StubProject {
   readonly datasets = new Map<DatasetId, StubDataset>();
   readonly issues = new Map<IssueId, StubIssue>();
   readonly audit: AuditEntry[] = [];
   readonly exports: ExportRecord[] = [];
   /** How to undo each revertible entry; an entry leaves the map when it is reverted. */
-  readonly undo = new Map<AuditSeq, () => void>();
+  readonly undo = new Map<AuditSeq, Revert>();
   readonly createdAt: IsoUtc;
   area: BBox | null = null;
   dirty = false;
+  readOnly = false;
   lastSavedAt: IsoUtc | null = null;
   private steps = 0;
 
@@ -92,17 +104,40 @@ export class StubProject {
     return `s${++this.steps}`;
   }
 
-  private user(): Actor {
+  user(): Actor {
     return { kind: 'user', profileId: this.profile.id, name: this.profile.name, role: this.profile.role };
   }
 
+  /** Refuses every change to a project that failed an integrity check on open (TW-PRJ-*). */
+  assertWritable(): void {
+    if (this.readOnly) {
+      throw new EngineError(
+        'READ_ONLY_PROJECT',
+        'This project is open read-only because it failed an integrity check.',
+        'Review the integrity report, then start a new project from the original files to make changes.',
+      );
+    }
+  }
+
   append(draft: AuditDraft, actor: Actor = this.user()): AuditEntry {
-    const prev = this.audit[this.audit.length - 1]?.hash ?? stubHex(AUDIT_GENESIS_PREFIX + this.id);
-    const body = { ...draft, seq: this.audit.length + 1, at: this.clock.now(), actor, prev };
+    const body = { ...draft, seq: this.audit.length + 1, at: this.clock.now(), actor, prev: this.head().hash };
     const entry: AuditEntry = { ...body, hash: entryHash(body) };
     this.audit.push(entry);
     this.dirty = draft.action !== 'project.save';
     return entry;
+  }
+
+  head(): { seq: AuditSeq; hash: string } {
+    const last = this.audit[this.audit.length - 1];
+    return { seq: last?.seq ?? 0, hash: last?.hash ?? stubHex(AUDIT_GENESIS_PREFIX + this.id) };
+  }
+
+  entry(seq: AuditSeq): AuditEntry {
+    const found = this.audit[seq - 1];
+    if (found === undefined) {
+      throw new EngineError('NOT_FOUND', `There is no audit entry ${seq}.`, 'Choose an entry from the audit log.');
+    }
+    return found;
   }
 
   verify(): ChainReport {
@@ -110,7 +145,12 @@ export class StubProject {
     for (const entry of this.audit) {
       const { hash, ...body } = entry;
       if (body.prev !== prev || entryHash(body) !== hash) {
-        return { ok: false, entries: this.audit.length, brokenAt: entry.seq, reason: `Entry ${entry.seq} does not match the chain.` };
+        return {
+          ok: false,
+          entries: this.audit.length,
+          brokenAt: entry.seq,
+          reason: `Entry ${entry.seq} does not match the chain.`,
+        };
       }
       prev = hash;
     }
@@ -120,7 +160,11 @@ export class StubProject {
   dataset(id: DatasetId): StubDataset {
     const ds = this.datasets.get(id);
     if (ds === undefined) {
-      throw new EngineError('NOT_FOUND', `There is no dataset ${id} in this project.`, 'Choose a dataset from the project tree.');
+      throw new EngineError(
+        'NOT_FOUND',
+        `There is no dataset ${id} in this project.`,
+        'Choose a dataset from the project tree.',
+      );
     }
     return ds;
   }
@@ -128,24 +172,55 @@ export class StubProject {
   issue(id: IssueId): StubIssue {
     const issue = this.issues.get(id);
     if (issue === undefined) {
-      throw new EngineError('NOT_FOUND', `There is no issue ${id} in this project.`, 'Run the checks again and choose an issue from the register.');
+      throw new EngineError(
+        'NOT_FOUND',
+        `There is no issue ${id} in this project.`,
+        'Run the checks again and choose an issue from the register.',
+      );
     }
     return issue;
   }
 
-  /** Adds the canned file as a new dataset, logging source.add and detection.assume as an import does. */
-  addCannedDataset(name: string): StubDataset {
-    const id = `d${this.datasets.size + 1}`;
-    const ds: StubDataset = { id, name, columns: sourceColumns(), edits: new Map(), excluded: new Map(), steps: [], checked: false };
-    this.datasets.set(id, ds);
+  nextDatasetId(): DatasetId {
+    return `d${this.datasets.size + 1}`;
+  }
+
+  /** A dataset of the canned file that is not yet part of the project. */
+  draftDataset(name: string): StubDataset {
+    return {
+      id: this.nextDatasetId(),
+      name,
+      columns: sourceColumns(),
+      edits: new Map(),
+      excluded: new Map(),
+      steps: [],
+      checked: false,
+      confirmed: new Set(),
+      latestOverride: new Map(),
+    };
+  }
+
+  /** Adds a drafted dataset, logging source.add and detection.assume as an import does. */
+  addDataset(ds: StubDataset): void {
+    this.datasets.set(ds.id, ds);
     this.append({
       action: 'source.add',
-      target: { datasetId: id, fileId: SOURCE_FILE.fileId },
-      new: { name, fileName: SOURCE_FILE.name, rows: rowCount() },
+      target: { datasetId: ds.id, fileId: SOURCE_FILE.fileId },
+      new: { name: ds.name, fileName: SOURCE_FILE.name, rows: rowCount() },
       payload: { format: 'csv' },
     });
-    this.append({ action: 'detection.assume', target: { datasetId: id }, payload: asJson({ assumptions: assumptionsOf(id, ds.columns) }) }, DETECTOR);
-    return ds;
+    this.append(
+      {
+        action: 'detection.assume',
+        target: { datasetId: ds.id },
+        payload: asJson({ assumptions: this.assumptions(ds) }),
+      },
+      DETECTOR,
+    );
+  }
+
+  assumptions(ds: StubDataset): Assumption[] {
+    return assumptionsOf(ds.id, ds.columns, ds.confirmed);
   }
 
   runChecks(ds: StubDataset): CheckSummary {
@@ -198,7 +273,11 @@ export class StubProject {
 
   checkRow(rowId: RowId): void {
     if (!Number.isInteger(rowId) || rowId < 0 || rowId >= rowCount()) {
-      throw new EngineError('NOT_FOUND', `There is no row ${rowId} in this dataset.`, 'Choose a row shown in the grid.');
+      throw new EngineError(
+        'NOT_FOUND',
+        `There is no row ${rowId} in this dataset.`,
+        'Choose a row shown in the grid.',
+      );
     }
   }
 
@@ -217,9 +296,9 @@ export class StubProject {
       rowCount: rowCount(),
       outputRowCount: outputView(ds).rows.length,
       columnCount: ds.columns.length,
-      assumptions: assumptionsOf(ds.id, ds.columns).length,
+      assumptions: this.assumptions(ds).length,
       partial: false,
-      steps: ds.steps.map((s) => ({ ...s })),
+      steps: ds.steps.map((s) => structuredClone(s)),
     };
   }
 
@@ -230,7 +309,7 @@ export class StubProject {
       name: ds.name,
       source: { fileId: SOURCE_FILE.fileId, fileName: SOURCE_FILE.name, format: 'csv' },
       rowCount: view.rows.length,
-      columns: view.columns.map((c) => c.schema),
+      columns: view.columns.map((c) => structuredClone(c.schema)),
       crs: null,
       geometryColumn: null,
       partial: false,
@@ -238,22 +317,22 @@ export class StubProject {
   }
 
   summary(): ProjectSummary {
-    const head = this.audit[this.audit.length - 1];
     return {
       id: this.id,
       name: this.name,
       createdAt: this.createdAt,
       profile: { ...this.profile },
       unitSystem: this.unitSystem,
-      projectArea: this.area,
-      readOnly: false,
+      projectArea: this.area === null ? null : [...this.area],
+      readOnly: this.readOnly,
       dirty: this.dirty,
       lastSavedAt: this.lastSavedAt,
       originals: this.originals(),
       datasets: [...this.datasets.values()].map((ds) => this.datasetSummary(ds)),
       exports: this.exports.map((e) => ({ ...e })),
-      rulePacks: [STUB_RULE_PACK_REF],
-      auditHead: { seq: head?.seq ?? 0, hash: head?.hash ?? stubHex(AUDIT_GENESIS_PREFIX + this.id) },
+      // Like the real manifest, the project records the packs its check runs used.
+      rulePacks: [...this.datasets.values()].some((ds) => ds.checked) ? [STUB_RULE_PACK_REF] : [],
+      auditHead: this.head(),
     };
   }
 

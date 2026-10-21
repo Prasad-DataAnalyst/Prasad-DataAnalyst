@@ -516,6 +516,46 @@
       "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[1]" }]
     },
     {
+      "name": "zero-length LineString (every position the same)",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [1.8, 57.5],
+          [1.8, 57.5],
+          [1.8, 57.5]
+        ]
+      },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates", "message": "2 distinct positions" }]
+    },
+    {
+      "name": "MultiLineString with a zero-length line",
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [0, 0],
+            [1, 1]
+          ],
+          [
+            [2, 2, 10],
+            [2, 2, 10]
+          ]
+        ]
+      },
+      "problems": [{ "code": "TOO_FEW_POSITIONS", "path": "coordinates[1]" }]
+    },
+    {
+      "name": "valid vertical LineString (one place, two depths, as a vertical well path)",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [1.8, 57.5, 0],
+          [1.8, 57.5, -2500]
+        ]
+      },
+      "problems": []
+    },
+    {
       "name": "Circle",
       "geometry": { "type": "Circle" },
       "problems": [{ "code": "BAD_STRUCTURE", "path": "type", "message": "\"Circle\" is not a GeoJSON geometry type" }]

@@ -15,7 +15,15 @@ import {
   type RuleDef,
   type Severity,
 } from '@tw/model';
-import { findUnit, RULE_NOT_NULL, RULE_NULL_MARKER, RULE_PHYSICAL_RANGE, SI_LIMITS, sourceLine, stubHex } from './stub-data';
+import {
+  findUnit,
+  RULE_NOT_NULL,
+  RULE_NULL_MARKER,
+  RULE_PHYSICAL_RANGE,
+  SI_LIMITS,
+  sourceLine,
+  stubHex,
+} from './stub-data';
 import { rootColumn, type StubDataset, type StubView, type ViewColumn } from './stub-view';
 
 export interface StubIssue {
@@ -163,7 +171,8 @@ export function toIssue(issue: StubIssue, ds: StubDataset, columnName: (id: Colu
     columns: [...issue.columns],
     scope: 'rows',
     title: issue.rule.title,
-    message: issue.rule.message.replace('{count}', String(issue.flagged.size)).replace('{column}', names),
+    // Replacer functions, because a replacement string treats '$&' or "$'" in a column name as patterns.
+    message: issue.rule.message.replace('{count}', () => String(issue.flagged.size)).replace('{column}', () => names),
     explanation: issue.rule.explanation,
     source: issue.rule.source,
     status: status(c),

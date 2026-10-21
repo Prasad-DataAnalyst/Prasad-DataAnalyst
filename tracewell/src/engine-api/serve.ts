@@ -1,5 +1,13 @@
 /** The engine end of the RPC: binds an implementation to a port, such as the worker's global scope. */
-import { execute, isAnswerableCall, isRpcRequest, reportAsync, transferables, unknownMethodError, unsendableResultError } from './messages';
+import {
+  execute,
+  isAnswerableCall,
+  isRpcRequest,
+  reportAsync,
+  transferables,
+  unknownMethodError,
+  unsendableResultError,
+} from './messages';
 import type { EngineApi, EngineImpl, MessagePortLike, RpcEvent, RpcRequest, RpcResponse } from './protocol';
 
 /**
@@ -21,7 +29,8 @@ export function serve(impl: EngineImpl, port: MessagePortLike): () => void {
   const onMessage = (ev: MessageEvent): void => {
     const msg: unknown = ev.data;
     if (isRpcRequest(msg)) void answer(impl, port, msg);
-    else if (isAnswerableCall(msg)) reply(port, { kind: 'result', id: msg.id, ok: false, error: unknownMethodError(msg.method).toData() });
+    else if (isAnswerableCall(msg))
+      reply(port, { kind: 'result', id: msg.id, ok: false, error: unknownMethodError(msg.method).toData() });
   };
   port.addEventListener('message', onMessage);
   port.start?.();

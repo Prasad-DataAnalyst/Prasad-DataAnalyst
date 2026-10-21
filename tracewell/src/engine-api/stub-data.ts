@@ -8,7 +8,9 @@ import {
   utf8,
   type Assumption,
   type ColumnSchema,
+  type CsvOptions,
   type ExportProfile,
+  type FormatOptions,
   type QuantityKind,
   type RuleDef,
   type RulePack,
@@ -66,6 +68,26 @@ export const SOURCE_FILE = {
   mediaType: 'text/csv',
 };
 
+/** The reading options the sniff detects for the canned file. */
+export const SOURCE_CSV_OPTIONS: Readonly<CsvOptions> = {
+  encoding: 'utf-8',
+  bomLength: 0,
+  delimiter: ',',
+  quote: '"',
+  skipLines: 0,
+  headerRows: 1,
+  decimalSeparator: '.',
+  thousandsSeparator: '',
+};
+
+/** Whether `options` read the canned file exactly as the sniff detected it. */
+export function isSourceOptions(options: FormatOptions): boolean {
+  if (options.format !== 'csv' || typeof options.csv !== 'object' || options.csv === null) return false;
+  const given = options.csv as unknown as Record<string, unknown>;
+  const keys = Object.keys(SOURCE_CSV_OPTIONS) as (keyof CsvOptions)[];
+  return Object.keys(given).length === keys.length && keys.every((k) => given[k] === SOURCE_CSV_OPTIONS[k]);
+}
+
 /** CSV physical line of a data row: the header is line 1. */
 export function sourceLine(rowId: number): number {
   return rowId + 2;
@@ -92,7 +114,12 @@ function measure(id: string, index: number, name: string, unit: string, quantity
 /** The columns as detection planned them, before any override. */
 export function sourceColumns(): ColumnSchema[] {
   const thp = measure('c3', 3, 'THP', 'psia', 'pressure_abs');
-  thp.nullMarkers = detection(['NA'], 'medium', 'null-marker-scan', 'The text "NA" appears in 2 of 10 rows of a numeric column.');
+  thp.nullMarkers = detection(
+    ['NA'],
+    'medium',
+    'null-marker-scan',
+    'The text "NA" appears in 2 of 10 rows of a numeric column.',
+  );
   const waterCut = measure('c4', 4, 'Water cut', '%', 'fraction');
   waterCut.unit = detection<string | null>(
     '%',
@@ -137,9 +164,16 @@ export const ENCODING_ASSUMPTION = {
   evidence: 'The file has no byte-order mark and every byte sequence is valid UTF-8.',
 };
 
-/** Every assumed detection of a dataset: the dataset-level encoding plus assumed column detections. */
-export function assumptionsOf(datasetId: string, columns: ColumnSchema[]): Assumption[] {
-  const list: Assumption[] = [{ datasetId, columnId: null, ...ENCODING_ASSUMPTION }];
+/**
+ * Every assumed detection of a dataset: the dataset-level encoding, unless the user confirmed it,
+ * plus the assumed column detections.
+ */
+export function assumptionsOf(
+  datasetId: string,
+  columns: ColumnSchema[],
+  confirmed: ReadonlySet<string>,
+): Assumption[] {
+  const list: Assumption[] = confirmed.has('encoding') ? [] : [{ datasetId, columnId: null, ...ENCODING_ASSUMPTION }];
   for (const c of columns) {
     for (const [property, d] of [
       ['type', c.type],
@@ -147,7 +181,15 @@ export function assumptionsOf(datasetId: string, columns: ColumnSchema[]): Assum
       ['unit', c.unit],
       ['nullMarkers', c.nullMarkers],
     ] as const) {
-      if (d.assumed) list.push({ datasetId, columnId: c.id, property, value: d.value, confidence: d.confidence, evidence: d.evidence });
+      if (d.assumed)
+        list.push({
+          datasetId,
+          columnId: c.id,
+          property,
+          value: d.value,
+          confidence: d.confidence,
+          evidence: d.evidence,
+        });
     }
   }
   return list;
@@ -175,7 +217,8 @@ export const RULE_PHYSICAL_RANGE: RuleDef = {
   appliesTo: { quantities: ['volume_rate', 'pressure_abs', 'fraction'] },
   check: { kind: 'physical_range' },
   message: '{count} physically impossible values in {column}',
-  explanation: 'A rate cannot be negative, an absolute pressure cannot be below zero and a fraction must lie within 0 to 100 %.',
+  explanation:
+    'A rate cannot be negative, an absolute pressure cannot be below zero and a fraction must lie within 0 to 100 %.',
   source: 'Physical limits of the quantity; unit definitions from NIST SP 811 (2008).',
 };
 
@@ -188,7 +231,8 @@ export const RULE_NULL_MARKER: RuleDef = {
   appliesTo: { all: true },
   check: { kind: 'null_marker' },
   message: '{count} values in {column} matched a null marker and were read as missing',
-  explanation: 'Text such as NA or -999 was read as a missing value. The original text is kept and shown in the cell lineage.',
+  explanation:
+    'Text such as NA or -999 was read as a missing value. The original text is kept and shown in the cell lineage.',
   source: 'Tracewell import rules (SAD section 7.2).',
 };
 
@@ -231,7 +275,14 @@ function unit(
 export const STUB_UNITS: readonly StubUnit[] = [
   unit('m3/d', 'cubic metre per day', 'volume_rate', 1 / 86_400, NIST),
   unit('bbl/d', 'barrel per day', 'volume_rate', 0.158987294928 / 86_400, BARREL),
-  unit('stb/d', 'stock-tank barrel per day (60 °F, 14.696 psia)', 'std_volume_rate', 0.158987294928 / 86_400, BARREL, 'std-60F-14.696psia'),
+  unit(
+    'stb/d',
+    'stock-tank barrel per day (60 °F, 14.696 psia)',
+    'std_volume_rate',
+    0.158987294928 / 86_400,
+    BARREL,
+    'std-60F-14.696psia',
+  ),
   unit('kPa', 'kilopascal (absolute)', 'pressure_abs', 1000, 'SI Brochure (2019)'),
   unit('bar', 'bar (absolute)', 'pressure_abs', 100_000, NIST),
   unit('psia', 'pound-force per square inch, absolute', 'pressure_abs', 6894.757293168361, NIST),
@@ -274,3 +325,6 @@ export const STUB_PROFILES: readonly ExportProfile[] = [
     description: 'RFC 7946 FeatureCollection in WGS84 longitude/latitude order.',
   },
 ];
+
+/** The product owner, as the real engine writes it into manifests. */
+export const STUB_OWNER = 'Prasad (Prasad-DataAnalyst)';

@@ -117,6 +117,23 @@ describe('sniffEncoding edge cases', () => {
     expect(d.value).toBe('utf-8');
   });
 
+  it('marks UTF-8 as assumed when its only evidence is a sequence cut off at the end', () => {
+    // A whole windows-1252 file ending in 'a-acute' (0xE1) without a final line break looks like
+    // ASCII plus the start of a three-byte UTF-8 sequence; read as UTF-8 that letter is lost.
+    const head = bytes('city\nBogot', [0xe1]);
+    const d = sniffEncoding(head);
+    expect(d).toMatchObject({ value: 'utf-8', bomLength: 0, confidence: 'medium', assumed: true });
+    expect(d.method).toBe('utf8-cut-off');
+    expect(d.evidence).toContain('offset 10');
+  });
+
+  it('keeps high confidence when complete multi-byte characters precede a cut-off one', () => {
+    const full = new TextEncoder().encode(`café ${EURO}`);
+    const d = sniffEncoding(full.subarray(0, full.length - 1));
+    expect(d).toMatchObject({ value: 'utf-8', confidence: 'high', assumed: false, method: 'utf8-valid' });
+    expect(d.evidence).toContain('1 multi-byte characters');
+  });
+
   it.each([
     ['an overlong two-byte form', [0xc0, 0x80]],
     ['an overlong three-byte form', [0xe0, 0x80, 0x80]],

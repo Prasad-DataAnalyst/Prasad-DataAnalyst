@@ -34,6 +34,15 @@ export interface StubDataset {
   excluded: Map<RowId, number>;
   steps: Step[];
   checked: boolean;
+  /** Dataset-level detections (such as encoding) the user confirmed through an override. */
+  confirmed: Set<string>;
+  /** The latest `detection.override` entry per overrideKey(), so only the latest can be reverted. */
+  latestOverride: Map<string, number>;
+}
+
+/** Key of one overridable property: of a column, or of the dataset when `columnId` is undefined. */
+export function overrideKey(columnId: ColumnId | undefined, property: string): string {
+  return `${columnId ?? '*'}|${property}`;
 }
 
 export interface ViewColumn {
@@ -58,6 +67,16 @@ export function rowCount(): number {
   return SOURCE_ROWS.length;
 }
 
+/**
+ * True for a real UTC instant in the canonical form. The pattern alone lets through 2026-02-30
+ * or 25:00, which Date.parse rolls over into another day rather than rejecting.
+ */
+function isUtcText(text: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text)) return false;
+  const t = Date.parse(text);
+  return Number.isFinite(t) && new Date(t).toISOString() === text;
+}
+
 /** Parses source text with the column's current detections, as the import would. */
 export function parseText(text: string, column: ColumnSchema): CellValue {
   if (text === '' || column.nullMarkers.value.includes(text)) return null;
@@ -67,17 +86,47 @@ export function parseText(text: string, column: ColumnSchema): CellValue {
     case 'integer':
     case 'number': {
       const n = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text.trim()) ? Number(text) : NaN;
-      return Number.isFinite(n) && (column.type.value === 'number' || Number.isInteger(n)) ? n : null;
+      // An integer is exact only up to 2^53; a larger one would be stored silently rounded.
+      return Number.isFinite(n) && (column.type.value === 'number' || Number.isSafeInteger(n)) ? n : null;
     }
     case 'boolean':
       return text === 'true' ? true : text === 'false' ? false : null;
     case 'date':
-      return /^\d{4}-\d{2}-\d{2}$/.test(text) ? { date: text } : null;
+      return isUtcText(`${text}T00:00:00.000Z`) ? { date: text } : null;
     case 'datetime':
-      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text) ? { datetime: text } : null;
+      return isUtcText(text) ? { datetime: text } : null;
     case 'geometry':
       return null;
   }
+}
+
+/** Whether a typed value can be stored in a column of `type`; null fits every type. */
+export function fitsType(v: CellValue, type: ColumnSchema['type']['value']): boolean {
+  if (v === null) return true;
+  switch (type) {
+    case 'string':
+      return typeof v === 'string';
+    case 'number':
+      return typeof v === 'number' && Number.isFinite(v);
+    case 'integer':
+      return Number.isSafeInteger(v);
+    case 'boolean':
+      return typeof v === 'boolean';
+    case 'date':
+      return isDateCell(v) && isUtcText(`${v.date}T00:00:00.000Z`);
+    case 'datetime':
+      return isDateTimeCell(v) && isUtcText(v.datetime);
+    case 'geometry':
+      return false;
+  }
+}
+
+/** The edited cells of a source column, as row and value. */
+export function editsOf(ds: StubDataset, columnId: ColumnId): { rowId: RowId; value: CellValue }[] {
+  const suffix = `:${columnId}`;
+  return [...ds.edits]
+    .filter(([key]) => key.endsWith(suffix))
+    .map(([key, value]) => ({ rowId: Number(key.slice(0, -suffix.length)), value }));
 }
 
 function sourceColumn(ds: StubDataset, column: ColumnSchema): ViewColumn {
@@ -86,10 +135,16 @@ function sourceColumn(ds: StubDataset, column: ColumnSchema): ViewColumn {
   return {
     schema: column,
     derived: false,
-    value: (rowId) => (ds.edits.has(key(rowId)) ? (ds.edits.get(key(rowId)) ?? null) : parseText(raw(rowId) ?? '', column)),
+    value: (rowId) =>
+      ds.edits.has(key(rowId)) ? (ds.edits.get(key(rowId)) ?? null) : parseText(raw(rowId) ?? '', column),
     edited: (rowId) => ds.edits.has(key(rowId)),
     raw,
   };
+}
+
+/** A source column's current value: the edit when there is one, else the parsed source text. */
+export function currentValue(ds: StubDataset, column: ColumnSchema, rowId: RowId): CellValue {
+  return sourceColumn(ds, column).value(rowId);
 }
 
 /** The working view: source data, edits and unit conversions, without excluded rows. */
@@ -103,15 +158,19 @@ export function workingView(ds: StubDataset): StubView {
   return { columns, rows };
 }
 
-/** The output view: the working view after filters and column selection. */
+/**
+ * The output view: the working view after filters and column selection, in step order. Filters
+ * test working columns, as validateStep checks them, so a filter still works on a column a
+ * selection dropped. A selection keeps the columns in the order it lists them.
+ */
 export function outputView(ds: StubDataset): StubView {
-  const view = workingView(ds);
-  let { columns, rows } = view;
+  const working = workingView(ds);
+  let { columns, rows } = working;
   for (const step of ds.steps) {
-    if (step.kind === 'filter') rows = rows.filter((r) => matches(step.predicate, columns, r));
+    if (step.kind === 'filter') rows = rows.filter((r) => matches(step.predicate, working.columns, r));
     if (step.kind === 'select_columns') {
-      const keep = new Set(step.columnIds);
-      columns = columns.filter((c) => keep.has(c.schema.id));
+      const current = columns;
+      columns = step.columnIds.flatMap((id) => current.filter((c) => c.schema.id === id));
     }
   }
   return { columns, rows };
@@ -124,7 +183,11 @@ export function viewOf(ds: StubDataset, stage: 'working' | 'output'): StubView {
 export function findColumn(view: StubView, columnId: ColumnId): ViewColumn {
   const column = view.columns.find((c) => c.schema.id === columnId);
   if (column === undefined) {
-    throw new EngineError('NOT_FOUND', `There is no column ${columnId} in this view.`, 'Choose a column shown in the grid.');
+    throw new EngineError(
+      'NOT_FOUND',
+      `There is no column ${columnId} in this view.`,
+      'Choose a column shown in the grid.',
+    );
   }
   return column;
 }
@@ -148,7 +211,12 @@ function withConversion(columns: ViewColumn[], step: Step & { kind: 'convert_uni
     schema: {
       ...source.schema,
       id: derivedId(source.schema.id, step.toUnit),
-      unit: detection<string | null>(step.toUnit, 'high', 'convert_unit', `Converted from ${method.from} by step ${step.id}.`),
+      unit: detection<string | null>(
+        step.toUnit,
+        'high',
+        'convert_unit',
+        `Converted from ${method.from} by step ${step.id}.`,
+      ),
       derivedFrom: { column: source.schema.id, step: step.id },
     },
     derived: true,
@@ -171,7 +239,11 @@ export function conversionMethod(column: ColumnSchema, toUnit: string): Conversi
   const from = findUnit(column.unit.value);
   const to = findUnit(toUnit);
   if (column.type.value !== 'number' && column.type.value !== 'integer') {
-    throw new EngineError('INVALID_INPUT', `${column.name} is not a numeric column.`, 'Choose a numeric column to convert.');
+    throw new EngineError(
+      'INVALID_INPUT',
+      `${column.name} is not a numeric column.`,
+      'Choose a numeric column to convert.',
+    );
   }
   if (from === undefined) {
     throw new EngineError(
@@ -181,7 +253,11 @@ export function conversionMethod(column: ColumnSchema, toUnit: string): Conversi
     );
   }
   if (to === undefined) {
-    throw new EngineError('UNIT_UNKNOWN', `The unit '${toUnit}' is not in the unit registry.`, 'Choose a unit from the list.');
+    throw new EngineError(
+      'UNIT_UNKNOWN',
+      `The unit '${toUnit}' is not in the unit registry.`,
+      'Choose a unit from the list.',
+    );
   }
   guardCompatible(from, to);
   return {
@@ -229,9 +305,19 @@ function guardCompatible(from: StubUnit, to: StubUnit): void {
 export function validateStep(ds: StubDataset, s: StepInput): void {
   const view = workingView(ds);
   switch (s.kind) {
-    case 'convert_unit':
+    case 'convert_unit': {
       conversionMethod(findColumn(view, s.columnId).schema, s.toUnit);
+      const target = derivedId(s.columnId, s.toUnit);
+      if (view.columns.some((c) => c.schema.id === target)) {
+        throw new EngineError(
+          'INVALID_INPUT',
+          `The column ${target} already exists.`,
+          'Use the existing converted column, or remove the step that made it first.',
+        );
+      }
+      if (s.mode === 'replace') guardReaders(ds, s.columnId);
       return;
+    }
     case 'filter':
       for (const id of predicateColumns(s.predicate)) findColumn(view, id);
       return;
@@ -240,7 +326,48 @@ export function validateStep(ds: StubDataset, s: StepInput): void {
         throw new EngineError('INVALID_INPUT', 'No columns were selected.', 'Select at least one column to keep.');
       }
       for (const id of s.columnIds) findColumn(view, id);
+      guardSelectable(ds, s.columnIds);
       return;
+  }
+}
+
+/**
+ * A replacing conversion removes its source column from the view. A filter or selection that
+ * reads that column would then match nothing or drop it without a word, so it is refused instead.
+ */
+function guardReaders(ds: StubDataset, columnId: ColumnId): void {
+  const reader = ds.steps.find((x) => x.kind !== 'convert_unit' && stepColumns(x).includes(columnId));
+  if (reader !== undefined) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      `Step ${reader.id} uses column ${columnId}, which converting it in replace mode would remove.`,
+      `Convert it as a new column instead, or remove step ${reader.id} first.`,
+    );
+  }
+}
+
+/** Selections apply in order, so a column an earlier selection left out cannot come back. */
+function guardSelectable(ds: StubDataset, columnIds: ColumnId[]): void {
+  const output = new Set(outputView(ds).columns.map((c) => c.schema.id));
+  const missing = columnIds.filter((id) => !output.has(id));
+  if (missing.length > 0) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      `An earlier column selection left out ${missing.join(', ')}, so the output would not contain it.`,
+      'Change or remove the earlier Columns step, then select the columns again.',
+    );
+  }
+}
+
+/** The columns a step reads. */
+export function stepColumns(s: StepInput): ColumnId[] {
+  switch (s.kind) {
+    case 'convert_unit':
+      return [s.columnId];
+    case 'filter':
+      return predicateColumns(s.predicate);
+    case 'select_columns':
+      return [...s.columnIds];
   }
 }
 

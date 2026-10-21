@@ -67,6 +67,13 @@
       "confidence": "high",
       "method": "header-brackets"
     },
+    {
+      "header": "Pressure (psia), avg",
+      "name": "Pressure, avg",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
     { "header": "Choke (in)", "name": "Choke", "unit": "in", "confidence": "high", "method": "header-brackets" },
     { "header": "Power (MW)", "name": "Power", "unit": "MW", "confidence": "high", "method": "header-brackets" },
     { "header": "DP (inH2O)", "name": "DP", "unit": "inH2O", "confidence": "high", "method": "header-brackets" },
@@ -173,6 +180,66 @@
     },
     { "header": "Hours on", "name": "Hours on", "unit": "h", "confidence": "low", "method": "header-word" },
     { "header": "psia", "name": "psia", "unit": "psia", "confidence": "low", "method": "header-word" },
+    {
+      "header": "Gas in (MMscf/d)",
+      "name": "Gas in",
+      "unit": "MMscf/d",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Flow in [m3/d]",
+      "name": "Flow in",
+      "unit": "m3/d",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Rate (bbl/d) in",
+      "name": "Rate in",
+      "unit": "bbl/d",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure (psia) (kPa)",
+      "name": "Pressure (psia)",
+      "unit": "kPa",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    { "header": "T (°C) (degC)", "name": "T (°C)", "unit": "degC", "confidence": "high", "method": "header-brackets" },
+    {
+      "header": "Pressure (psi)",
+      "name": "Pressure",
+      "unit": "psi",
+      "confidence": "medium",
+      "method": "header-brackets"
+    },
+    { "header": "BHP psi", "name": "BHP", "unit": "psi", "confidence": "medium", "method": "header-suffix" },
+    {
+      "header": "Pressure / psi",
+      "name": "Pressure",
+      "unit": "psi",
+      "confidence": "medium",
+      "method": "header-unit-row"
+    },
+    {
+      "header": "Pressure\uff08psia\uff09",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    {
+      "header": "Pressure (psia\u200b)",
+      "name": "Pressure",
+      "unit": "psia",
+      "confidence": "high",
+      "method": "header-brackets"
+    },
+    { "header": "Gas (mW)", "name": "Gas (mW)", "unit": null },
+    { "header": "P [mPa]", "name": "P [mPa]", "unit": null },
     { "header": "Pressure min", "name": "Pressure min", "unit": null },
     { "header": "HP separator pressure", "name": "HP separator pressure", "unit": null },
     { "header": "Gas MW", "name": "Gas MW", "unit": null },

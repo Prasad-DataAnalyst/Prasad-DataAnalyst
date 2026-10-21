@@ -201,6 +201,65 @@ describe('geometryProblems beyond the fixtures', () => {
     expect(codes(cyclic)).toEqual(['BAD_STRUCTURE']);
   });
 
+  it('stops at once on a collection that contains itself twice', () => {
+    // Bounded by the nesting limit alone, this walk would visit 2^33 members.
+    const cyclic: { type: string; geometries: unknown[] } = { type: 'GeometryCollection', geometries: [] };
+    cyclic.geometries.push(cyclic, cyclic);
+    const problems = geometryProblems(cyclic);
+    expect(problems.map(({ code, path }) => ({ code, path }))).toEqual([
+      { code: 'BAD_STRUCTURE', path: 'geometries[0]' },
+      { code: 'BAD_STRUCTURE', path: 'geometries[1]' },
+    ]);
+    expect(problems[0]?.message).toContain('contains itself');
+    expect(isGeometry(cyclic)).toBe(false);
+  });
+
+  describe('a member collection shared by reference (structured clone keeps sharing; JSON never has it)', () => {
+    /** `levels` collections, each holding the one below twice: 2^levels paths, levels + 1 objects. */
+    const shared = (levels: number, leaf: unknown): unknown => {
+      let g = leaf;
+      for (let i = 0; i < levels; i++) g = { type: 'GeometryCollection', geometries: [g, g] };
+      return g;
+    };
+
+    it('is checked once, so a deep shared tree is checked in linear time', () => {
+      const good = shared(32, { type: 'Point', coordinates: [1.8, 57.5] });
+      expect(geometryProblems(good)).toEqual([]);
+      expect(isGeometry(good)).toBe(true);
+    });
+
+    it('reports its problems once, at its first appearance', () => {
+      const bad = shared(32, { type: 'Point', coordinates: [NaN, 57.5] });
+      const problems = geometryProblems(bad);
+      expect(problems.map((p) => p.code)).toEqual(['NON_FINITE']);
+      expect(problems[0]?.path).toBe(`${Array.from({ length: 32 }, () => 'geometries[0]').join('.')}.coordinates`);
+      expect(isGeometry(bad)).toBe(false);
+    });
+
+    it('is checked again where it sits deeper, so the nesting limit still holds', () => {
+      const inner = shared(5, { type: 'Point', coordinates: [0, 0] });
+      let deep: unknown = inner;
+      for (let i = 0; i < 28; i++) deep = { type: 'GeometryCollection', geometries: [deep] };
+      // The first appearance is 6 levels deep, the second 34.
+      const g = { type: 'GeometryCollection', geometries: [inner, deep] };
+      expect(codes(inner)).toEqual([]);
+      expect(codes(g)).toContain('BAD_STRUCTURE');
+      expect(isGeometry(g)).toBe(false);
+    });
+  });
+
+  it('cuts a long type name between characters, never inside one', () => {
+    const type = `${'x'.repeat(39)}\u{1F600}${'y'.repeat(10)}`;
+    const message = geometryProblems({ type, coordinates: [1, 2] })[0]?.message ?? '';
+    expect(message).toContain(`"${'x'.repeat(39)}\u{1F600}…"`);
+    expect(message).not.toMatch(/\\u[dD][89abAB]/);
+  });
+
+  it('suggests the exact type name for a padded one', () => {
+    const message = geometryProblems({ type: ' Polygon​', coordinates: [] })[0]?.message ?? '';
+    expect(message).toContain('use "Polygon"');
+  });
+
   it('treats -0 and 0 as the same value when closing a ring', () => {
     expect(
       geometryProblems(
