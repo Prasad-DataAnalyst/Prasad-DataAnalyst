@@ -1,7 +1,7 @@
 /** Small building blocks shared by the views: modal frame, badges, reason prompt, downloads. */
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Confidence, Detection, EngineErrorData, Severity } from '@tw/model';
-import { ReasonDialog, useWorkbench } from '@tw/ui-shell';
+import { ReasonDialog } from '@tw/ui-shell';
 import { TID } from './testids';
 
 /** A native modal dialog: focus is trapped, Escape closes it, and it sits above everything else. */
@@ -95,17 +95,6 @@ export function ErrorNote(p: { error: EngineErrorData | null | undefined }): Rea
     <div className="tw-error-note" role="alert">
       <strong>{p.error.message}</strong>
       <div>{p.error.fix}</div>
-    </div>
-  );
-}
-
-export function ReadOnlyBanner(): React.JSX.Element | null {
-  const readOnly = useWorkbench((s) => s.project?.readOnly === true);
-  if (!readOnly) return null;
-  return (
-    <div className="tw-readonly-banner" role="alert" data-testid={TID.readOnlyBanner}>
-      <strong>Read-only project.</strong> Its integrity checks failed when it was opened, so nothing can be changed. See
-      the Issues panel for what failed. To keep working, import the original files into a new project.
     </div>
   );
 }

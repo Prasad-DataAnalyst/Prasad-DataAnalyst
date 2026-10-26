@@ -171,9 +171,6 @@ body {
   background: var(--tw-surface-2);
   overflow-x: auto;
 }
-.tw-tab-wrap {
-  display: flex;
-}
 .tw-app .tw-tab {
   border: 0;
   border-radius: 0;
@@ -183,10 +180,23 @@ body {
   background: var(--tw-surface);
   box-shadow: inset 0 -2px 0 var(--tw-accent);
 }
-.tw-app .tw-tab-close {
-  border: 0;
-  background: transparent;
-  padding: 0 6px;
+.tw-tab-close {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 3px;
+  border-radius: var(--tw-radius);
+  color: var(--tw-text-muted);
+}
+.tw-tab-close:hover {
+  background: var(--tw-surface-2);
+  color: var(--tw-text);
+}
+.tw-readonly-banner {
+  padding: 6px 12px;
+  background: var(--tw-error-bg);
+  color: var(--tw-text);
+  border-bottom: 1px solid var(--tw-error);
+  border-left: 4px solid var(--tw-error);
 }
 .tw-tabpanel {
   flex: 1;

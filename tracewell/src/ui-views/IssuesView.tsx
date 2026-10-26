@@ -7,7 +7,7 @@ import { useMemo, useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
 import type { DatasetId, Issue, IssueOccurrence, IssueQuery, RowId, Severity } from '@tw/model';
 import { formatCell, formatCount, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
-import { ErrorNote, ReadOnlyBanner, SeverityBadge, display, useReasonPrompt } from './common';
+import { ErrorNote, SeverityBadge, display, useReasonPrompt } from './common';
 import { attempt, datasetFor, useEngineQuery, useProject } from './hooks';
 import { gotoRow, openDialog } from './store';
 import { TID } from './testids';
@@ -89,7 +89,6 @@ function IssuesRegister(p: {
       className={`tw-view tw-issues tw-issues-${p.variant}`}
       data-testid={p.variant === 'view' ? TID.issuesView : TID.issuesPanel}
     >
-      {p.variant === 'view' && <ReadOnlyBanner />}
       <div className="tw-view-toolbar tw-filterbar" role="toolbar" aria-label="Issue filters">
         <div role="group" aria-label="Severity" className="tw-chips">
           {SEVERITIES.map((s) => {

@@ -219,6 +219,13 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
           <ProcessToolbar states={states} commands={commands} state={state} run={run} rulePackLabel={rulePackLabel} />
         </div>
         <ErrorBanner error={state.lastError} onDismiss={() => state.showError(null)} />
+        {state.project?.readOnly === true && (
+          <div className="tw-readonly-banner" role="alert" data-testid="tw-read-only">
+            <strong>Read-only project.</strong> Its integrity checks failed when it was opened, so nothing can be
+            changed and nothing was repaired. The Issues panel lists what failed. To keep working, import the original
+            files into a new project.
+          </div>
+        )}
         <main className="tw-main">
           <Group orientation="vertical" className="tw-group">
             <Panel defaultSize="72" minSize="30">
@@ -231,27 +238,36 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
                 <Panel defaultSize="60" minSize="30" className="tw-pane tw-centre" data-region="centre">
                   <div role="tablist" aria-label="Open views" className="tw-tabs">
                     {state.tabs.map((t) => (
-                      <div key={t.id} className="tw-tab-wrap">
-                        <button
-                          role="tab"
-                          id={`tab-${t.id}`}
-                          aria-selected={t.id === state.activeTabId}
-                          aria-controls={`panel-${t.id}`}
-                          tabIndex={t.id === state.activeTabId ? 0 : -1}
-                          className="tw-tab"
-                          onClick={() => state.activateTab(t.id)}
-                        >
-                          {t.title}
-                        </button>
-                        <button
-                          type="button"
+                      <button
+                        key={t.id}
+                        role="tab"
+                        id={`tab-${t.id}`}
+                        aria-selected={t.id === state.activeTabId}
+                        aria-controls={`panel-${t.id}`}
+                        aria-keyshortcuts="Delete"
+                        title={`${t.title} (Delete closes the tab)`}
+                        tabIndex={t.id === state.activeTabId ? 0 : -1}
+                        className="tw-tab"
+                        onClick={() => state.activateTab(t.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Delete') {
+                            e.preventDefault();
+                            state.closeTab(t.id);
+                          }
+                        }}
+                      >
+                        {t.title}
+                        <span
                           className="tw-tab-close"
-                          aria-label={`Close ${t.title}`}
-                          onClick={() => state.closeTab(t.id)}
+                          aria-hidden="true"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            state.closeTab(t.id);
+                          }}
                         >
                           ×
-                        </button>
-                      </div>
+                        </span>
+                      </button>
                     ))}
                   </div>
                   {activeTab !== null && Centre !== null ? (

@@ -7,7 +7,7 @@ import { useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
 import type { DatasetId, ExportProfileId, ExportProfileStatus, ExportResult } from '@tw/model';
 import { formatCount, useJob, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
-import { ErrorNote, Progress, ReadOnlyBanner, downloadBytes, formatBytes } from './common';
+import { ErrorNote, Progress, downloadBytes, formatBytes } from './common';
 import { attempt, datasetFor, useEngineQuery, useProject } from './hooks';
 import { exportKey, useViews, views } from './store';
 import { TID } from './testids';
@@ -17,7 +17,7 @@ const CHECK_LABELS: Record<string, string> = {
   'RB-ROWS': 'Row count matches',
   'RB-HEADER': 'Headers and units match',
   'RB-VALUES': 'Every value matches its column digest',
-  'RB-CSV-ENCODING': 'UTF-8 with byte-order mark',
+  'RB-CSV-ENCODING': 'UTF-8 without byte-order mark, same field count on every row',
   'RB-XLSX-TYPES': 'Cell types are right (numbers, dates, text)',
   'RB-XLSX-STRUCTURE': 'Workbook structure (sheets, frozen header, filter)',
   'RB-GEOJSON-STRUCTURE': 'Valid GeoJSON in WGS84',
@@ -44,7 +44,6 @@ function Centre(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.El
   const [baseName, setBaseName] = useState('');
   return (
     <div className="tw-view tw-export-centre" data-testid={TID.exportCentre}>
-      <ReadOnlyBanner />
       <div className="tw-view-toolbar">
         <strong className="tw-view-title">Export {summary?.name ?? datasetId}</strong>
         <span className="tw-view-meta">

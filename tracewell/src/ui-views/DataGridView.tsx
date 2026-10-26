@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { EngineClient } from '@tw/engine-api';
 import type { CellValue, ColumnId, DatasetId, RowWindow, RowWindowColumn, Severity } from '@tw/model';
 import { cellTooltip, formatCell, formatCount, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
-import { ReadOnlyBanner, useReasonPrompt } from './common';
+import { useReasonPrompt } from './common';
 import { attempt, datasetFor, useChangeVersion, useProject } from './hooks';
 import { RowPageCache } from './row-cache';
 import { openDialog, useViews, views } from './store';
@@ -210,14 +210,25 @@ function Grid(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.Elem
     startEditRef.current = startEdit;
   });
 
+  // Enter commits, and so does the editor losing focus when the reason prompt opens: commit once.
+  const committing = useRef(false);
   const commitEdit = async () => {
-    if (editing === null) return;
-    const r = rowAt(editing.row);
-    const c = columns[editing.col];
-    const text = editing.text;
+    if (editing === null || committing.current) return;
+    committing.current = true;
+    try {
+      await commitOnce(editing);
+    } finally {
+      committing.current = false;
+    }
+  };
+
+  const commitOnce = async (edit: { row: number; col: number; text: string }) => {
+    const r = rowAt(edit.row);
+    const c = columns[edit.col];
+    const text = edit.text;
     setEditing(null);
     pendingFocus.current = true;
-    if (r === undefined || c === undefined || text === editText(r.cells[editing.col] ?? null)) return;
+    if (r === undefined || c === undefined || text === editText(r.cells[edit.col] ?? null)) return;
     const why = await reason.ask(`Edit ${c.name}, ${r.locator}`);
     if (why === null) return;
     await attempt(() =>
@@ -255,7 +266,6 @@ function Grid(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.Elem
 
   return (
     <div className="tw-view tw-grid-view">
-      <ReadOnlyBanner />
       <div className="tw-view-toolbar" role="toolbar" aria-label="Data view">
         <div className="tw-segmented" role="radiogroup" aria-label="Stage" data-testid={TID.gridStage}>
           {(['working', 'output'] as const).map((s) => (
