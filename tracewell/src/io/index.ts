@@ -16,3 +16,5 @@ export type { ZipReader } from './zip-read';
 export { readZip } from './zip-read';
 
 export { checksumsFile, parseChecksumsFile } from './checksums';
+
+export { comparePaths } from './paths';
