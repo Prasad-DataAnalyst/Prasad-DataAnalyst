@@ -269,6 +269,7 @@ describe('model public API', () => {
         'canonicalJson',
         'canonicalNumber',
         'detection',
+        'isBelowDetectionLimit',
         'isDateCell',
         'isDateTimeCell',
         'isGeometryCell',

@@ -1,0 +1,364 @@
+{
+  "id": "tracewell.generic-dq",
+  "version": "0.1.0",
+  "title": "Generic data quality",
+  "source": "Tracewell built-in rules (SAD section 7.8)",
+  "rules": [
+    {
+      "id": "TW-DQ-001",
+      "version": "0.1.0",
+      "title": "Missing values",
+      "category": "completeness",
+      "severity": "warning",
+      "appliesTo": {
+        "all": true
+      },
+      "check": {
+        "kind": "not_null"
+      },
+      "message": "{count} rows have no value in {column}.",
+      "explanation": "These cells are empty or hold a value that means \"no data\" (a null marker). Check whether the values were never recorded or were lost when the file was produced. Values kept as text because they could not be read are reported separately and are not counted here.",
+      "source": "Completeness dimension of data quality (ISO 8000-8:2015)."
+    },
+    {
+      "id": "TW-DQ-002",
+      "version": "0.1.0",
+      "title": "Duplicate rows",
+      "category": "uniqueness",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "duplicate_rows"
+      },
+      "message": "{count} rows are exact copies of another row.",
+      "explanation": "Every value in these rows is identical to another row, so the same record appears more than once. Totals and averages will count it twice. Keep one copy by excluding the others, or accept them if repeats are expected.",
+      "source": "Uniqueness dimension of data quality (ISO 8000-8:2015)."
+    },
+    {
+      "id": "TW-DQ-003",
+      "version": "0.1.0",
+      "title": "Duplicate key (id and time)",
+      "category": "uniqueness",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "duplicate_key"
+      },
+      "message": "{count} rows share the same {detail} with another row.",
+      "explanation": "Two or more rows have the same identifier and the same time, for example two readings for one well on one day. Usually one is a correction or a re-sent value. Decide which to keep and exclude the other, recording why.",
+      "source": "Entity integrity: a key must identify one record (Codd, 1970)."
+    },
+    {
+      "id": "TW-DQ-004",
+      "version": "0.1.0",
+      "title": "Value does not fit the column type",
+      "category": "validity",
+      "severity": "warning",
+      "appliesTo": {
+        "all": true
+      },
+      "check": {
+        "kind": "type_conformance"
+      },
+      "message": "{count} values in {column} could not be read as {detail}; the original text is kept.",
+      "explanation": "These values could not be read as the column's type, for example text in a number column or an error cell from a spreadsheet. Nothing was guessed: the original text is kept and the cell is empty in calculations. Correct the value, or change the column type if the detection was wrong.",
+      "source": "Validity dimension of data quality (ISO 8000-8:2015)."
+    },
+    {
+      "id": "TW-DQ-005",
+      "version": "0.1.0",
+      "title": "Physically impossible value",
+      "category": "range",
+      "severity": "error",
+      "appliesTo": {
+        "roles": ["measure"]
+      },
+      "check": {
+        "kind": "physical_range"
+      },
+      "message": "{count} values in {column} are outside the physical limits of {unit} ({detail}).",
+      "explanation": "These values cannot occur in nature for this quantity: a temperature below absolute zero, a negative absolute pressure, a negative amount, or a fraction outside 0 to 1 (0 to 100 %). They usually come from a wrong unit, a sign error or a placeholder. Correct or exclude them.",
+      "source": "Absolute zero and SI definitions: BIPM, The International System of Units (SI Brochure), 9th edition, 2019."
+    },
+    {
+      "id": "TW-DQ-006",
+      "version": "0.1.0",
+      "title": "Null marker converted",
+      "category": "completeness",
+      "severity": "note",
+      "appliesTo": {
+        "all": true
+      },
+      "check": {
+        "kind": "null_marker"
+      },
+      "message": "{count} values in {column} were placeholder text or numbers ({detail}) and are treated as no value.",
+      "explanation": "Some systems write a special value such as -999.25 or N/A when there is no reading. These were recognised and treated as empty so they do not distort statistics. Check that the placeholder list is right for this file.",
+      "source": "Common null-value conventions, e.g. -999.25 in the Canadian Well Logging Society LAS standard."
+    },
+    {
+      "id": "TW-DQ-007",
+      "version": "0.1.0",
+      "title": "Below-detection-limit value kept as text",
+      "category": "validity",
+      "severity": "note",
+      "appliesTo": {
+        "all": true
+      },
+      "check": {
+        "kind": "below_detection_limit"
+      },
+      "message": "{count} values in {column} are below the detection limit ({detail}) and are kept as text, not zero.",
+      "explanation": "Laboratory results such as <0.5 or ND mean the amount was too small to measure, not that it was zero. They are kept exactly as written so that no one silently treats them as zero. Decide how they should be handled in the analysis.",
+      "source": "Helsel, D. R. (2012). Statistics for Censored Environmental Data Using Minitab and R, 2nd ed. Wiley."
+    },
+    {
+      "id": "TW-UNIT-001",
+      "version": "0.1.0",
+      "title": "Measure without a recognised unit",
+      "category": "units",
+      "severity": "warning",
+      "appliesTo": {
+        "roles": ["measure"]
+      },
+      "check": {
+        "kind": "unit_known"
+      },
+      "message": "{column} holds measurements but has no recognised unit.",
+      "explanation": "Numbers without a unit cannot be converted, compared or checked against physical limits. Set the unit of this column, or mark it as not a measurement.",
+      "source": "Units of measurement registry used by Tracewell (NIST SP 811, 2008)."
+    },
+    {
+      "id": "TW-UNIT-002",
+      "version": "0.1.0",
+      "title": "Mixed units in one column",
+      "category": "units",
+      "severity": "error",
+      "appliesTo": {
+        "types": ["string"]
+      },
+      "check": {
+        "kind": "unit_consistent"
+      },
+      "message": "{count} values in {column} use a different unit from the rest of the column ({detail}).",
+      "explanation": "The values in this column carry their own units, and not all the same one, for example 12 psi next to 83 kPa. Mixing units in one column leads to wrong totals and comparisons. Split or convert the values so the column has one unit.",
+      "source": "Units of measurement registry used by Tracewell (NIST SP 811, 2008)."
+    },
+    {
+      "id": "TW-TIME-001",
+      "version": "0.1.0",
+      "title": "Duplicate timestamps",
+      "category": "time",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "ts_duplicate"
+      },
+      "message": "{count} rows repeat a timestamp {detail}.",
+      "explanation": "The same time appears more than once for one asset (or in the whole file when there is no identifier column). A time series should have one value per time. Keep the right reading and exclude the others.",
+      "source": "Time-series data integrity: unique time index per series."
+    },
+    {
+      "id": "TW-TIME-002",
+      "version": "0.1.0",
+      "title": "Timestamps out of order",
+      "category": "time",
+      "severity": "note",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "ts_order"
+      },
+      "message": "{count} rows are earlier than the row before them {detail}.",
+      "explanation": "These rows go back in time compared with the previous row for the same asset. The file may have been sorted differently or put together from several exports. Calculations sort by time, so this is a note, but it can point to a merge problem.",
+      "source": "Time-series data integrity: monotonic time index."
+    },
+    {
+      "id": "TW-TIME-003",
+      "version": "0.1.0",
+      "title": "Gap in the time series",
+      "category": "time",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "ts_gap",
+        "factor": 3
+      },
+      "message": "{count} rows follow a gap longer than 3 times the usual step {detail}.",
+      "explanation": "The time from the previous reading is much longer than usual for this series, so readings may be missing (for example a shutdown or a lost connection). Check whether data is missing before calculating totals or averages.",
+      "source": "Gap detection against the median sampling interval (robust to outliers); k = 3."
+    },
+    {
+      "id": "TW-TIME-004",
+      "version": "0.1.0",
+      "title": "Time zone not specified",
+      "category": "time",
+      "severity": "note",
+      "appliesTo": {
+        "types": ["datetime"]
+      },
+      "check": {
+        "kind": "tz_specified"
+      },
+      "message": "The times in {column} have no time zone; UTC is assumed.",
+      "explanation": "The date-times do not say which time zone they are in, so they are read as UTC. If they are local time, set the time zone so they line up with other data.",
+      "source": "ISO 8601-1:2019 date and time representation."
+    },
+    {
+      "id": "TW-TIME-005",
+      "version": "0.1.0",
+      "title": "Ambiguous day and month order",
+      "category": "time",
+      "severity": "warning",
+      "appliesTo": {
+        "types": ["date", "datetime"]
+      },
+      "check": {
+        "kind": "date_ambiguous"
+      },
+      "message": "The dates in {column} could be day/month or month/day; {detail} was assumed.",
+      "explanation": "Some dates, such as 03/04/2026, read correctly either way round, and nothing in the file settled which order is meant. Check a few dates against the source and set the date format if the assumption is wrong.",
+      "source": "ISO 8601-1:2019 date and time representation."
+    },
+    {
+      "id": "TW-TIME-006",
+      "version": "0.1.0",
+      "title": "Flatline",
+      "category": "time",
+      "severity": "warning",
+      "appliesTo": {
+        "roles": ["measure"]
+      },
+      "check": {
+        "kind": "flatline",
+        "minRun": 6
+      },
+      "message": "{count} values in {column} are in runs of 6 or more identical readings.",
+      "explanation": "The same value repeats many times in a row. Real measurements nearly always vary a little, so this often means a stuck sensor or a value copied forward when the reading failed. Check the instrument before relying on these values.",
+      "source": "Common stuck-sensor test in process data quality (run of identical consecutive values)."
+    },
+    {
+      "id": "TW-TIME-007",
+      "version": "0.1.0",
+      "title": "Spike",
+      "category": "time",
+      "severity": "warning",
+      "appliesTo": {
+        "roles": ["measure"]
+      },
+      "check": {
+        "kind": "spike",
+        "window": 7,
+        "k": 3
+      },
+      "message": "{count} values in {column} are spikes compared with their neighbours.",
+      "explanation": "These values jump far away from the readings around them (Hampel filter: more than 3 robust standard deviations from the median of the 7 surrounding values). They may be real events or measurement errors. Review them before calculating statistics.",
+      "source": "Hampel, F. R. (1974). The influence curve and its role in robust estimation. JASA 69(346), 383-393; Pearson, R. K. (2002). Outliers in process modeling and identification. IEEE Trans. Control Systems Technology 10(1), 55-63."
+    },
+    {
+      "id": "TW-GEO-001",
+      "version": "0.1.0",
+      "title": "Invalid geometry",
+      "category": "spatial",
+      "severity": "error",
+      "appliesTo": {
+        "types": ["geometry"]
+      },
+      "check": {
+        "kind": "geometry_valid"
+      },
+      "message": "{count} geometries in {column} are not valid ({detail}).",
+      "explanation": "These shapes break the GeoJSON rules, for example a polygon ring that is not closed, a line with one point, a ring that crosses itself or a missing coordinate. GIS tools may reject them or draw them wrongly. Correct the geometry in the source.",
+      "source": "RFC 7946 The GeoJSON Format (2016); OGC Simple Features (ISO 19125-1)."
+    },
+    {
+      "id": "TW-GEO-002",
+      "version": "0.1.0",
+      "title": "Coordinates outside the valid range",
+      "category": "spatial",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "coord_range"
+      },
+      "message": "{count} rows have coordinates outside the valid range (longitude -180 to 180, latitude -90 to 90).",
+      "explanation": "Longitude must be between -180 and 180 degrees and latitude between -90 and 90 degrees in WGS84. Values outside these limits cannot be placed on a map and are often swapped or in another coordinate system.",
+      "source": "WGS84 geographic coordinates (EPSG:4326); RFC 7946 section 3.1.1."
+    },
+    {
+      "id": "TW-GEO-003",
+      "version": "0.1.0",
+      "title": "Probable latitude/longitude swap",
+      "category": "spatial",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "latlon_swapped"
+      },
+      "message": "{count} rows look as if latitude and longitude were swapped.",
+      "explanation": "The coordinates are impossible as given but valid when latitude and longitude are exchanged, or they fall outside the project area unless swapped. Check the source and correct the order.",
+      "source": "Common data-entry error in geographic coordinates."
+    },
+    {
+      "id": "TW-GEO-004",
+      "version": "0.1.0",
+      "title": "CRS undeclared or not WGS84",
+      "category": "spatial",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "crs_wgs84"
+      },
+      "message": "The coordinates are in {detail}, not WGS84.",
+      "explanation": "The coordinates are not in WGS84 longitude/latitude, or their system is not declared. They cannot be checked against longitude and latitude limits, and GeoJSON exports require WGS84. Coordinate transformation is not available in this edition.",
+      "source": "RFC 7946 section 4 (WGS84 required); EPSG Geodetic Parameter Dataset (IOGP)."
+    },
+    {
+      "id": "TW-GEO-005",
+      "version": "0.1.0",
+      "title": "Outside the project area",
+      "category": "spatial",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "within_area"
+      },
+      "message": "{count} rows are outside the project area.",
+      "explanation": "These locations fall outside the area set for the project. They may belong to another field or have wrong coordinates.",
+      "source": "Project area set by the user."
+    },
+    {
+      "id": "TW-GEO-006",
+      "version": "0.1.0",
+      "title": "Missing geometry",
+      "category": "spatial",
+      "severity": "warning",
+      "appliesTo": {
+        "types": ["geometry"]
+      },
+      "check": {
+        "kind": "geometry_present"
+      },
+      "message": "{count} features in {column} have no geometry.",
+      "explanation": "These features have no shape, so they cannot be shown on a map or used in spatial checks. Add the geometry in the source or exclude the features.",
+      "source": "RFC 7946 section 3.2 (Feature with null geometry)."
+    }
+  ]
+}

@@ -25,7 +25,7 @@ export type {
   Position,
   RawField,
 } from './values';
-export { isDateCell, isDateTimeCell, isGeometryCell, rawToText } from './values';
+export { isBelowDetectionLimit, isDateCell, isDateTimeCell, isGeometryCell, rawToText } from './values';
 
 export { canonicalCell, canonicalJson, canonicalNumber, utf8 } from './canonical';
 

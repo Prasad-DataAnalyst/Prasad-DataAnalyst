@@ -64,7 +64,7 @@ export const ALLOWED: Record<ModuleName, ModuleName[]> = {
   audit: ['model', 'io'],
   'ui-shell': ['model', 'engine-api'],
   ingest: ['model', 'io', 'detect', 'table', 'formats-csv', 'formats-xlsx', 'formats-geojson'],
-  rules: ['model', 'table', 'units', 'geo'],
+  rules: ['model', 'io', 'table', 'units', 'geo'],
   steps: ['model', 'table', 'units', 'geo'],
   export: ['model', 'io', 'table', 'units', 'geo', 'formats-csv', 'formats-xlsx', 'formats-geojson'],
   project: ['model', 'io'],

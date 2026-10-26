@@ -1,0 +1,222 @@
+{
+  "id": "tracewell.system",
+  "version": "0.1.0",
+  "title": "Tracewell system rules",
+  "source": "Tracewell built-in rules (SAD section 7.8)",
+  "rules": [
+    {
+      "id": "TW-IMP-001",
+      "version": "0.1.0",
+      "title": "Ragged row",
+      "category": "import",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "import_note",
+        "code": "TW-IMP-001"
+      },
+      "message": "{count} rows have more or fewer fields than the header.",
+      "explanation": "These lines have a different number of fields from the header. Missing fields are empty and extra fields are not imported. Check the source for unquoted delimiters or broken lines.",
+      "source": "RFC 4180 Common Format and MIME Type for CSV Files (2005)."
+    },
+    {
+      "id": "TW-IMP-002",
+      "version": "0.1.0",
+      "title": "Additional table found",
+      "category": "import",
+      "severity": "note",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "import_note",
+        "code": "TW-IMP-002"
+      },
+      "message": "The sheet holds more than one table; the first was imported ({detail}).",
+      "explanation": "Only the first table on the sheet was imported. The others are listed so you can import them separately.",
+      "source": "Tracewell import behaviour (SAD section 7.3)."
+    },
+    {
+      "id": "TW-IMP-003",
+      "version": "0.1.0",
+      "title": "Multi-row header flattened",
+      "category": "import",
+      "severity": "note",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "import_note",
+        "code": "TW-IMP-003"
+      },
+      "message": "A header spanning several rows was joined into single column names.",
+      "explanation": "The column names come from more than one header row (for example a name row and a units row) and were joined. Check the names and units in the preview.",
+      "source": "Tracewell import behaviour (SAD section 7.3)."
+    },
+    {
+      "id": "TW-IMP-004",
+      "version": "0.1.0",
+      "title": "Encoding assumed",
+      "category": "import",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "import_note",
+        "code": "TW-IMP-004"
+      },
+      "message": "The text encoding was assumed ({detail}).",
+      "explanation": "The file does not say which text encoding it uses, so one was assumed. If accented letters or symbols look wrong, choose another encoding.",
+      "source": "WHATWG Encoding Standard."
+    },
+    {
+      "id": "TW-IMP-005",
+      "version": "0.1.0",
+      "title": "Detections assumed",
+      "category": "import",
+      "severity": "note",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "import_note",
+        "code": "TW-IMP-005"
+      },
+      "message": "{count} settings were assumed during import.",
+      "explanation": "Tracewell could not be certain about some settings (such as a unit, a date format or the coordinate system) and applied the most likely value. Each one is listed and marked as assumed. Review them and change any that are wrong.",
+      "source": "Tracewell principle: never block, never hide (SAD section 2.1)."
+    },
+    {
+      "id": "TW-IMP-006",
+      "version": "0.1.0",
+      "title": "Partial import",
+      "category": "import",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "import_note",
+        "code": "TW-IMP-006"
+      },
+      "message": "Only part of the file was imported: it exceeds this edition's memory budget.",
+      "explanation": "The file is larger than this edition can hold in memory, so only the first part was imported. Results for this dataset cover only those rows. Open the file in the desktop edition to import all of it.",
+      "source": "Tracewell memory budget (SAD section 8.4)."
+    },
+    {
+      "id": "TW-PRJ-001",
+      "version": "0.1.0",
+      "title": "Original file checksum mismatch",
+      "category": "project",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "An original file in the project has changed: {detail}.",
+      "explanation": "An imported file no longer matches the checksum recorded when it was imported, so results may not come from the original data. The project is opened read-only.",
+      "source": "SHA-256, FIPS 180-4."
+    },
+    {
+      "id": "TW-PRJ-002",
+      "version": "0.1.0",
+      "title": "Audit chain broken",
+      "category": "project",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "The audit log does not verify: {detail}.",
+      "explanation": "An entry of the audit log was changed, removed or reordered after it was written. The history can no longer be trusted, so the project is opened read-only.",
+      "source": "Hash-chained audit log (SAD section 9.2)."
+    },
+    {
+      "id": "TW-PRJ-003",
+      "version": "0.1.0",
+      "title": "Replay digest mismatch",
+      "category": "project",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "Rebuilding the project from its originals and audit log gave different results: {detail}.",
+      "explanation": "The datasets rebuilt from the originals and the audit log do not match the digests saved with the project. The project is opened read-only.",
+      "source": "Deterministic replay (SAD section 8.1)."
+    },
+    {
+      "id": "TW-PRJ-004",
+      "version": "0.1.0",
+      "title": "Project entry checksum mismatch or unsupported format",
+      "category": "project",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "The project file is damaged or unsupported: {detail}.",
+      "explanation": "Part of the project file does not match its recorded checksum, or the file was written in a format version this edition cannot read. The project is opened read-only.",
+      "source": "Tracewell project format (SAD section 11)."
+    },
+    {
+      "id": "TW-EXP-001",
+      "version": "0.1.0",
+      "title": "Export read-back mismatch",
+      "category": "export",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "The exported file did not read back as written: {detail}.",
+      "explanation": "After writing the export, Tracewell read it back and found a difference. The export is not reported as successful.",
+      "source": "Tracewell export validation (SAD section 10)."
+    },
+    {
+      "id": "TW-EXP-002",
+      "version": "0.1.0",
+      "title": "Format limit substitution",
+      "category": "export",
+      "severity": "warning",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "A format limit applied to this export: {detail}.",
+      "explanation": "The destination format could not hold all of the data (for example Excel's row limit), so the export was adjusted as described. Nothing was dropped silently.",
+      "source": "Microsoft Excel specifications and limits."
+    },
+    {
+      "id": "TW-EXP-003",
+      "version": "0.1.0",
+      "title": "GeoJSON requires WGS84",
+      "category": "export",
+      "severity": "error",
+      "appliesTo": {
+        "dataset": true
+      },
+      "check": {
+        "kind": "system"
+      },
+      "message": "GeoJSON export needs WGS84 coordinates; this dataset is in {detail}.",
+      "explanation": "RFC 7946 GeoJSON must use WGS84 longitude/latitude. Coordinate transformation is not available in this edition, so this dataset cannot be exported as GeoJSON. Export it as CSV or Excel instead.",
+      "source": "RFC 7946 section 4."
+    }
+  ]
+}

@@ -129,3 +129,18 @@ export function rawToText(v: RawField): string {
   if (isErrorField(v)) return v.error;
   return '';
 }
+
+const BDL_WORDS: ReadonlySet<string> = new Set(['nd', 'n.d.', 'n/d', 'bdl', '<lod', '<loq', '<mdl', '<dl', '<rl']);
+
+/** '<' then a number, optionally followed by a unit: '<0.5', '< 0,5', '<1 ppm'. */
+const LESS_THAN_NUMBER = /^<\s*\d+(?:[.,]\d+)?(?:\s*[^\d\s<>][^<>]{0,15})?$/u;
+
+/**
+ * True for laboratory below-detection-limit text: '<0.5', '< 0.5', 'ND', 'n.d.', 'BDL', '<LOD'.
+ * Such values are kept as text and never read as zero (rule TW-DQ-007).
+ */
+export function isBelowDetectionLimit(text: string): boolean {
+  const t = text.trim();
+  if (t === '') return false;
+  return BDL_WORDS.has(t.toLowerCase()) || LESS_THAN_NUMBER.test(t);
+}
