@@ -176,7 +176,7 @@ function plus(expr: string, value: number): string {
   return value > 0 ? `${expr} + ${canonicalNumber(value)}` : `${expr} - ${canonicalNumber(-value)}`;
 }
 
-/** The formula as applyConversion evaluates it, left to right, e.g. 'y = x * 6894.757293168362 / 1000'. */
+/** The formula as applyConversion evaluates it, left to right, e.g. 'y = x * 6894.757293168361 / 1000'. */
 function formulaText(fromFactor: number, fromOffset: number, toFactor: number, toOffset: number): string {
   if (fromFactor === toFactor && fromOffset === toOffset) return 'y = x';
   const scaled = fromFactor === 1 ? 'x' : `x * ${canonicalNumber(fromFactor)}`;

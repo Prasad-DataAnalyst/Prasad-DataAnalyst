@@ -222,7 +222,7 @@ describe('conversionMethod', () => {
       fromOffset: 0,
       toFactor: 1000,
       toOffset: 0,
-      formula: 'y = x * 6894.757293168362 / 1000',
+      formula: 'y = x * 6894.757293168361 / 1000',
       registryVersion: '2026.1',
     });
     expect(m.source).toContain('psia: Pound-force per square inch');

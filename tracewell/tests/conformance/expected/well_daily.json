@@ -1,0 +1,137 @@
+{
+  "ruleCounts": {
+    "TW-DQ-003": 2,
+    "TW-TIME-001": 2,
+    "TW-IMP-005": 1,
+    "TW-TIME-004": 1
+  },
+  "outputRows": 92,
+  "exports": {
+    "excel": {
+      "rowCount": 92,
+      "viewDigest": "8b26b8bc94a82e45bfd0b396b6abef3bc49a92ebfb9b59dbe61e4a98ef4e6be5",
+      "columns": [
+        {
+          "header": "well_id",
+          "sha256": "b0330536187027d7114f04ce97a11b2fc33f993038d3445cfe71f77c8e21c0cc"
+        },
+        {
+          "header": "date",
+          "sha256": "adfee9817cec0a20a638fe54c3e225353ed6c8e6c7b627fd956fe95c4249c90f"
+        },
+        {
+          "header": "latitude",
+          "sha256": "228cc78fea62a016c48c1715d1c9e01fbeafc9360a4e96b930189a4bed102594"
+        },
+        {
+          "header": "longitude",
+          "sha256": "b980605905641bf1fe4c33df3c83452696240610649c071b98bb679227123d59"
+        },
+        {
+          "header": "Pressure [kPa]",
+          "sha256": "7db028ce97685748ebb324d20990192c14e4432adf627cabb7f301fa0c1f0ef2"
+        },
+        {
+          "header": "Temperature [degF]",
+          "sha256": "74e71631a01500b71fd4e26d06134673e6fdcf1ba8c96e74244adb5c510151bc"
+        },
+        {
+          "header": "Oil [bbl/d]",
+          "sha256": "0711c9d6870f406b2f163cc5a947a53ac4c178fc74b76b9e55dacb099912a2d5"
+        },
+        {
+          "header": "Gas [Mscf/d]",
+          "sha256": "86472502981d33d0b943bee5036d11d5e5a283c8c71af55b04727ebfbe047e9c"
+        },
+        {
+          "header": "Water cut [%]",
+          "sha256": "ca3144677f04b3474e1f1c58329ed108cf94936babc5afd003990f57139ce4a5"
+        }
+      ]
+    },
+    "csv": {
+      "rowCount": 92,
+      "viewDigest": "8b26b8bc94a82e45bfd0b396b6abef3bc49a92ebfb9b59dbe61e4a98ef4e6be5",
+      "columns": [
+        {
+          "header": "well_id",
+          "sha256": "b0330536187027d7114f04ce97a11b2fc33f993038d3445cfe71f77c8e21c0cc"
+        },
+        {
+          "header": "date",
+          "sha256": "adfee9817cec0a20a638fe54c3e225353ed6c8e6c7b627fd956fe95c4249c90f"
+        },
+        {
+          "header": "latitude",
+          "sha256": "228cc78fea62a016c48c1715d1c9e01fbeafc9360a4e96b930189a4bed102594"
+        },
+        {
+          "header": "longitude",
+          "sha256": "b980605905641bf1fe4c33df3c83452696240610649c071b98bb679227123d59"
+        },
+        {
+          "header": "Pressure [kPa]",
+          "sha256": "7db028ce97685748ebb324d20990192c14e4432adf627cabb7f301fa0c1f0ef2"
+        },
+        {
+          "header": "Temperature [degF]",
+          "sha256": "74e71631a01500b71fd4e26d06134673e6fdcf1ba8c96e74244adb5c510151bc"
+        },
+        {
+          "header": "Oil [bbl/d]",
+          "sha256": "0711c9d6870f406b2f163cc5a947a53ac4c178fc74b76b9e55dacb099912a2d5"
+        },
+        {
+          "header": "Gas [Mscf/d]",
+          "sha256": "86472502981d33d0b943bee5036d11d5e5a283c8c71af55b04727ebfbe047e9c"
+        },
+        {
+          "header": "Water cut [%]",
+          "sha256": "ca3144677f04b3474e1f1c58329ed108cf94936babc5afd003990f57139ce4a5"
+        }
+      ]
+    },
+    "geojson": {
+      "rowCount": 92,
+      "viewDigest": "8b26b8bc94a82e45bfd0b396b6abef3bc49a92ebfb9b59dbe61e4a98ef4e6be5",
+      "columns": [
+        {
+          "header": "well_id",
+          "sha256": "b0330536187027d7114f04ce97a11b2fc33f993038d3445cfe71f77c8e21c0cc"
+        },
+        {
+          "header": "date",
+          "sha256": "adfee9817cec0a20a638fe54c3e225353ed6c8e6c7b627fd956fe95c4249c90f"
+        },
+        {
+          "header": "latitude",
+          "sha256": "228cc78fea62a016c48c1715d1c9e01fbeafc9360a4e96b930189a4bed102594"
+        },
+        {
+          "header": "longitude",
+          "sha256": "b980605905641bf1fe4c33df3c83452696240610649c071b98bb679227123d59"
+        },
+        {
+          "header": "Pressure [kPa]",
+          "sha256": "7db028ce97685748ebb324d20990192c14e4432adf627cabb7f301fa0c1f0ef2"
+        },
+        {
+          "header": "Temperature [degF]",
+          "sha256": "74e71631a01500b71fd4e26d06134673e6fdcf1ba8c96e74244adb5c510151bc"
+        },
+        {
+          "header": "Oil [bbl/d]",
+          "sha256": "0711c9d6870f406b2f163cc5a947a53ac4c178fc74b76b9e55dacb099912a2d5"
+        },
+        {
+          "header": "Gas [Mscf/d]",
+          "sha256": "86472502981d33d0b943bee5036d11d5e5a283c8c71af55b04727ebfbe047e9c"
+        },
+        {
+          "header": "Water cut [%]",
+          "sha256": "ca3144677f04b3474e1f1c58329ed108cf94936babc5afd003990f57139ce4a5"
+        }
+      ]
+    }
+  }
+}

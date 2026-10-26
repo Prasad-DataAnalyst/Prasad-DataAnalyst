@@ -462,7 +462,7 @@
       "aliases": ["psi(a)", "psi abs", "psi absolute"],
       "quantity": "pressure_abs",
       "toSI": {
-        "factor": 6894.757293168362,
+        "factor": 6894.757293168361,
         "offset": 0
       },
       "exact": false,
@@ -475,7 +475,7 @@
       "aliases": ["lbf/in2", "lb/in2"],
       "quantity": "pressure_abs",
       "toSI": {
-        "factor": 6894.757293168362,
+        "factor": 6894.757293168361,
         "offset": 0
       },
       "exact": false,
@@ -514,7 +514,7 @@
       "aliases": ["psi(g)", "psi gauge"],
       "quantity": "pressure_gauge",
       "toSI": {
-        "factor": 6894.757293168362,
+        "factor": 6894.757293168361,
         "offset": 0
       },
       "exact": false,
@@ -540,7 +540,7 @@
       "aliases": ["psid", "psi(d)", "Δpsi"],
       "quantity": "pressure_diff",
       "toSI": {
-        "factor": 6894.757293168362,
+        "factor": 6894.757293168361,
         "offset": 0
       },
       "exact": false,
