@@ -8,4 +8,4 @@ export { PREVIEW_ROWS, previewSource } from './preview';
 export type { ImportContext, ImportOutcome, IngestNote } from './import';
 export { importSource, reparseColumn } from './import';
 export { applyOverrides } from './overrides';
-export { detectOptionsFor } from './options';
+export { cellParser, detectOptionsFor } from './options';

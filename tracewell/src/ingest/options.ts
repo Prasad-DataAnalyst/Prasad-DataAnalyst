@@ -41,3 +41,9 @@ export function rowParser(plans: readonly ColumnPlan[], options: FormatOptions):
 export function geometryColumnOf(plans: readonly ColumnPlan[]): string | null {
   return plans.find(isGeometryPlan)?.id ?? null;
 }
+
+/** Parses text a user typed into a cell with the column's own parser, as an import would. */
+export function cellParser(plan: ColumnPlan, options: FormatOptions): (text: string) => CellParseResult {
+  const parse = makeParser(plan, detectOptionsFor(options));
+  return (text) => parse(text);
+}
