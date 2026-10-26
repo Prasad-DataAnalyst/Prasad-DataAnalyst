@@ -1,0 +1,58 @@
+/* Design tokens (SAD section 15, UI-01..UI-04): neutral greys, one accent, status colours used only
+   for status, tabular figures for numbers, light/dark themes and compact/comfortable density. */
+.tw-app {
+  --tw-font: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --tw-font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+
+  --tw-bg: #f6f7f9;
+  --tw-surface: #ffffff;
+  --tw-surface-2: #eef0f3;
+  --tw-border: #d5d9df;
+  --tw-text: #1b2430;
+  --tw-text-muted: #5b6573;
+  --tw-accent: #0f4c81;
+  --tw-accent-text: #ffffff;
+  --tw-focus: #1f6fb5;
+  --tw-selected: #dce8f5;
+
+  --tw-ok: #1e7f4f;
+  --tw-warn: #9a6400;
+  --tw-error: #b3261e;
+  --tw-error-bg: #fbeceb;
+
+  --tw-font-size: 13px;
+  --tw-row-height: 24px;
+  --tw-gap: 6px;
+  --tw-pad: 6px;
+  --tw-radius: 3px;
+}
+
+.tw-app[data-theme='dark'] {
+  --tw-bg: #14181e;
+  --tw-surface: #1b2129;
+  --tw-surface-2: #232a33;
+  --tw-border: #343d48;
+  --tw-text: #e4e8ee;
+  --tw-text-muted: #9aa5b3;
+  --tw-accent: #5fa3e0;
+  --tw-accent-text: #0b1220;
+  --tw-focus: #7cb8ee;
+  --tw-selected: #22374d;
+  --tw-ok: #4cc38a;
+  --tw-warn: #e0a83a;
+  --tw-error: #f2786d;
+  --tw-error-bg: #3a1f1d;
+}
+
+.tw-app[data-density='comfortable'] {
+  --tw-font-size: 14px;
+  --tw-row-height: 32px;
+  --tw-gap: 10px;
+  --tw-pad: 10px;
+}
+
+.tw-num,
+.tw-app td,
+.tw-app [role='gridcell'] {
+  font-variant-numeric: tabular-nums;
+}

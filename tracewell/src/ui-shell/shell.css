@@ -1,0 +1,311 @@
+/* Window frame layout and controls. */
+.tw-app {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  height: 100vh;
+  background: var(--tw-bg);
+  color: var(--tw-text);
+  font: var(--tw-font-size) / 1.4 var(--tw-font);
+}
+.tw-app *:focus-visible {
+  outline: 2px solid var(--tw-focus);
+  outline-offset: -2px;
+}
+.tw-app button {
+  font: inherit;
+  color: inherit;
+  background: var(--tw-surface);
+  border: 1px solid var(--tw-border);
+  border-radius: var(--tw-radius);
+  padding: 2px 10px;
+  min-height: calc(var(--tw-row-height) - 2px);
+  cursor: pointer;
+}
+.tw-app button:disabled,
+.tw-app button[aria-disabled='true'] {
+  color: var(--tw-text-muted);
+  cursor: default;
+  opacity: 0.6;
+}
+.tw-app .tw-primary {
+  background: var(--tw-accent);
+  color: var(--tw-accent-text);
+  border-color: var(--tw-accent);
+}
+
+/* Menu bar */
+.tw-menubar {
+  display: flex;
+  background: var(--tw-surface);
+  border-bottom: 1px solid var(--tw-border);
+}
+.tw-menu {
+  position: relative;
+}
+.tw-app .tw-menubar-item {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.tw-app .tw-menubar-item[aria-expanded='true'] {
+  background: var(--tw-selected);
+}
+.tw-menu-popup {
+  position: absolute;
+  z-index: 20;
+  min-width: 240px;
+  background: var(--tw-surface);
+  border: 1px solid var(--tw-border);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.15);
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+.tw-app .tw-menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.tw-app .tw-menu-item:hover,
+.tw-app .tw-menu-item:focus-visible {
+  background: var(--tw-selected);
+}
+.tw-menu-item kbd {
+  color: var(--tw-text-muted);
+  font-family: var(--tw-font-mono);
+}
+
+/* Process toolbar */
+.tw-toolbar {
+  display: flex;
+  gap: var(--tw-gap);
+  align-items: center;
+  padding: var(--tw-pad);
+  background: var(--tw-surface-2);
+  border-bottom: 1px solid var(--tw-border);
+}
+.tw-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tw-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--tw-text-muted);
+}
+.tw-stage-active .tw-stage-dot {
+  background: var(--tw-accent);
+  border-color: var(--tw-accent);
+}
+.tw-stage-done .tw-stage-dot {
+  background: var(--tw-ok);
+  border-color: var(--tw-ok);
+}
+.tw-stage-attention .tw-stage-dot {
+  background: var(--tw-warn);
+  border-color: var(--tw-warn);
+}
+.tw-toolbar-spacer {
+  flex: 1;
+}
+.tw-toolbar-note {
+  color: var(--tw-text-muted);
+}
+
+/* Panes */
+.tw-main {
+  min-height: 0;
+}
+.tw-group {
+  height: 100%;
+}
+.tw-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--tw-surface);
+}
+.tw-pane-title {
+  margin: 0;
+  padding: 4px var(--tw-pad);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tw-text-muted);
+  border-bottom: 1px solid var(--tw-border);
+}
+.tw-separator {
+  width: 4px;
+  background: var(--tw-border);
+}
+.tw-separator-h {
+  width: auto;
+  height: 4px;
+}
+.tw-empty {
+  padding: 16px;
+  color: var(--tw-text-muted);
+}
+
+/* Tabs */
+.tw-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--tw-border);
+  background: var(--tw-surface-2);
+  overflow-x: auto;
+}
+.tw-tab-wrap {
+  display: flex;
+}
+.tw-app .tw-tab {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.tw-app .tw-tab[aria-selected='true'] {
+  background: var(--tw-surface);
+  box-shadow: inset 0 -2px 0 var(--tw-accent);
+}
+.tw-app .tw-tab-close {
+  border: 0;
+  background: transparent;
+  padding: 0 6px;
+}
+.tw-tabpanel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Tree */
+.tw-tree {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+}
+.tw-tree-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: var(--tw-row-height);
+  align-items: center;
+  padding-right: var(--tw-pad);
+  cursor: default;
+  white-space: nowrap;
+}
+.tw-tree-item[aria-selected='true'] {
+  background: var(--tw-selected);
+}
+.tw-level-1 {
+  padding-left: 8px;
+  font-weight: 600;
+}
+.tw-level-2 {
+  padding-left: 22px;
+}
+.tw-level-3 {
+  padding-left: 36px;
+}
+.tw-tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tw-tree-detail {
+  color: var(--tw-text-muted);
+  font-size: 0.9em;
+}
+
+/* Status bar */
+.tw-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 3px var(--tw-pad);
+  border-top: 1px solid var(--tw-border);
+  background: var(--tw-surface-2);
+  color: var(--tw-text-muted);
+  font-size: 12px;
+}
+.tw-offline {
+  color: var(--tw-text);
+}
+.tw-dot-ok {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tw-ok);
+}
+.tw-status-edition {
+  margin-left: auto;
+}
+
+/* Dialogs and banners */
+.tw-dialog {
+  min-width: 420px;
+  max-width: 640px;
+  border: 1px solid var(--tw-border);
+  border-radius: var(--tw-radius);
+  background: var(--tw-surface);
+  color: var(--tw-text);
+  padding: 16px;
+}
+.tw-dialog::backdrop {
+  background: rgb(0 0 0 / 0.35);
+}
+.tw-dialog-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.tw-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.tw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tw-field textarea,
+.tw-field input,
+.tw-field select {
+  font: inherit;
+  color: inherit;
+  background: var(--tw-surface);
+  border: 1px solid var(--tw-border);
+  border-radius: var(--tw-radius);
+  padding: 4px 6px;
+}
+.tw-hint {
+  margin: 4px 0 0;
+  color: var(--tw-text-muted);
+  font-size: 12px;
+}
+.tw-error-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--tw-error-bg);
+  color: var(--tw-error);
+  border-bottom: 1px solid var(--tw-error);
+}
+.tw-licences {
+  margin: 0;
+  padding-left: 18px;
+}
+.tw-shortcuts td {
+  padding: 2px 12px 2px 0;
+}
