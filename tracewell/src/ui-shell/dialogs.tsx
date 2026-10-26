@@ -133,6 +133,10 @@ export function AboutDialog(p: {
       <p>
         Tracewell Data Workbench {p.appVersion} ({p.edition === 'lite' ? 'Lite edition' : 'Desktop edition'})
       </p>
+      <p>
+        Release label: <strong>prototype</strong>. Results are verified by the built-in checks and read-back, but this
+        release has not yet been validated against field data.
+      </p>
       <p>Author and owner: {p.owner}</p>
       <p>Works offline. Your data never leaves this computer.</p>
       <h3>Open-source licences</h3>

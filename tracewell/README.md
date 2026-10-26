@@ -62,6 +62,38 @@ tests/        architecture, conformance, e2e, oracle
 scripts/      test-all.mjs, check-hygiene.mjs, check-licences.mjs
 ```
 
+## Using the workbench
+
+Start it with `npm run build && npm run preview` and open `http://127.0.0.1:4173`. On first start it
+asks for your name, which is recorded with every change. Then follow the process toolbar:
+
+1. **Import** (File › Import file…, Ctrl+I): the preview shows what was detected, how sure Tracewell
+   is, and every assumption. Reading settings and column types, units and roles can be changed there;
+   each change is logged with your reason.
+2. **Check** (Data › Run checks, Ctrl+K): the issues register groups findings by rule and column.
+3. **Review**: edit cells, accept or exclude rows, comment. Every decision needs a reason, and
+   Edit › Undo last change reverts with a compensating entry rather than deleting history. Select a
+   cell to see its full lineage in the Properties panel.
+4. **Process** and **Extract**: unit conversions with cited factors, filters and column selection,
+   all as logged, non-destructive steps.
+5. **Export** (Ctrl+E): Excel, CSV or GeoJSON packages, each read back and verified before it is
+   offered.
+
+Save the project (Ctrl+S) as a `.twp` file. Opening it (Ctrl+O) verifies every checksum and the audit
+chain and rebuilds the data from the original files; if anything fails, the project opens read-only.
+
+## Measured performance (slice 1)
+
+Recorded by `npm run test:slow` in the build container (headless Chromium, Lite edition):
+
+| Measure                                     | Result |
+| ------------------------------------------- | ------ |
+| Preview of a 1,000,000-row CSV (5 columns)  | 0.4 s  |
+| Full import of the same file                | 7.0 s  |
+| Data grid page fetch at the end of the file | 0.09 s |
+
+Each run writes its figures to `test-results/benchmarks.json`.
+
 ## Determinism and traceability
 
 The engine never reads the wall clock or a random source directly; both are injected. Nor does it

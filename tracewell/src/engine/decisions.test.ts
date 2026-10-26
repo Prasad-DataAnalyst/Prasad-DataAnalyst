@@ -184,7 +184,10 @@ describe('import settings', () => {
     ).rejects.toMatchObject({ code: 'REASON_REQUIRED' });
     const ds = await awaitJob<{ id: string; columnCount: number }>(
       engine,
-      await engine.importFile({ kind: 'bytes', bytes, name: 'semi.csv' }, { options: chosen, overrideReason: 'Testing the comma' }),
+      await engine.importFile(
+        { kind: 'bytes', bytes, name: 'semi.csv' },
+        { options: chosen, overrideReason: 'Testing the comma' },
+      ),
     );
     expect(ds.columnCount).toBe(repreview.columns.length);
     const overrides = (await engine.listAudit({ action: ['detection.override'] })).items;
