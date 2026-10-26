@@ -168,3 +168,28 @@ describe('decisions', () => {
     });
   });
 });
+
+describe('import settings', () => {
+  it('records a changed delimiter as its own detection.override entry after the detected import', async () => {
+    const engine = await withProject();
+    const bytes = fixtureBytes('csv_semicolon_decimalcomma_cp1252.csv');
+    const preview = await engine.sniff({ kind: 'bytes', bytes, name: 'semi.csv' });
+    const options = preview.sniff.options;
+    if (options.format !== 'csv') throw new Error('expected CSV');
+    const chosen = { ...options, csv: { ...options.csv, delimiter: ',' as const } };
+    const repreview = await engine.sniff({ kind: 'bytes', bytes, name: 'semi.csv' }, { options: chosen });
+    expect(repreview.columns.length).not.toBe(preview.columns.length);
+    await expect(
+      awaitJob(engine, await engine.importFile({ kind: 'bytes', bytes, name: 'semi.csv' }, { options: chosen })),
+    ).rejects.toMatchObject({ code: 'REASON_REQUIRED' });
+    const ds = await awaitJob<{ id: string; columnCount: number }>(
+      engine,
+      await engine.importFile({ kind: 'bytes', bytes, name: 'semi.csv' }, { options: chosen, overrideReason: 'Testing the comma' }),
+    );
+    expect(ds.columnCount).toBe(repreview.columns.length);
+    const overrides = (await engine.listAudit({ action: ['detection.override'] })).items;
+    expect(overrides).toEqual([
+      expect.objectContaining({ old: ';', new: ',', reason: 'Testing the comma', payload: { property: 'delimiter' } }),
+    ]);
+  });
+});

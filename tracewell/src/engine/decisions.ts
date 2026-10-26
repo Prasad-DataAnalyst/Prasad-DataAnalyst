@@ -260,7 +260,7 @@ function commentDraft(state: ProjectState, d: Extract<Decision, { kind: 'comment
   return { action: 'issue.comment', target: { datasetId: ds.id, issueId: d.issueId }, new: text };
 }
 
-function checkOverrideValue(property: OverridableProperty, value: JsonValue): void {
+export function checkOverrideValue(property: OverridableProperty, value: JsonValue): void {
   const bad = (what: string) =>
     new EngineError('INVALID_INPUT', `${JSON.stringify(value)} is not a valid ${what}.`, `Choose a valid ${what}.`, {
       property,

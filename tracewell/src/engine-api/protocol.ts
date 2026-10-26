@@ -18,6 +18,7 @@ import type {
   ExportRequest,
   FileInput,
   FileTarget,
+  FormatOptions,
   ImportPreview,
   ImportRequestOptions,
   IsoUtc,
@@ -76,8 +77,11 @@ export interface EngineApi {
   openProject(file: FileInput): Promise<JobHandle>;
   /** Result: SaveResult. */
   saveProject(target?: FileTarget): Promise<JobHandle>;
-  /** Reads at most PREVIEW_MAX_BYTES. */
-  sniff(file: FileInput): Promise<ImportPreview>;
+  /**
+   * Reads at most PREVIEW_MAX_BYTES. With `options`, the preview reads the file with those settings
+   * (a delimiter, encoding or header rows the user chose) instead of the detected ones.
+   */
+  sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview>;
   /** Result: DatasetSummary. */
   importFile(file: FileInput, o?: ImportRequestOptions): Promise<JobHandle>;
   getSchema(datasetId: DatasetId, stage?: 'working' | 'output'): Promise<TableSchema>;

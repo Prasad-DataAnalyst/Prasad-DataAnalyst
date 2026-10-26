@@ -13,6 +13,7 @@ import {
   type ExportRequest,
   type FileInput,
   type FileTarget,
+  type FormatOptions,
   type ImportPreview,
   type ImportRequestOptions,
   type Issue,
@@ -89,8 +90,8 @@ export class EngineClient implements EngineApi {
     return this.invoke('saveProject', target);
   }
 
-  sniff(file: FileInput): Promise<ImportPreview> {
-    return this.invoke('sniff', file);
+  sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview> {
+    return o === undefined ? this.invoke('sniff', file) : this.invoke('sniff', file, o);
   }
 
   importFile(file: FileInput, o?: ImportRequestOptions): Promise<JobHandle> {

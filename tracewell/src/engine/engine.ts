@@ -31,6 +31,7 @@ import {
   type ExportResult,
   type FileInput,
   type FileTarget,
+  type FormatOptions,
   type IdSource,
   type ImportPreview,
   type ImportRequestOptions,
@@ -67,14 +68,14 @@ import { suggestedFileName } from '@tw/project';
 import { BUILTIN_PACK_JSON, GENERIC_DQ, SYSTEM_RULES, rulePackRef } from '@tw/rules';
 import { conversionFor, describeStep, previewStep, validateStep } from '@tw/steps';
 import { REGISTRY_JSON, REGISTRY_VERSION } from '@tw/units';
-import { datasetOf, decisionDraft, requireReason, requireStepsBuild } from './decisions';
+import { checkOverrideValue, datasetOf, decisionDraft, requireReason, requireStepsBuild } from './decisions';
 import { toIssue } from './issues-state';
 import { JobManager } from './jobs';
 import { explainCell } from './lineage';
 import { datasetDigests, openProjectBytes, projectBytes } from './project-io';
 import { listIssues, listOccurrences, listUnits } from './queries';
 import { applyEntry, checkDrafts, overrideOutcome, type Prepared } from './reducer';
-import { emptyProject, newDatasetState, type DatasetState, type ProjectState } from './state';
+import { emptyProject, type DatasetState, type ProjectState } from './state';
 import { outputView, viewFor, workingView } from './views';
 import { columnStats, invalid, requireStage, rowWindow } from './windows';
 
@@ -84,6 +85,7 @@ const DEFAULT_MEMORY_BUDGET = 1_500_000_000;
 const DEFAULT_PROGRESS_INTERVAL_MS = 100;
 const FORMATS: SourceFormat[] = ['csv', 'tsv', 'xlsx', 'geojson'];
 const OVERRIDE_ORDER = ['name', 'type', 'unit', 'role', 'nullMarkers', 'dateFormat', 'timezone'] as const;
+const CSV_SETTINGS: OverridableProperty[] = ['encoding', 'delimiter', 'decimalSeparator', 'headerRows', 'skipLines'];
 const MEDIA_TYPES: Record<SourceFormat, string> = {
   csv: 'text/csv',
   tsv: 'text/tab-separated-values',
@@ -142,6 +144,25 @@ function requireProjectOptions(o: { name: string; profile: UserProfile; unitSyst
   if (o.unitSystem !== undefined && o.unitSystem !== 'SI' && o.unitSystem !== 'Oilfield') {
     throw invalid(`The unit system ${String(o.unitSystem)} is not supported.`, 'Choose SI or Oilfield.');
   }
+}
+
+/** Reading settings the user chose that differ from the detected ones, as single overrides. */
+function optionChanges(
+  detected: FormatOptions,
+  chosen: FormatOptions,
+): { columnId: undefined; property: OverridableProperty; value: JsonValue }[] {
+  const pick = (o: FormatOptions): Record<string, unknown> =>
+    (o.format === 'csv' || o.format === 'tsv' ? o.csv : o.format === 'xlsx' ? o.xlsx : {}) as unknown as Record<
+      string,
+      unknown
+    >;
+  const properties: OverridableProperty[] =
+    chosen.format === 'xlsx' ? ['sheet', 'tableIndex'] : chosen.format === 'geojson' ? [] : CSV_SETTINGS;
+  const a = pick(detected);
+  const b = pick(chosen);
+  return properties
+    .filter((p) => a[p] !== b[p])
+    .map((p) => ({ columnId: undefined, property: p, value: b[p] as JsonValue }));
 }
 
 function overrideList(
@@ -272,45 +293,56 @@ export class LocalEngine implements EngineImpl {
   // -------------------------------------------------------------------------------------------
   // Import
 
-  async sniff(file: FileInput): Promise<ImportPreview> {
-    const preview = await previewSource(await this.source(file), { memoryBudgetBytes: this.memoryBudgetBytes });
+  async sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview> {
+    const preview = await previewSource(await this.source(file), {
+      ...(o?.options === undefined ? {} : { options: o.options }),
+      memoryBudgetBytes: this.memoryBudgetBytes,
+    });
     const { spec: _spec, ...rest } = preview;
     return rest;
   }
 
+  /**
+   * Imports with the detected settings, then records each setting and column the user changed as
+   * its own `detection.override` entry, so the audit log shows what was detected and what was chosen.
+   */
   async importFile(file: FileInput, o?: ImportRequestOptions): Promise<JobHandle> {
     this.writable();
     const name = this.fileName(file);
     const overrides = overrideList(o?.columnOverrides ?? []);
-    const reason = overrides.length === 0 ? '' : requireReason(o?.overrideReason);
+    for (const x of overrides) checkOverrideValue(x.property, x.value);
     return this.jobs.start('import', (ctx) =>
       this.exclusive(async () => {
         const state = this.writable();
         ctx.progress({ phase: `Reading ${name}`, done: 0, unit: 'bytes' });
         const bytes = await this.readAll(file);
         const src = bytesSource(bytes, name);
-        const preview = await previewSource(src, {
-          ...(o?.options === undefined ? {} : { options: o.options }),
-          memoryBudgetBytes: this.memoryBudgetBytes,
-        });
-        // The spec is stored in the audit log, so the import reads exactly what a replay will read.
-        const spec = roundTrip({ ...preview.spec, datasetName: o?.name?.trim() || preview.spec.datasetName });
+        const budget = { memoryBudgetBytes: this.memoryBudgetBytes };
+        const detected = await previewSource(src, budget);
+        const chosen =
+          o?.options === undefined ? detected : await previewSource(src, { ...budget, options: o.options });
         const datasetId = `d${state.nextDataset}`;
+        const changes = [
+          ...optionChanges(detected.spec.options, chosen.spec.options),
+          ...overrides.map((x) => ({ ...x, columnId: x.columnId as ColumnId | undefined })),
+        ];
+        const reason = changes.length === 0 ? '' : requireReason(o?.overrideReason);
+        for (const x of overrides) {
+          if (!chosen.spec.columns.some((c) => c.id === x.columnId)) {
+            throw new EngineError(
+              'NOT_FOUND',
+              `The file has no column ${String(x.columnId)}.`,
+              'Choose a column shown in the preview.',
+            );
+          }
+        }
+        // The spec is stored in the audit log, so the import reads exactly what a replay will read.
+        const spec = roundTrip({ ...detected.spec, datasetName: o?.name?.trim() || detected.spec.datasetName });
         const outcome = await importSource(src, datasetId, spec, {
           signal: ctx.signal,
           memoryBudgetBytes: this.memoryBudgetBytes,
           onProgress: (p) => ctx.progress({ ...p, phase: `Importing ${name}` }),
         });
-        const decisions = overrides.map((x): Decision => ({ kind: 'override_detection', datasetId, ...x, reason }));
-        // Every override is checked against the new dataset before anything is written.
-        const scratch: ProjectState = {
-          ...state,
-          datasets: new Map([
-            ...state.datasets,
-            [datasetId, newDatasetState(datasetId, outcome.spec, outcome.dataset, outcome.notes, outcome.assumptions)],
-          ]),
-        };
-        for (const d of decisions) decisionDraft(scratch, d);
         ctx.checkCancelled();
 
         const fileId = outcome.sha256;
@@ -344,7 +376,17 @@ export class LocalEngine implements EngineImpl {
             { kind: 'system', component: 'detector' },
           );
         }
-        for (const d of decisions) await this.commitDraft(state, decisionDraft(state, d));
+        for (const x of changes) {
+          const d: Decision = {
+            kind: 'override_detection',
+            datasetId,
+            ...(x.columnId === undefined ? {} : { columnId: x.columnId }),
+            property: x.property,
+            value: x.value,
+            reason,
+          };
+          await this.commitDraft(state, decisionDraft(state, d));
+        }
         const ds = datasetOf(state, datasetId);
         this.changed(['project', 'datasets', 'schema', 'audit'], datasetId);
         this.log('info', `Imported ${name} as ${ds.dataset.schema.name}: ${ds.dataset.rowCount} rows.`);

@@ -234,7 +234,9 @@ class StubEngine implements EngineImpl {
     });
   }
 
-  async sniff(file: FileInput): Promise<ImportPreview> {
+  async sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview> {
+    // The stub has one canned reading of its file; other settings are refused, as on import.
+    requireSourceOptions(o?.options);
     return importPreview(this.project, fileName(file), `pv${++this.previewCount}`);
   }
 
