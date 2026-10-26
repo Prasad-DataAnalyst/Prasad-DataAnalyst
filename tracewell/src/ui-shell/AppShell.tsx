@@ -162,9 +162,18 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
     };
   }, [p.engine]);
 
-  // Global keyboard: F10 menu bar, F6 region cycling, command shortcuts.
+  // Global keyboard: F10 or a lone Alt for the menu bar, F6 region cycling, command shortcuts.
   useEffect(() => {
+    let altAlone = false;
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Alt' && altAlone) {
+        e.preventDefault();
+        focusMenuBar(rootRef.current ?? document);
+      }
+      altAlone = false;
+    };
     const onKey = (e: KeyboardEvent) => {
+      altAlone = e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey;
       if (e.key === 'F10') {
         e.preventDefault();
         focusMenuBar(rootRef.current ?? document);
@@ -182,7 +191,11 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, [run]);
 
   const states = stageStates(

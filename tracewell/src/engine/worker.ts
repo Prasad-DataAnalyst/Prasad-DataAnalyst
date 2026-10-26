@@ -21,6 +21,8 @@ const randomIds: IdSource = {
 };
 
 const env = import.meta.env as Record<string, string | undefined>;
+// The app names the worker 'budget=<bytes>' to lower the memory budget (the ?budget= URL parameter).
+const budget = /^budget=(\d+)$/.exec(self.name)?.[1];
 
 serve(
   new LocalEngine({
@@ -28,6 +30,7 @@ serve(
     owner: env['VITE_OWNER'] ?? '',
     clock: systemClock,
     ids: randomIds,
+    ...(budget === undefined ? {} : { memoryBudgetBytes: Number(budget) }),
   }),
   // The worker's global scope is the port: calls arrive on it and answers and events leave by it.
   self as unknown as MessagePortLike,

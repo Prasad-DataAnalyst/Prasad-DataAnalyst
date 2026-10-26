@@ -250,7 +250,7 @@ function Grid(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.Elem
     }
   };
 
-  const template = `56px ${columns.map((c) => (isNumeric(c) ? 'minmax(112px, 140px)' : 'minmax(120px, 200px)')).join(' ')}`;
+  const template = `56px ${columns.map((c) => (isNumeric(c) ? 'minmax(128px, 160px)' : 'minmax(128px, 200px)')).join(' ')}`;
   const outputRows = summary?.outputRowCount;
 
   return (
@@ -319,20 +319,20 @@ function Grid(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.Elem
                   onClick={() => select({ kind: 'column', datasetId, columnId: c.id })}
                 >
                   <span className="tw-colhead-text">{c.name}</span>
-                  {c.unit !== null && <span className="tw-colhead-unit">[{c.unit}]</span>}
+                  <span className="tw-colhead-meta">
+                    <span className="tw-colhead-unit">{c.unit === null ? c.type : `[${c.unit}]`}</span>
+                    {c.derived && <span className="tw-badge tw-badge-derived">converted</span>}
+                    {c.assumed && (
+                      <span
+                        className="tw-badge tw-badge-assumed"
+                        data-testid={TID.assumed}
+                        title="Some detections for this column are assumed"
+                      >
+                        assumed
+                      </span>
+                    )}
+                  </span>
                 </button>
-                <span className="tw-colhead-badges">
-                  {c.derived && <span className="tw-badge tw-badge-derived">conv</span>}
-                  {c.assumed && (
-                    <span
-                      className="tw-badge tw-badge-assumed"
-                      data-testid={TID.assumed}
-                      title="Some detections for this column are assumed"
-                    >
-                      assumed
-                    </span>
-                  )}
-                </span>
                 <button
                   type="button"
                   className="tw-colhead-menu"

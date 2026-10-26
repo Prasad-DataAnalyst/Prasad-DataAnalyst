@@ -1,8 +1,15 @@
 /* Window frame layout and controls. */
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+/* A column, not a fixed grid: the error banner comes and goes, and the main area takes the rest. */
 .tw-app {
-  display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
+  overflow: hidden;
   background: var(--tw-bg);
   color: var(--tw-text);
   font: var(--tw-font-size) / 1.4 var(--tw-font);
@@ -120,6 +127,7 @@
 
 /* Panes */
 .tw-main {
+  flex: 1;
   min-height: 0;
 }
 .tw-group {

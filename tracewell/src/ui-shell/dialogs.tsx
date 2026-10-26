@@ -57,6 +57,7 @@ export function ReasonDialog(p: {
           <textarea
             autoFocus
             rows={3}
+            data-testid="tw-reason-input"
             value={text}
             aria-describedby={hintId}
             aria-invalid={!valid}
