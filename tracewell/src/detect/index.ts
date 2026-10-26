@@ -14,3 +14,4 @@ export { makeParser } from './parser';
 export { parseNumber } from './numbers';
 export { parseDate, parseDateTime } from './dates';
 export { collectAssumptions } from './assumptions';
+export { unitQuantity } from './unit-lookup';

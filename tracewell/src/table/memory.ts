@@ -18,10 +18,13 @@ function positionBytes(p: Position): number {
   return ARRAY_BYTES + 8 * p.length;
 }
 
-function nestedBytes(v: Position | readonly unknown[]): number {
-  if (v.length === 0 || typeof v[0] === 'number') return positionBytes(v as Position);
+// Malformed geometries (a null ordinate, a bare number where a ring belongs) are imported as they
+// are so the geometry rules can report them; their estimate must never throw.
+function nestedBytes(v: unknown): number {
+  if (!Array.isArray(v)) return 8;
+  if (v.length === 0 || !v.some((item) => Array.isArray(item))) return positionBytes(v as Position);
   let n = ARRAY_BYTES + 8 * v.length;
-  for (const item of v) n += nestedBytes(item as Position | readonly unknown[]);
+  for (const item of v as readonly unknown[]) n += nestedBytes(item);
   return n;
 }
 
@@ -29,8 +32,8 @@ function nestedBytes(v: Position | readonly unknown[]): number {
 export function geometryBytes(g: Geometry): number {
   if (g.type === 'GeometryCollection') {
     let n = OBJECT_BYTES + ARRAY_BYTES;
-    for (const member of g.geometries) n += geometryBytes(member);
+    for (const member of Array.isArray(g.geometries) ? g.geometries : []) n += geometryBytes(member);
     return n;
   }
-  return OBJECT_BYTES + nestedBytes(g.coordinates);
+  return OBJECT_BYTES + nestedBytes((g as { coordinates?: unknown }).coordinates);
 }
