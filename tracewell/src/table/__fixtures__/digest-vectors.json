@@ -1,0 +1,70 @@
+{
+  "description": "Column digest vectors for SAD section 9.4 (normative). Consumed by src/table/digest.test.ts and by the Python oracle; both must reproduce every sha256 exactly.",
+  "conventions": [
+    "cells is JSON text holding the column's cell values in row order; parse it, then digest the parsed values.",
+    "Numbers denote the nearest IEEE 754 double; '-0.0' is negative zero. Python: json.loads(cells).",
+    "sha256 is SHA-256 over, for each cell C in order, len(utf8(C)) in ASCII decimal, ':', then utf8(C)."
+  ],
+  "vectors": [
+    {
+      "name": "empty column",
+      "cells": "[]",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strings with non-ASCII text",
+      "cells": "[\"a\",\"\",\"café\",\"😀 well\",\"a:b\",\"1\"]",
+      "sha256": "0631380c41c81864fcc4fda7f9df48cd22d49a1a10c3e133b74520564e19df48"
+    },
+    {
+      "name": "numbers in canonical form",
+      "cells": "[1,-2.5,0.1,1e+21,1e-07,123456789012,0.30000000000000004,5e-324]",
+      "sha256": "86f6dcb34642f999ece91ce7574eafe50bdbdfafc94b82116770bcae2d4ec474"
+    },
+    {
+      "name": "negative zero is written as zero",
+      "cells": "[-0.0]",
+      "sha256": "aa30660b75f2b8ec6c5481199cd36114d3711075e206eeb60f4435236ce95c23"
+    },
+    {
+      "name": "nulls and booleans",
+      "cells": "[null,true,false,null]",
+      "sha256": "6a03358d46d1ef0a7196bffd0995d0f2433ff96ae06321a9cc7e5c1376fa9b64"
+    },
+    {
+      "name": "dates",
+      "cells": "[{\"date\":\"2026-01-31\"},{\"date\":\"1999-12-31\"},null]",
+      "sha256": "dbf0aba1a0df0e012b76dd2ea1578da008f87d1fb7b3835edc4c75955cdfdc6c"
+    },
+    {
+      "name": "datetimes",
+      "cells": "[{\"datetime\":\"2026-01-01T06:30:00.000Z\"},{\"datetime\":\"1970-01-01T00:00:00.000Z\"}]",
+      "sha256": "cc927f078822605f96e891733dbf7c708dea79f3b937efebf43ba0a44c18161c"
+    },
+    {
+      "name": "geometries",
+      "cells": "[{\"geometry\":{\"type\":\"Point\",\"coordinates\":[-1.5,53.25]}},{\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[0,0],[1,1e+21]]}}]",
+      "sha256": "44b2cf1bfb25a0aac1345cfa59385f32f2cd653b8f0fa0909798a524a5c9080e"
+    },
+    {
+      "name": "the string 1",
+      "cells": "[\"1\"]",
+      "sha256": "37b3eb15fe54d59c778124599a4bfb2118637af00f5e9ef3dd003e1b967343a5"
+    },
+    {
+      "name": "the number 1",
+      "cells": "[1]",
+      "sha256": "fba71604532d8eb5902153eb212a5b889aab406cc0b531501b406439dfe7d39d"
+    },
+    {
+      "name": "ascending order",
+      "cells": "[\"a\",\"b\"]",
+      "sha256": "8a4b5085ede6eea3eacf1474ee4a29571714fe3627187298c4e6e5e49cce6d78"
+    },
+    {
+      "name": "descending order",
+      "cells": "[\"b\",\"a\"]",
+      "sha256": "a3fb35dadf91720e0104be2acaee164989e71fb605024bb361582ce7bfc3a88e"
+    }
+  ]
+}

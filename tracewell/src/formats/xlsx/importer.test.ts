@@ -38,18 +38,30 @@ describe('xlsxImporter.sniff', () => {
       lastCol: 5,
     });
     expect(sniff.sampleRows).toHaveLength(expected.rowCount);
-    expect(sniff.sampleRows[0]).toEqual({ srcLoc: 5, fields: ['A-01', { date: '2026-01-05' }, 2510.5, 2380, 182.5, 170] });
-    expect(sniff.sheets).toEqual([{ name: 'Well tests', state: 'visible', dimension: 'A1:F9', tables: [{ range: 'A2:F9', headerRows: 3 }] }]);
+    expect(sniff.sampleRows[0]).toEqual({
+      srcLoc: 5,
+      fields: ['A-01', { date: '2026-01-05' }, 2510.5, 2380, 182.5, 170],
+    });
+    expect(sniff.sheets).toEqual([
+      { name: 'Well tests', state: 'visible', dimension: 'A1:F9', tables: [{ range: 'A2:F9', headerRows: 3 }] },
+    ]);
     expect(sniff.notes.map((n) => n.code)).toEqual(['TW-IMP-003']);
-    expect(sniff.detections['headerRows']).toMatchObject({ value: 3, assumed: true });
+    expect(sniff.detections['headerRows']).toMatchObject({
+      value: 3,
+      confidence: 'high',
+      method: 'merged-or-units-header',
+    });
+    expect(sniff.detections['skipLines']).toMatchObject({ value: 1, confidence: 'high', assumed: false });
     expect(sniff.detections['sheet']).toMatchObject({ value: 'Well tests', confidence: 'high', assumed: false });
     expect(sniff.detections['date1904']).toMatchObject({ value: false, confidence: 'high' });
   });
 
-  it('marks the table choice as assumed and lists the other tables', async () => {
+  it('imports the first table and names the others in TW-IMP-002 rather than in an assumed detection', async () => {
     const sniff = await xlsxImporter.sniff(fixtureSource('xlsx_two_tables_one_sheet.xlsx'));
-    expect(sniff.detections['tableIndex']).toMatchObject({ value: 0, assumed: true });
+    expect(sniff.detections['tableIndex']).toMatchObject({ value: 0, assumed: false, method: 'first-table' });
+    expect(sniff.detections['tableIndex']?.evidence).toContain('A12:C15');
     expect(sniff.detections['tableRange']).toMatchObject({ value: 'A3:D8' });
+    expect(sniff.detections['skipLines']).toMatchObject({ value: 2, assumed: false });
     expect(sniff.notes.map((n) => [n.code, n.detail])).toEqual([['TW-IMP-002', { sheet: 'Report', range: 'A12:C15' }]]);
   });
 
@@ -62,8 +74,15 @@ describe('xlsxImporter.sniff', () => {
   it('falls back to a visible sheet without tables, and then to the first sheet', async () => {
     const noTables = handWorkbook({
       sheets: [
-        { name: 'Hidden', state: 'hidden', xml: '<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData>' },
-        { name: 'Note', xml: '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Just a note</t></is></c></row></sheetData>' },
+        {
+          name: 'Hidden',
+          state: 'hidden',
+          xml: '<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData>',
+        },
+        {
+          name: 'Note',
+          xml: '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Just a note</t></is></c></row></sheetData>',
+        },
       ],
     });
     const sniff = await xlsxImporter.sniff(bytesSource(noTables, 'notes.xlsx'));
@@ -71,10 +90,45 @@ describe('xlsxImporter.sniff', () => {
     expect(sniff.header).toEqual([]);
     expect(sniff.sampleRows).toEqual([]);
     expect(sniff.detections['tableIndex']).toMatchObject({ assumed: true, source: 'default' });
+    expect(sniff.detections['skipLines']).toMatchObject({ assumed: true, source: 'default' });
+    expect(sniff.detections['sheet']).toMatchObject({ value: 'Note', confidence: 'low', source: 'default' });
 
     const allHidden = handWorkbook({ sheets: [{ name: 'Only', state: 'hidden', xml: '<sheetData/>' }] });
     const fallback = await xlsxImporter.sniff(bytesSource(allHidden, 'hidden.xlsx'));
     expect(xlsxOptions(fallback.options).sheet).toBe('Only');
+  });
+
+  it('assumes the first sheet when several visible sheets hold a table', async () => {
+    const table = (name: string) => ({
+      name,
+      columns: [
+        { header: 'Well', kind: 'string' as const },
+        { header: 'Oil [bbl/d]', kind: 'number' as const },
+      ],
+      rows: [
+        ['A-01', 1],
+        ['A-02', 2],
+      ],
+      freezeHeader: true,
+      autoFilter: false,
+    });
+    const bytes = writeXlsx({
+      sheets: [table('North'), table('South')],
+      created: '2026-01-01T00:00:00.000Z',
+      creator: 'Prasad (Prasad-DataAnalyst)',
+    });
+    const sniff = await xlsxImporter.sniff(bytesSource(bytes, 'two-sheets.xlsx'));
+    expect(sniff.detections['sheet']).toMatchObject({
+      value: 'North',
+      confidence: 'medium',
+      assumed: true,
+      method: 'first-visible-sheet-with-table',
+    });
+    expect(sniff.detections['skipLines']).toMatchObject({ value: 0, confidence: 'high' });
+    expect(sniff.sheets?.map((s) => s.tables)).toEqual([
+      [{ range: 'A1:B3', headerRows: 1 }],
+      [{ range: 'A1:B3', headerRows: 1 }],
+    ]);
   });
 });
 
@@ -94,7 +148,15 @@ describe('xlsxImporter.read', () => {
     const src = fixtureSource('xlsx_two_tables_one_sheet.xlsx');
     const options: FormatOptions = {
       format: 'xlsx',
-      xlsx: { sheet: 'Report', tableIndex: 1, headerRowStart: 11, headerRowEnd: 11, dataStartRow: 12, firstCol: 0, lastCol: 2 },
+      xlsx: {
+        sheet: 'Report',
+        tableIndex: 1,
+        headerRowStart: 11,
+        headerRowEnd: 11,
+        dataStartRow: 12,
+        firstCol: 0,
+        lastCol: 2,
+      },
     };
     const out = await readAll(src, options);
     const rows = out.batches.flatMap((b) => b.rows);
@@ -138,7 +200,9 @@ describe('xlsxImporter.read', () => {
   it('hands out rows in batches of BATCH_ROWS', async () => {
     const rows = Array.from({ length: BATCH_ROWS + 5 }, (_, i) => [i]);
     const bytes = writeXlsx({
-      sheets: [{ name: 'Big', columns: [{ header: 'n', kind: 'integer' }], rows, freezeHeader: true, autoFilter: true }],
+      sheets: [
+        { name: 'Big', columns: [{ header: 'n', kind: 'integer' }], rows, freezeHeader: true, autoFilter: true },
+      ],
       created: '2026-10-21T00:00:00.000Z',
       creator: 'Prasad (Prasad-DataAnalyst)',
     });
@@ -163,12 +227,28 @@ describe('xlsxImporter.read', () => {
     expect((await rejection(readAll(src, csv))).code).toBe('INVALID_INPUT');
     const bad: FormatOptions = {
       format: 'xlsx',
-      xlsx: { sheet: 'IDs', tableIndex: 0, headerRowStart: 2, headerRowEnd: 1, dataStartRow: 3, firstCol: 0, lastCol: 2 },
+      xlsx: {
+        sheet: 'IDs',
+        tableIndex: 0,
+        headerRowStart: 2,
+        headerRowEnd: 1,
+        dataStartRow: 3,
+        firstCol: 0,
+        lastCol: 2,
+      },
     };
     expect((await rejection(readAll(src, bad))).code).toBe('INVALID_INPUT');
     const missing: FormatOptions = {
       format: 'xlsx',
-      xlsx: { sheet: 'Nope', tableIndex: 0, headerRowStart: 0, headerRowEnd: 0, dataStartRow: 1, firstCol: 0, lastCol: 2 },
+      xlsx: {
+        sheet: 'Nope',
+        tableIndex: 0,
+        headerRowStart: 0,
+        headerRowEnd: 0,
+        dataStartRow: 1,
+        firstCol: 0,
+        lastCol: 2,
+      },
     };
     expect((await rejection(readAll(src, missing))).code).toBe('NOT_FOUND');
   });
@@ -177,7 +257,15 @@ describe('xlsxImporter.read', () => {
     const src = fixtureSource('xlsx_merged_two_row_header_units.xlsx');
     const options: FormatOptions = {
       format: 'xlsx',
-      xlsx: { sheet: 'Well tests', tableIndex: 0, headerRowStart: 2, headerRowEnd: 3, dataStartRow: 5, firstCol: 2, lastCol: 3 },
+      xlsx: {
+        sheet: 'Well tests',
+        tableIndex: 0,
+        headerRowStart: 2,
+        headerRowEnd: 3,
+        dataStartRow: 5,
+        firstCol: 2,
+        lastCol: 3,
+      },
     };
     const out = await readAll(src, options);
     expect(out.batches.flatMap((b) => b.rows).map((r) => r.fields)).toEqual([

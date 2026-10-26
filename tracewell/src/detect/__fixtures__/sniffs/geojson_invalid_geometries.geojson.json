@@ -1,0 +1,142 @@
+{
+  "fixture": "geojson_invalid_geometries.geojson",
+  "format": "geojson",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "", "geometryColumn": true },
+  "header": [["asset_id", "kind", "note"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": ["A-01", "well", "valid point"],
+      "geometry": { "type": "Point", "coordinates": [1.7501, 57.4802] }
+    },
+    {
+      "srcLoc": 1,
+      "fields": ["A-02", "lease", "ring not closed"],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [1.79, 57.49],
+            [1.81, 57.49],
+            [1.81, 57.51],
+            [1.79, 57.51],
+            [1.795, 57.49]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["A-03", "platform", "valid polygon with a hole"],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [1.88, 57.58],
+            [1.92, 57.58],
+            [1.92, 57.620000000000005],
+            [1.88, 57.620000000000005],
+            [1.88, 57.58]
+          ],
+          [
+            [1.895, 57.595],
+            [1.895, 57.605000000000004],
+            [1.9049999999999998, 57.605000000000004],
+            [1.9049999999999998, 57.595],
+            [1.895, 57.595]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["A-04", "lease", "ring with three positions"],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [2, 57.7],
+            [2.01, 57.7],
+            [2, 57.7]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["A-05", "pipeline", "valid line"],
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [1.75, 57.48],
+          [1.82, 57.52],
+          [1.9, 57.6]
+        ]
+      }
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["A-06", "exclusion zone", "bow-tie ring crosses itself"],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [2.1, 57.8],
+            [2.12, 57.82],
+            [2.12, 57.8],
+            [2.1, 57.82],
+            [2.1, 57.8]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 6,
+      "fields": ["A-07", "pipeline", "line with one position"],
+      "geometry": { "type": "LineString", "coordinates": [[1.76, 57.49]] }
+    },
+    {
+      "srcLoc": 7,
+      "fields": ["A-08", "well", "longitude is null"],
+      "geometry": { "type": "Point", "coordinates": [null, 57.1] }
+    },
+    {
+      "srcLoc": 8,
+      "fields": ["A-09", "lease", "valid multipolygon"],
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [2.1900000000000004, 57.89],
+              [2.21, 57.89],
+              [2.21, 57.91],
+              [2.1900000000000004, 57.91],
+              [2.1900000000000004, 57.89]
+            ]
+          ],
+          [
+            [
+              [2.24, 57.89],
+              [2.26, 57.89],
+              [2.26, 57.91],
+              [2.24, 57.91],
+              [2.24, 57.89]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 9,
+      "fields": ["A-10", "lease", "multipolygon without coordinates"],
+      "geometry": { "type": "MultiPolygon", "coordinates": [] }
+    },
+    { "srcLoc": 10, "fields": ["A-11", "well", "geometry missing"], "geometry": null },
+    {
+      "srcLoc": 11,
+      "fields": ["A-12", "exclusion zone", "unknown geometry type"],
+      "geometry": { "type": "Circle", "coordinates": [1.8, 57.5], "radius": 500 }
+    }
+  ]
+}

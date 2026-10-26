@@ -1,0 +1,18 @@
+{
+  "fixture": "xlsx_date1904.xlsx",
+  "format": "xlsx",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["Well ID", "Date", "Oil (bbl/d)", "Water (bbl/d)"]],
+  "sampleRows": [
+    { "srcLoc": 2, "fields": ["NS-D05", { "date": "2026-01-31" }, 1650.4, 410.2] },
+    { "srcLoc": 3, "fields": ["NS-D05", { "date": "2026-02-01" }, 1647.9, 411.5] },
+    { "srcLoc": 4, "fields": ["NS-D05", { "date": "2026-02-02" }, 1645.1, 412.9] },
+    { "srcLoc": 5, "fields": ["NS-D05", { "date": "2026-02-03" }, 1642.8, 414] },
+    { "srcLoc": 6, "fields": ["NS-D05", { "date": "2026-02-04" }, 1640, 415.4] },
+    { "srcLoc": 7, "fields": ["NS-D05", { "date": "2026-02-05" }, 1637.6, 416.9] },
+    { "srcLoc": 8, "fields": ["NS-D05", { "date": "2026-02-06" }, 1634.9, 418.1] },
+    { "srcLoc": 9, "fields": ["NS-D05", { "date": "2026-02-07" }, 1632.3, 419.6] },
+    { "srcLoc": 10, "fields": ["NS-D05", { "date": "2026-02-08" }, 1629.8, 420.8] },
+    { "srcLoc": 11, "fields": ["NS-D05", { "date": "2026-02-09" }, 1627.1, 422.3] }
+  ]
+}

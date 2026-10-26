@@ -72,7 +72,12 @@ const SAMPLE = sheet(
 );
 
 describe('writeXlsx then openWorkbook', () => {
-  const bytes = writeXlsx(book([SAMPLE, sheet([{ header: 'Note', kind: 'string' }], [['x']], { name: 'Log', freezeHeader: false, autoFilter: false })]));
+  const bytes = writeXlsx(
+    book([
+      SAMPLE,
+      sheet([{ header: 'Note', kind: 'string' }], [['x']], { name: 'Log', freezeHeader: false, autoFilter: false }),
+    ]),
+  );
   const workbook = openWorkbook(bytes);
   const data = workbook.readSheet('Data');
 
@@ -157,7 +162,14 @@ describe('determinism', () => {
       { header: 'v', kind: 'number' },
     ];
     const fromGenerator = writeXlsx(book([sheet(columns, [], { rows: rows() })]));
-    const fromArray = writeXlsx(book([sheet(columns, [['a', 1], ['b', 2]])]));
+    const fromArray = writeXlsx(
+      book([
+        sheet(columns, [
+          ['a', 1],
+          ['b', 2],
+        ]),
+      ]),
+    );
     expect(fromGenerator).toEqual(fromArray);
   });
 });
@@ -176,7 +188,14 @@ describe('text that XML cannot carry as is', () => {
       ']]> <![CDATA[ x ]]>',
       '',
     ];
-    const bytes = writeXlsx(book([sheet([{ header: 'Text', kind: 'string' }], texts.map((t) => [t]))]));
+    const bytes = writeXlsx(
+      book([
+        sheet(
+          [{ header: 'Text', kind: 'string' }],
+          texts.map((t) => [t]),
+        ),
+      ]),
+    );
     expect(dataValues(openWorkbook(bytes).readSheet('Data'), 1).map((r) => r[0])).toEqual(texts);
   });
 
@@ -213,9 +232,9 @@ describe('invalid input', () => {
   });
 
   it('refuses duplicate sheet names regardless of case, and a book without sheets', () => {
-    expect(engineError(() => writeXlsx(book([sheet(columns, []), sheet(columns, [], { name: 'DATA' })]))).message).toContain(
-      'twice',
-    );
+    expect(
+      engineError(() => writeXlsx(book([sheet(columns, []), sheet(columns, [], { name: 'DATA' })]))).message,
+    ).toContain('twice');
     expect(engineError(() => writeXlsx(book([]))).code).toBe('INVALID_INPUT');
   });
 
@@ -246,7 +265,9 @@ describe('invalid input', () => {
 
   it('refuses rows of the wrong length, dates before 1900 and impossible widths', () => {
     expect(engineError(() => writeXlsx(book([sheet(columns, [[1, 2]])]))).code).toBe('INVALID_INPUT');
-    const early = engineError(() => writeXlsx(book([sheet([{ header: 'd', kind: 'date' }], [[{ date: '1850-06-01' }]])])));
+    const early = engineError(() =>
+      writeXlsx(book([sheet([{ header: 'd', kind: 'date' }], [[{ date: '1850-06-01' }]])])),
+    );
     expect(early.message).toContain('1850-06-01');
     expect(engineError(() => writeXlsx(book([sheet([{ header: 'n', kind: 'number', width: 0 }], [])]))).code).toBe(
       'INVALID_INPUT',
@@ -269,10 +290,17 @@ const MS_1900_03_01 = Date.parse('1900-03-01T00:00:00.000Z');
 const MS_9999_12_31 = Date.parse('9999-12-31T23:59:59.999Z');
 const DAY = 86_400_000;
 
+// Long text reaches Excel's limit of 32,767 UTF-16 units: ASCII exactly, and any code points
+// (at most two units each) nearly.
+const longText = fc.oneof(
+  fc.string({ unit: 'binary-ascii', minLength: 32_000, maxLength: 32_767 }),
+  fc.string({ unit: 'binary', minLength: 16_000, maxLength: 16_383 }),
+);
+
 const text = fc.oneof(
   { weight: 8, arbitrary: fc.string({ unit: 'grapheme', maxLength: 40 }) },
   { weight: 2, arbitrary: fc.string({ unit: 'binary', maxLength: 40 }) },
-  { weight: 1, arbitrary: fc.string({ unit: 'binary', minLength: 16_000, maxLength: 16_383 }) },
+  { weight: 1, arbitrary: longText },
 );
 
 const valueOf: Record<XlsxColumnKind, fc.Arbitrary<XlsxWriteValue>> = {
@@ -290,15 +318,13 @@ const valueOf: Record<XlsxColumnKind, fc.Arbitrary<XlsxWriteValue>> = {
 
 const KIND_LIST: XlsxColumnKind[] = ['string', 'number', 'integer', 'boolean', 'date', 'datetime'];
 
-const table = fc
-  .array(fc.constantFrom(...KIND_LIST), { minLength: 1, maxLength: 6 })
-  .chain((kinds) =>
-    fc.record({
-      kinds: fc.constant(kinds),
-      headers: fc.tuple(...kinds.map(() => fc.string({ unit: 'grapheme', maxLength: 20 }))),
-      rows: fc.array(fc.tuple(...kinds.map((k) => fc.option(valueOf[k], { freq: 5 }))), { maxLength: 15 }),
-    }),
-  );
+const table = fc.array(fc.constantFrom(...KIND_LIST), { minLength: 1, maxLength: 6 }).chain((kinds) =>
+  fc.record({
+    kinds: fc.constant(kinds),
+    headers: fc.tuple(...kinds.map(() => fc.string({ unit: 'grapheme', maxLength: 20 }))),
+    rows: fc.array(fc.tuple(...kinds.map((k) => fc.option(valueOf[k], { freq: 5 }))), { maxLength: 15 }),
+  }),
+);
 
 describe('property: random tables', () => {
   it('round-trip through writeXlsx and openWorkbook with equal canonical cells', () => {

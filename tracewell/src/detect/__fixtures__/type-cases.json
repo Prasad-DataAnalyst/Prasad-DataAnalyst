@@ -1,0 +1,206 @@
+{
+  "$comment": "Table-driven type inference cases for src/detect/types.test.ts. 'values' are raw reader fields; a case with 'header' runs through detectColumns so header hints apply.",
+  "cases": [
+    {
+      "name": "decimal comma numbers",
+      "values": ["1,5", "2,25"],
+      "options": { "decimalSeparator": ",", "thousandsSeparator": "" },
+      "expect": { "type": "number", "confidence": "high" }
+    },
+    {
+      "name": "thousands and decimal comma",
+      "values": ["12.444,3", "14.840,3", "9.875"],
+      "options": { "decimalSeparator": ",", "thousandsSeparator": "." },
+      "expect": { "type": "number", "confidence": "high" }
+    },
+    {
+      "name": "leading-zero identifier stays text",
+      "values": ["0012"],
+      "expect": { "type": "string", "confidence": "high" }
+    },
+    {
+      "name": "leading zeros among plain numbers",
+      "values": ["12", "0013", "14"],
+      "expect": { "type": "string", "confidence": "high" }
+    },
+    {
+      "name": "whole numbers",
+      "values": ["154230", "160480", "-3"],
+      "expect": { "type": "integer", "confidence": "high" }
+    },
+    {
+      "name": "a written decimal point makes a number",
+      "values": ["1860.0", "2100"],
+      "expect": { "type": "number", "confidence": "high" }
+    },
+    {
+      "name": "native spreadsheet numbers",
+      "values": [3520.5, 3612],
+      "expect": { "type": "number", "confidence": "high" }
+    },
+    {
+      "name": "digits beyond 2^53 are an identifier",
+      "values": ["12345678901234567890"],
+      "expect": { "type": "string", "confidence": "high" }
+    },
+    {
+      "name": "ISO date",
+      "values": ["2026-01-31"],
+      "expect": { "type": "date", "confidence": "high", "dateFormat": "iso", "dateFormatConfidence": "high" }
+    },
+    {
+      "name": "ambiguous day/month alone",
+      "values": ["03/04/2026"],
+      "expect": {
+        "type": "date",
+        "confidence": "high",
+        "dateFormat": "dmy",
+        "dateFormatConfidence": "low",
+        "dateFormatAssumed": true
+      }
+    },
+    {
+      "name": "a day above 12 first decides dmy",
+      "values": ["03/04/2026", "25/04/2026"],
+      "expect": {
+        "type": "date",
+        "confidence": "high",
+        "dateFormat": "dmy",
+        "dateFormatConfidence": "high",
+        "dateFormatAssumed": false
+      }
+    },
+    {
+      "name": "a day above 12 second decides mdy",
+      "values": ["02/03/2026", "02/25/2026"],
+      "expect": { "type": "date", "dateFormat": "mdy", "dateFormatConfidence": "high" }
+    },
+    {
+      "name": "dotted day-first dates",
+      "values": ["06.01.2026", "15.01.2026"],
+      "options": { "decimalSeparator": ",", "thousandsSeparator": "." },
+      "expect": { "type": "date", "dateFormat": "dmy", "dateFormatConfidence": "high" }
+    },
+    {
+      "name": "year/month/day with slashes",
+      "values": ["2026/02/02", "2026/02/13"],
+      "expect": { "type": "date", "dateFormat": "ymd-slash", "dateFormatConfidence": "high" }
+    },
+    {
+      "name": "UTC datetime",
+      "values": ["2026-01-31T10:00:00Z"],
+      "expect": {
+        "type": "datetime",
+        "confidence": "high",
+        "dateFormat": "iso",
+        "timezone": "utc",
+        "timezoneAssumed": false
+      }
+    },
+    {
+      "name": "offset datetime",
+      "values": ["2026-01-31T10:00:00+01:00", "2026-01-31T11:00:00-0330"],
+      "expect": { "type": "datetime", "timezone": "offset", "timezoneAssumed": false }
+    },
+    {
+      "name": "naive datetime",
+      "values": ["2026-01-31T10:00:00"],
+      "expect": { "type": "datetime", "confidence": "high", "timezone": "naive-assumed-utc", "timezoneAssumed": true }
+    },
+    {
+      "name": "space-separated datetime without seconds",
+      "values": ["2026-02-01 08:15", "2026-02-02 09:40"],
+      "expect": { "type": "datetime", "timezone": "naive-assumed-utc", "timezoneAssumed": true }
+    },
+    {
+      "name": "TRUE/FALSE",
+      "values": ["TRUE", "FALSE", "true"],
+      "expect": { "type": "boolean", "confidence": "high" }
+    },
+    { "name": "yes/no", "values": ["yes", "No"], "expect": { "type": "boolean", "confidence": "high" } },
+    {
+      "name": "1/0 without a header hint is integer",
+      "values": ["1", "0", "1"],
+      "expect": { "type": "integer", "confidence": "high" }
+    },
+    {
+      "name": "1/0 under a yes/no header is boolean",
+      "header": "is_active",
+      "values": ["1", "0", "1"],
+      "expect": { "type": "boolean", "assumed": true }
+    },
+    {
+      "name": "Excel serial with a date header",
+      "header": "Install date",
+      "values": [45292, 45444, "45292"],
+      "expect": { "type": "date", "assumed": true, "dateFormat": "excel-serial", "dateFormatConfidence": "high" }
+    },
+    {
+      "name": "Excel serial with time under a date header",
+      "header": "Read time",
+      "values": [45292.5, 45293.25],
+      "expect": { "type": "datetime", "dateFormat": "excel-serial", "timezone": "naive-assumed-utc" }
+    },
+    {
+      "name": "serial-sized numbers without a date header stay numbers",
+      "header": "Volume",
+      "values": [45292, 45444],
+      "expect": { "type": "integer", "confidence": "high" }
+    },
+    {
+      "name": "native date cells and ISO text",
+      "values": [{ "date": "2026-03-02" }, "2026-03-03"],
+      "expect": { "type": "date", "confidence": "high", "dateFormat": "iso" }
+    },
+    {
+      "name": "native datetime cells are naive",
+      "values": [{ "datetime": "2026-03-02T07:30:00.000Z" }],
+      "expect": { "type": "datetime", "timezone": "naive-assumed-utc", "timezoneAssumed": true }
+    },
+    {
+      "name": "most dates parse: date, assumed",
+      "values": ["2026-02-01", "2026-02-02", "3 Feb 2026", "2026-02-04", "2026-02-05"],
+      "expect": { "type": "date", "confidence": "medium", "assumed": true, "dateFormat": "iso" }
+    },
+    {
+      "name": "most numbers parse: number, assumed",
+      "values": [45.5, 310, 120, "pending", 60.25],
+      "expect": { "type": "number", "confidence": "medium", "assumed": true }
+    },
+    {
+      "name": "spreadsheet error cell among numbers",
+      "values": [1.5, 2.5, 3.5, 4.5, { "error": "#DIV/0!" }],
+      "expect": { "type": "number", "confidence": "medium" }
+    },
+    {
+      "name": "below-detection-limit text does not change a numeric type",
+      "values": ["0.8", "<0.5", "1.2", "ND"],
+      "expect": { "type": "number", "confidence": "high" }
+    },
+    {
+      "name": "null markers are ignored",
+      "values": ["1512.4", "N/A", "", "-", "1509.8", null],
+      "expect": { "type": "number", "confidence": "high" }
+    },
+    {
+      "name": "numbers with units are text",
+      "values": ["1205.3 psia", "8310 kPa"],
+      "expect": { "type": "string", "confidence": "high" }
+    },
+    {
+      "name": "nested JSON is text, assumed",
+      "values": ["{\"name\":\"A\"}", "[\"gas\"]", "[]"],
+      "expect": { "type": "string", "confidence": "medium", "assumed": true }
+    },
+    {
+      "name": "an empty sample is text, assumed",
+      "values": [null, "", "N/A"],
+      "expect": { "type": "string", "confidence": "low", "assumed": true }
+    },
+    {
+      "name": "free text",
+      "values": ["routine test", "after choke change"],
+      "expect": { "type": "string", "confidence": "high" }
+    }
+  ]
+}

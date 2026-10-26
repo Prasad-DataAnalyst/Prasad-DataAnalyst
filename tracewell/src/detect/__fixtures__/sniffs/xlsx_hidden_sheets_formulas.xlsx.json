@@ -1,0 +1,18 @@
+{
+  "fixture": "xlsx_hidden_sheets_formulas.xlsx",
+  "format": "xlsx",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["Well ID", "Date", "Oil (bbl/d)", "Water (bbl/d)", "Liquid (bbl/d)", "Water cut (%)"]],
+  "sampleRows": [
+    { "srcLoc": 2, "fields": ["NS-E01", { "date": "2026-03-02" }, 1205.3, 312.4, 1517.7, 20.5837780852606] },
+    { "srcLoc": 3, "fields": ["NS-E02", { "date": "2026-03-02" }, 846.2, 205.6, 1051.8, 19.5474424795589] },
+    { "srcLoc": 4, "fields": ["NS-E01", { "date": "2026-03-03" }, 1201.8, 314, 1515.8, 20.7151339226811] },
+    { "srcLoc": 5, "fields": ["NS-E02", { "date": "2026-03-03" }, 843, 206.9, 1049.9, 19.7066387274979] },
+    { "srcLoc": 6, "fields": ["NS-E01", { "date": "2026-03-04" }, 1198.6, 315.7, 1514.3, 20.8479165290893] },
+    { "srcLoc": 7, "fields": ["NS-E02", { "date": "2026-03-04" }, null, null, "", { "error": "#DIV/0!" }] },
+    { "srcLoc": 8, "fields": ["NS-E01", { "date": "2026-03-05" }, 1195.1, 317.2, 1512.3, 20.9746743371024] },
+    { "srcLoc": 9, "fields": ["NS-E02", { "date": "2026-03-05" }, 838.1, 209.8, 1047.9, 20.0209943696918] },
+    { "srcLoc": 10, "fields": ["NS-E01", { "date": "2026-03-06" }, 1191.9, 318.9, 1510.8, 21.1080222398729] },
+    { "srcLoc": 11, "fields": ["NS-E02", { "date": "2026-03-06" }, 835.4, 211.2, 1046.6, 20.1796292757501] }
+  ]
+}

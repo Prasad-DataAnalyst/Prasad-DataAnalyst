@@ -1,0 +1,16 @@
+{
+  "fixture": "xlsx_numbers_as_text.xlsx",
+  "format": "xlsx",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["Well ID", "Test date", "Oil (bbl/d)", "Water (bbl/d)", "Gas (Mscf/d)"]],
+  "sampleRows": [
+    { "srcLoc": 2, "fields": ["0042", { "date": "2026-02-02" }, "1234.5", 210.4, 1480.2] },
+    { "srcLoc": 3, "fields": ["0043", { "date": "2026-02-03" }, "987.25", "305.1", 1102.7] },
+    { "srcLoc": 4, "fields": ["0044", { "date": "2026-02-04" }, "1510.0", 95.6, 1795.3] },
+    { "srcLoc": 5, "fields": ["0045", { "date": "2026-02-05" }, "1322.75", "188.0", 1560.9] },
+    { "srcLoc": 6, "fields": ["0046", { "date": "2026-02-06" }, "876.4", 402.3, 990.5] },
+    { "srcLoc": 7, "fields": ["0047", { "date": "2026-02-09" }, "1105.6", "256.7", 1290.1] },
+    { "srcLoc": 8, "fields": ["0048", { "date": "2026-02-10" }, "1450.2", 133.9, 1702.4] },
+    { "srcLoc": 9, "fields": ["0049", { "date": "2026-02-11" }, "1018.9", "277.5", 1188.6] }
+  ]
+}

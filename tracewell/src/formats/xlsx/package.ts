@@ -47,7 +47,11 @@ export class Package {
         const target = attr(attrs, 'Target');
         if (id === undefined || target === undefined) return;
         const external = attr(attrs, 'TargetMode') === 'External';
-        rels.set(id, { type: attr(attrs, 'Type') ?? '', target: external ? target : resolveTarget(part, target), external });
+        rels.set(id, {
+          type: attr(attrs, 'Type') ?? '',
+          target: external ? target : resolveTarget(part, target),
+          external,
+        });
       },
     });
     return rels;

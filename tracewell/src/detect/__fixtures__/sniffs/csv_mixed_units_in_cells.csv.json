@@ -1,0 +1,16 @@
+{
+  "fixture": "csv_mixed_units_in_cells.csv",
+  "format": "csv",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["well_id", "date", "Pressure", "Temperature", "Choke size"]],
+  "sampleRows": [
+    { "srcLoc": 2, "fields": ["W-1", "2026-02-02", "1205.3 psia", "182 degF", "32"] },
+    { "srcLoc": 3, "fields": ["W-2", "2026-02-02", "1310.5 psia", "176 °F", "28"] },
+    { "srcLoc": 4, "fields": ["W-1", "2026-02-03", "1198.7 psia", "181 degF", "32"] },
+    { "srcLoc": 5, "fields": ["W-2", "2026-02-03", "8310 kPa", "84 degC", "28"] },
+    { "srcLoc": 6, "fields": ["W-1", "2026-02-04", "83.1 bar", "83 °C", "34"] },
+    { "srcLoc": 7, "fields": ["W-2", "2026-02-04", "90.2 bar", "175 degF", "30"] },
+    { "srcLoc": 8, "fields": ["W-1", "2026-02-05", "1190.2 psia", "180 degF", "34"] },
+    { "srcLoc": 9, "fields": ["W-2", "2026-02-05", "1302.8 psia", "176 degF", "30"] }
+  ]
+}

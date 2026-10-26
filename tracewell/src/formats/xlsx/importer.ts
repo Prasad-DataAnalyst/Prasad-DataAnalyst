@@ -59,7 +59,10 @@ function sheetInfo(layout: SheetLayout): SheetInfo {
     name: layout.sheet.name,
     state: layout.sheet.state,
     dimension: layout.sheet.dimension,
-    tables: layout.tables.map((t) => ({ range: formatRange(t.range), headerRows: t.headerRows[1] - t.headerRows[0] + 1 })),
+    tables: layout.tables.map((t) => ({
+      range: formatRange(t.range),
+      headerRows: t.headerRows[1] - t.headerRows[0] + 1,
+    })),
   };
 }
 
@@ -67,15 +70,15 @@ function sheetInfo(layout: SheetLayout): SheetInfo {
 function defaultSheet(layouts: readonly SheetLayout[]): SheetLayout | undefined {
   const visible = layouts.filter((l) => l.sheet.state === 'visible');
   return (
-    visible.find((l) => l.tables.length > 0) ??
-    visible.find((l) => l.sheet.rows.length > 0) ??
-    visible[0] ??
-    layouts[0]
+    visible.find((l) => l.tables.length > 0) ?? visible.find((l) => l.sheet.rows.length > 0) ?? visible[0] ?? layouts[0]
   );
 }
 
 // ---------------------------------------------------------------------------------------------
 // Detections
+//
+// The keys follow the CSV importer where they mean the same thing: skipLines is the 0-based sheet
+// row of the first header row and headerRows counts every header row, a units row included.
 
 function sheetDetection(chosen: SheetLayout, layouts: readonly SheetLayout[]): Detection<JsonValue> {
   const name = chosen.sheet.name;
@@ -84,40 +87,75 @@ function sheetDetection(chosen: SheetLayout, layouts: readonly SheetLayout[]): D
   }
   const others = layouts
     .filter((l) => l !== chosen)
-    .map((l) => `"${l.sheet.name}"${l.sheet.state === 'visible' ? '' : ` (${l.sheet.state})`}`);
+    .map((l) => `"${l.sheet.name}"${l.sheet.state === 'visible' ? '' : ` (${l.sheet.state})`}`)
+    .join(', ');
+  if (chosen.tables.length === 0) {
+    return detection(
+      name,
+      'low',
+      'no-table',
+      `No visible sheet holds a table; the workbook also has ${others}.`,
+      'default',
+    );
+  }
+  const rivals = layouts.filter((l) => l !== chosen && l.sheet.state === 'visible' && l.tables.length > 0);
+  if (rivals.length === 0) {
+    // Hidden sheets are left out on purpose: they usually hold settings or lookups, not the data.
+    return detection(
+      name,
+      'high',
+      'only-visible-sheet-with-table',
+      `"${name}" is the only visible sheet that holds a table; the workbook also has ${others}.`,
+    );
+  }
   return detection(
     name,
     'medium',
     'first-visible-sheet-with-table',
-    `"${name}" is the first visible sheet that holds a table; the workbook also has ${others.join(', ')}.`,
+    `"${name}" is the first of ${rivals.length + 1} visible sheets that hold a table; the workbook also has ${others}.`,
   );
 }
 
-function tableDetections(chosen: SheetLayout, table: TableBlock | undefined): Record<string, Detection<JsonValue>> {
+function noTableDetections(name: string): Record<string, Detection<JsonValue>> {
+  const evidence = `Sheet "${name}" holds no table.`;
+  return {
+    tableIndex: detection(0, 'low', 'no-table', evidence, 'default'),
+    skipLines: detection(0, 'low', 'no-table', evidence, 'default'),
+    headerRows: detection(0, 'low', 'no-table', evidence, 'default'),
+  };
+}
+
+/**
+ * The first table, top-left, is imported. With several tables the choice is not reported as an
+ * assumed detection: the TW-IMP-002 note on every other table already asks the user to check it,
+ * and a second, generic TW-IMP-005 for the same fact would only add noise.
+ */
+function tableIndexDetection(chosen: SheetLayout, table: TableBlock): Detection<JsonValue> {
   const name = chosen.sheet.name;
-  if (table === undefined) {
-    return {
-      tableIndex: detection(0, 'low', 'no-table', `Sheet "${name}" holds no table.`, 'default'),
-      headerRows: detection(0, 'low', 'no-table', `Sheet "${name}" holds no table.`, 'default'),
-    };
-  }
   const range = formatRange(table.range);
-  const count = chosen.tables.length;
-  const tableIndex =
-    count === 1
-      ? detection(0, 'high', 'only-table', `The table at ${range} is the only one in sheet "${name}".`)
-      : detection(
-          0,
-          'medium',
-          'first-table',
-          `Sheet "${name}" holds ${count} tables (${chosen.tables.map((t) => formatRange(t.range)).join(', ')}); ` +
-            `the first, at ${range}, is imported.`,
-        );
-  return { tableIndex, tableRange: detection(range, 'high', 'blank-row-column-blocks', tableEvidence(table)), headerRows: headerRowsDetection(table) };
+  if (chosen.tables.length === 1) {
+    return detection(0, 'high', 'only-table', `The table at ${range} is the only one in sheet "${name}".`);
+  }
+  const others = chosen.tables.slice(1).map((t) => formatRange(t.range));
+  return detection(
+    0,
+    'high',
+    'first-table',
+    `Sheet "${name}" holds ${chosen.tables.length} tables; the first, at ${range}, is imported and ` +
+      `TW-IMP-002 names the others (${others.join(', ')}).`,
+  );
 }
 
 function tableEvidence(table: TableBlock): string {
   return `The table spans ${formatRange(table.range)}, bounded by blank rows and columns; its data starts on row ${table.dataStartRow + 1}.`;
+}
+
+function skipLinesDetection(grid: SheetGrid, table: TableBlock): Detection<JsonValue> {
+  const top = table.headerRows[0];
+  if (top === 0) return detection(0, 'high', 'table-block', 'The header is on the first row of the sheet.');
+  const above = grid.rowsIn(0, top - 1, table.range.s.c, table.range.e.c).length;
+  const what = above === 0 ? 'blank' : `blank or titles (${above} with text)`;
+  return detection(top, 'high', 'table-block', `The header starts on row ${top + 1}; the rows above it are ${what}.`);
 }
 
 function headerRowsDetection(table: TableBlock): Detection<JsonValue> {
@@ -126,12 +164,31 @@ function headerRowsDetection(table: TableBlock): Detection<JsonValue> {
   if (rows === 1) {
     return detection(1, 'high', 'single-header-row', `Row ${first + 1} holds the column names.`);
   }
+  // Layout detection only extends a header on structural evidence (merged cells, sub-headers under
+  // a group, or a row of units above numbers), so a multi-row header is as certain as a single one.
   return detection(
     rows,
-    'medium',
+    'high',
     'merged-or-units-header',
     `Rows ${first + 1} to ${last + 1} form the header (merged cells or a units row); they were joined into one row of names.`,
   );
+}
+
+function tableDetections(chosen: SheetLayout, table: TableBlock | undefined): Record<string, Detection<JsonValue>> {
+  if (table === undefined) return noTableDetections(chosen.sheet.name);
+  return {
+    tableIndex: tableIndexDetection(chosen, table),
+    tableRange: detection(formatRange(table.range), 'high', 'blank-row-column-blocks', tableEvidence(table)),
+    skipLines: skipLinesDetection(chosen.grid, table),
+    headerRows: headerRowsDetection(table),
+  };
+}
+
+function date1904Detection(book: XlsxWorkbook): Detection<JsonValue> {
+  const evidence = book.date1904
+    ? 'The workbook uses the 1904 date system (workbookPr date1904).'
+    : 'The workbook uses the 1900 date system.';
+  return detection(book.date1904, 'high', 'workbook-property', evidence);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -211,7 +268,9 @@ function isWholeNumber(n: unknown): n is number {
 
 function xlsxOptionsOf(opts: FormatOptions): XlsxOptions {
   if (opts.format !== 'xlsx') {
-    throw invalidArgument(`The XLSX reader was given options for the format "${opts.format}".`, { format: opts.format });
+    throw invalidArgument(`The XLSX reader was given options for the format "${opts.format}".`, {
+      format: opts.format,
+    });
   }
   const o = opts.xlsx;
   const counts = [o.tableIndex, o.headerRowStart, o.headerRowEnd, o.dataStartRow, o.firstCol];
@@ -279,9 +338,7 @@ async function sniff(src: ByteSource): Promise<SniffResult> {
     detections: {
       sheet: sheetDetection(chosen, layouts),
       ...tableDetections(chosen, table),
-      date1904: detection(book.date1904, 'high', 'workbook-property', book.date1904
-        ? 'The workbook uses the 1904 date system (workbookPr date1904).'
-        : 'The workbook uses the 1900 date system.'),
+      date1904: date1904Detection(book),
     },
     header: table === undefined ? [] : [table.flattenedHeader],
     sampleRows,

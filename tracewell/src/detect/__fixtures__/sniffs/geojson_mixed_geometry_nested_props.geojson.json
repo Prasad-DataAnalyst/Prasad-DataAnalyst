@@ -1,0 +1,182 @@
+{
+  "fixture": "geojson_mixed_geometry_nested_props.geojson",
+  "format": "geojson",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "", "geometryColumn": true },
+  "header": [["asset_id", "asset_type", "operator", "tags", "Capacity (MMscf/d)", "commissioned", "active"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": [
+        "MX-01",
+        "well",
+        "{\"name\":\"Alder Basin Energy\",\"share\":0.6}",
+        "[\"subsea\",\"gas\"]",
+        45.5,
+        "2015-06-01",
+        true
+      ],
+      "geometry": { "type": "Point", "coordinates": [1.81, 57.51] }
+    },
+    {
+      "srcLoc": 1,
+      "fields": [
+        "MX-02",
+        "pipeline",
+        "{\"name\":\"Alder Basin Energy\",\"share\":0.6}",
+        "[\"export\"]",
+        310,
+        "2012-09-15",
+        true
+      ],
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [1.81, 57.51],
+          [1.95, 57.6],
+          [2.3, 57.75]
+        ]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": [
+        "MX-03",
+        "platform",
+        "{\"name\":\"Brindle Creek Operating\",\"share\":1}",
+        "[\"manned\",\"oil\"]",
+        120,
+        "2009-03-20",
+        true
+      ],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [1.948, 57.598],
+            [1.952, 57.598],
+            [1.952, 57.602000000000004],
+            [1.948, 57.602000000000004],
+            [1.948, 57.598]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": [
+        "MX-04",
+        "well cluster",
+        "{\"name\":\"Brindle Creek Operating\",\"share\":1}",
+        "[\"subsea\"]",
+        "pending",
+        "2024-11-05",
+        false
+      ],
+      "geometry": {
+        "type": "MultiPoint",
+        "coordinates": [
+          [2.01, 57.62],
+          [2.02, 57.63]
+        ]
+      }
+    },
+    {
+      "srcLoc": 4,
+      "fields": [
+        "MX-05",
+        "flowlines",
+        "{\"name\":\"Cobalt Flats Upstream\",\"share\":0.35}",
+        "[]",
+        60.25,
+        "2018-02-12",
+        true
+      ],
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [2.01, 57.62],
+            [1.95, 57.6]
+          ],
+          [
+            [2.02, 57.63],
+            [1.95, 57.6]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 5,
+      "fields": [
+        "MX-06",
+        "field",
+        "{\"name\":\"Cobalt Flats Upstream\",\"share\":0.35}",
+        "[\"gas\",\"condensate\"]",
+        250,
+        "2011-07-30",
+        true
+      ],
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [2.35, 57.75],
+              [2.4499999999999997, 57.75],
+              [2.4499999999999997, 57.849999999999994],
+              [2.35, 57.849999999999994],
+              [2.35, 57.75]
+            ]
+          ],
+          [
+            [
+              [2.56, 57.81],
+              [2.64, 57.81],
+              [2.64, 57.89],
+              [2.56, 57.89],
+              [2.56, 57.81]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 6,
+      "fields": [
+        "MX-07",
+        "facility",
+        "{\"name\":\"Alder Basin Energy\",\"share\":0.6}",
+        "[\"onshore\"]",
+        400,
+        null,
+        true
+      ],
+      "geometry": {
+        "type": "GeometryCollection",
+        "geometries": [
+          { "type": "Point", "coordinates": [-2.1, 57.2] },
+          {
+            "type": "LineString",
+            "coordinates": [
+              [-2.1, 57.2],
+              [-2.05, 57.22]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "srcLoc": 7,
+      "fields": [
+        "MX-08",
+        "well",
+        "{\"name\":\"Brindle Creek Operating\",\"share\":1}",
+        "[\"subsea\",\"oil\"]",
+        38.75,
+        "2021-04-18",
+        false
+      ],
+      "geometry": { "type": "Point", "coordinates": [2.03, 57.64] }
+    }
+  ]
+}

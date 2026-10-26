@@ -1,10 +1,13 @@
 /**
- * Test-only helpers of the XLSX adapter: the module's named workbooks (made by make_fixtures.py
- * with openpyxl and re-saved by LibreOffice), their expectation files, the committed messy-file
- * library when the fixtures module has delivered it, and builders for hand-written workbooks and
- * in-memory sheets that exercise what the two producers never write.
+ * Test-only helpers of the XLSX adapter: the module's own named workbooks (made by make_fixtures.py
+ * with openpyxl and re-saved by LibreOffice), their cell-level expectation files, and builders for
+ * hand-written workbooks and in-memory sheets that exercise what the two producers never write.
+ *
+ * These workbooks share their names with the committed messy-file library (@tw/fixtures) but not
+ * their contents: they pin down reader details cell by cell, while library.test.ts checks the
+ * library's workbooks against the dataset-level expectations the golden tests use.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { bytesSource, writeZip } from '@tw/io';
 import { utf8, type ByteSource, type ImportNote, type RawBatch, type RawField, type FormatOptions } from '@tw/model';
@@ -44,23 +47,6 @@ export function fixtureExpectation<T>(name: XlsxFixture): T {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The committed messy-file library (fixtures/messy), owned by the fixtures module.
-
-export const MESSY_DIR = fileURLToPath(new URL('../../../../fixtures/messy/', import.meta.url));
-
-/** The library's workbook of this name, or null until the fixtures module has delivered it. */
-export function libraryBytes(name: XlsxFixture): Uint8Array | null {
-  const path = `${MESSY_DIR}${name}`;
-  return existsSync(path) ? bytesOf(path) : null;
-}
-
-export function libraryExpectation(name: XlsxFixture): Record<string, unknown> | null {
-  const base = name.replace(/\.xlsx$/, '');
-  const path = [`${MESSY_DIR}${name}.expected.json`, `${MESSY_DIR}${base}.expected.json`].find((p) => existsSync(p));
-  return path === undefined ? null : (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>);
-}
-
-// ---------------------------------------------------------------------------------------------
 // Hand-written workbooks
 
 const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
@@ -90,14 +76,18 @@ function worksheetPart(xml: string): string {
 }
 
 function sharedStringsPart(strings: string[] | string): string {
-  const items = typeof strings === 'string' ? strings : strings.map((s) => `<si><t xml:space="preserve">${s}</t></si>`).join('');
+  const items =
+    typeof strings === 'string' ? strings : strings.map((s) => `<si><t xml:space="preserve">${s}</t></si>`).join('');
   return `<sst xmlns="${MAIN}">${items}</sst>`;
 }
 
 /** A minimal XLSX package with the given sheets, shared strings and styles. */
 export function handWorkbook(book: HandBook): Uint8Array {
   const sheets = book.sheets
-    .map((s, i) => `<sheet name="${s.name}" sheetId="${i + 1}"${s.state ? ` state="${s.state}"` : ''} r:id="rId${i + 1}"/>`)
+    .map(
+      (s, i) =>
+        `<sheet name="${s.name}" sheetId="${i + 1}"${s.state ? ` state="${s.state}"` : ''} r:id="rId${i + 1}"/>`,
+    )
     .join('');
   const rels = book.sheets.map((s, i) =>
     s.chart
@@ -126,7 +116,9 @@ export function handWorkbook(book: HandBook): Uint8Array {
     },
     {
       path: 'xl/_rels/workbook.xml.rels',
-      data: utf8(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`),
+      data: utf8(
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`,
+      ),
     },
     ...book.sheets.map((s, i) => ({
       path: s.chart ? `xl/chartsheets/sheet${i + 1}.xml` : `xl/worksheets/sheet${i + 1}.xml`,
@@ -161,7 +153,16 @@ export function sheetOf(grid: (RawField | undefined)[][], merges: string[] = [],
       cells: values.flatMap((v, c): XlsxCell[] =>
         v === undefined || v === null
           ? []
-          : [{ c, t: typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's', v, numFmt: null, isDate: false, formula: false }],
+          : [
+              {
+                c,
+                t: typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's',
+                v,
+                numFmt: null,
+                isDate: false,
+                formula: false,
+              },
+            ],
       ),
     }))
     .filter((row) => row.cells.length > 0);

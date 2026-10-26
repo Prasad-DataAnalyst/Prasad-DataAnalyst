@@ -1,0 +1,15 @@
+{
+  "fixture": "xlsx_two_tables_one_sheet.xlsx",
+  "format": "xlsx",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["Well ID", "Field", "Oil (bbl)", "Gas (Mscf)", "Water (bbl)"]],
+  "sampleRows": [
+    { "srcLoc": 2, "fields": ["NS-A01", "Alpha", 72450.5, 85492.6, 9876.3] },
+    { "srcLoc": 3, "fields": ["NS-A02", "Alpha", 93810.2, 123829.5, 7120.8] },
+    { "srcLoc": 4, "fields": ["NS-B03", "Alpha", 59012.7, 61963.3, 15880.1] },
+    { "srcLoc": 5, "fields": ["NS-C04", "Bravo", 36280.4, 43536.5, 2210.4] },
+    { "srcLoc": 6, "fields": ["NS-C05", "Bravo", 41105.9, 49327.1, 3305.6] },
+    { "srcLoc": 7, "fields": ["NS-D06", "Charlie", 28877.3, 31765.2, 4410.9] },
+    { "srcLoc": 8, "fields": ["NS-D07", "Charlie", 30542.6, 33596.9, 6120.7] }
+  ]
+}

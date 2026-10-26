@@ -152,7 +152,10 @@ export class SheetGrid {
     }
     for (const [r, cols] of extra) {
       for (const c of this.#occupied.get(r) ?? []) cols.add(c);
-      this.#occupied.set(r, [...cols].sort((a, b) => a - b));
+      this.#occupied.set(
+        r,
+        [...cols].sort((a, b) => a - b),
+      );
     }
   }
 

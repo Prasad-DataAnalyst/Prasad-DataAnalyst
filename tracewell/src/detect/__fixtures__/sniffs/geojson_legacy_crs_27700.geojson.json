@@ -1,0 +1,38 @@
+{
+  "fixture": "geojson_legacy_crs_27700.geojson",
+  "format": "geojson",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "", "geometryColumn": true },
+  "header": [["well_id", "site", "Elevation (m)"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": ["UK-ON-01", "Kimmeridge Bay", 12.4],
+      "geometry": { "type": "Point", "coordinates": [391820.5, 79410] }
+    },
+    {
+      "srcLoc": 1,
+      "fields": ["UK-ON-02", "Wareham", 18.9],
+      "geometry": { "type": "Point", "coordinates": [392505, 87230.5] }
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["UK-ON-03", "Arne", 7.6],
+      "geometry": { "type": "Point", "coordinates": [397640, 88115] }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["UK-ON-04", "Furzey Island", 4.1],
+      "geometry": { "type": "Point", "coordinates": [401110.5, 87390] }
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["UK-ON-05", "Goathorn", 6.3],
+      "geometry": { "type": "Point", "coordinates": [401870, 85780.5] }
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["UK-ON-06", "Bestwall", 9.8],
+      "geometry": { "type": "Point", "coordinates": [393725, 87845] }
+    }
+  ]
+}

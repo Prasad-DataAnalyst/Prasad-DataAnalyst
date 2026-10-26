@@ -145,7 +145,7 @@ export function xmlText(s: string): string {
   for (let i = 0; i < s.length && plain; i++) plain = !needsEscape(s.charCodeAt(i));
   if (plain) return s;
   let out = '';
-  for (let i = 0; i < s.length; ) {
+  for (let i = 0; i < s.length;) {
     const [piece, used] = escapeUnit(s, i);
     out += piece;
     i += used;

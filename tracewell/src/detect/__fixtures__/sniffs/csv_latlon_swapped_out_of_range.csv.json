@@ -1,0 +1,20 @@
+{
+  "fixture": "csv_latlon_swapped_out_of_range.csv",
+  "format": "csv",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["well_id", "Area", "Latitude", "Longitude", "Water depth (ft)"]],
+  "sampleRows": [
+    { "srcLoc": 2, "fields": ["GM-001", "Area A", "28.1432", "-91.2875", "85.3"] },
+    { "srcLoc": 3, "fields": ["GM-002", "Area A", "28.2109", "-91.4021", "92.7"] },
+    { "srcLoc": 4, "fields": ["GM-003", "Area A", "28.0876", "-91.6630", "101.4"] },
+    { "srcLoc": 5, "fields": ["GM-004", "Area B", "-92.4410", "28.7351", "64.0"] },
+    { "srcLoc": 6, "fields": ["GM-005", "Area B", "28.6625", "-92.7184", "58.9"] },
+    { "srcLoc": 7, "fields": ["GM-006", "Area B", "128.3307", "-93.6612", "120.6"] },
+    { "srcLoc": 8, "fields": ["GM-007", "Area C", "27.8841", "-93.9057", "188.2"] },
+    { "srcLoc": 9, "fields": ["GM-008", "Area C", "27.7519", "-94.0533", "214.5"] },
+    { "srcLoc": 10, "fields": ["GM-009", "Area C", "-94.1026", "27.9184", "176.8"] },
+    { "srcLoc": 11, "fields": ["GM-010", "Area D", "27.6203", "-94.6118", "256.1"] },
+    { "srcLoc": 12, "fields": ["GM-011", "Area D", "28.0554", "-193.4471", "149.3"] },
+    { "srcLoc": 13, "fields": ["GM-012", "Area D", "27.5338", "-94.8292", "271.9"] }
+  ]
+}

@@ -3,7 +3,15 @@ import { EngineError, type RawField } from '@tw/model';
 import { writeZip } from '@tw/io';
 import { utf8 } from '@tw/model';
 import { fixtureBytes, fixtureExpectation, fixtureSource, handWorkbook, oneSheet } from './__fixtures__';
-import { cellToSerial, isDateFormat, openWorkbook, serialToCell, xlsxImporter, type XlsxCell, type XlsxSheet } from './index';
+import {
+  cellToSerial,
+  isDateFormat,
+  openWorkbook,
+  serialToCell,
+  xlsxImporter,
+  type XlsxCell,
+  type XlsxSheet,
+} from './index';
 import { parseCellRef } from './refs';
 
 function cellAt(sheet: XlsxSheet, ref: string): XlsxCell | undefined {
@@ -39,10 +47,15 @@ describe('xlsx_hidden_sheets_formulas.xlsx', () => {
     expect(book.date1904).toBe(false);
   });
 
-  it('defaults to the first visible sheet, marked as assumed', async () => {
+  it('defaults to the first visible sheet, the only visible one that holds a table', async () => {
     const sniff = await xlsxImporter.sniff(fixtureSource('xlsx_hidden_sheets_formulas.xlsx'));
     expect(sniff.options).toMatchObject({ format: 'xlsx', xlsx: { sheet: expected.defaultSheet, tableIndex: 0 } });
-    expect(sniff.detections['sheet']).toMatchObject({ value: expected.defaultSheet, assumed: true });
+    expect(sniff.detections['sheet']).toMatchObject({
+      value: expected.defaultSheet,
+      confidence: 'high',
+      method: 'only-visible-sheet-with-table',
+    });
+    expect(sniff.detections['sheet']?.evidence).toContain('"Calc notes" (hidden)');
     expect(sniff.sheets?.map((s) => [s.name, s.state])).toEqual(expected.sheets.map((s) => [s.name, s.state]));
   });
 
@@ -78,7 +91,9 @@ describe('xlsx_date1904.xlsx', () => {
 });
 
 describe('xlsx_text_and_serial_dates.xlsx', () => {
-  const expected = fixtureExpectation<{ sheet: string; cells: Record<string, RawField> }>('xlsx_text_and_serial_dates.xlsx');
+  const expected = fixtureExpectation<{ sheet: string; cells: Record<string, RawField> }>(
+    'xlsx_text_and_serial_dates.xlsx',
+  );
   const sheet = openWorkbook(fixtureBytes('xlsx_text_and_serial_dates.xlsx')).readSheet('Daily');
 
   it('turns date-formatted serials into DateCell and DateTimeCell, and leaves text dates as text', () => {
@@ -99,7 +114,8 @@ describe('xlsx_numbers_as_text.xlsx', () => {
     for (const [ref, text] of Object.entries(expected.textCells)) {
       expect(cellAt(sheet, ref), ref).toMatchObject({ t: 's', v: text });
     }
-    for (const [ref, n] of Object.entries(expected.numberCells)) expect(cellAt(sheet, ref), ref).toMatchObject({ t: 'n', v: n });
+    for (const [ref, n] of Object.entries(expected.numberCells))
+      expect(cellAt(sheet, ref), ref).toMatchObject({ t: 'n', v: n });
   });
 });
 
@@ -257,8 +273,20 @@ describe('cell types written by hand', () => {
     );
     const sheet = openWorkbook(bytes).readSheet('Sheet1');
     expect(sheet.rows.map((row) => [row.r, row.cells.map((c) => [c.c, c.v])])).toEqual([
-      [0, [[1, 1], [2, 2]]],
-      [2, [[0, 3], [1, 4]]],
+      [
+        0,
+        [
+          [1, 1],
+          [2, 2],
+        ],
+      ],
+      [
+        2,
+        [
+          [0, 3],
+          [1, 4],
+        ],
+      ],
       [3, [[0, 5]]],
     ]);
     expect(sheet.dimension).toBe('A1:C4');
@@ -295,12 +323,22 @@ describe('cell types written by hand', () => {
       `<x:worksheet xmlns:x="${main}"><x:sheetData><x:row r="1"><x:c r="A1" t="inlineStr"><x:is><x:t>pref</x:t></x:is></x:c>` +
         '<x:c r="B1"><x:v>2.5</x:v></x:c></x:row></x:sheetData></x:worksheet>',
     );
-    expect(openWorkbook(bytes).readSheet('Sheet1').rows[0]?.cells.map((c) => c.v)).toEqual(['pref', 2.5]);
+    expect(
+      openWorkbook(bytes)
+        .readSheet('Sheet1')
+        .rows[0]?.cells.map((c) => c.v),
+    ).toEqual(['pref', 2.5]);
   });
 
   it('keeps number text that is not a plain decimal as text', () => {
-    const bytes = oneSheet('<sheetData><row r="1"><c r="A1"><v>0x1F</v></c><c r="B1"><v> 1.5E3 </v></c></row></sheetData>');
-    expect(openWorkbook(bytes).readSheet('Sheet1').rows[0]?.cells.map((c) => c.v)).toEqual(['0x1F', 1500]);
+    const bytes = oneSheet(
+      '<sheetData><row r="1"><c r="A1"><v>0x1F</v></c><c r="B1"><v> 1.5E3 </v></c></row></sheetData>',
+    );
+    expect(
+      openWorkbook(bytes)
+        .readSheet('Sheet1')
+        .rows[0]?.cells.map((c) => c.v),
+    ).toEqual(['0x1F', 1500]);
   });
 });
 
@@ -370,10 +408,30 @@ describe('sheets and packages written by hand', () => {
     const main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
     const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
     const bytes = writeZip([
-      { path: '_rels/.rels', data: utf8(`<Relationships xmlns="x"><Relationship Id="r" Type="${rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
-      { path: 'xl/workbook.xml', data: utf8(`<workbook xmlns="${main}" xmlns:r="${rel}"><sheets><sheet name="S" sheetId="1" r:id="a"/></sheets></workbook>`) },
-      { path: 'xl/_rels/workbook.xml.rels', data: utf8(`<Relationships xmlns="x"><Relationship Id="a" Type="${rel}/worksheet" Target="./sheets/../Worksheets/My%20Sheet.xml"/></Relationships>`) },
-      { path: 'xl/worksheets/my sheet.xml', data: utf8(`<worksheet xmlns="${main}"><sheetData><row r="1"><c r="A1"><v>9</v></c></row></sheetData></worksheet>`) },
+      {
+        path: '_rels/.rels',
+        data: utf8(
+          `<Relationships xmlns="x"><Relationship Id="r" Type="${rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+        ),
+      },
+      {
+        path: 'xl/workbook.xml',
+        data: utf8(
+          `<workbook xmlns="${main}" xmlns:r="${rel}"><sheets><sheet name="S" sheetId="1" r:id="a"/></sheets></workbook>`,
+        ),
+      },
+      {
+        path: 'xl/_rels/workbook.xml.rels',
+        data: utf8(
+          `<Relationships xmlns="x"><Relationship Id="a" Type="${rel}/worksheet" Target="./sheets/../Worksheets/My%20Sheet.xml"/></Relationships>`,
+        ),
+      },
+      {
+        path: 'xl/worksheets/my sheet.xml',
+        data: utf8(
+          `<worksheet xmlns="${main}"><sheetData><row r="1"><c r="A1"><v>9</v></c></row></sheetData></worksheet>`,
+        ),
+      },
     ]);
     expect(openWorkbook(bytes).readSheet('S').rows[0]?.cells[0]?.v).toBe(9);
   });

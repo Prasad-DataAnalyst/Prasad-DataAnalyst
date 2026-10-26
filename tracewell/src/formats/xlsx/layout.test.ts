@@ -27,7 +27,14 @@ describe('xlsx_merged_two_row_header_units.xlsx', () => {
 
   it('skips the title row above the header', () => {
     expect(formatRange((blocks[0] as TableBlock).range)).toBe(expected.range);
-    expect(blocks[0]?.headerCells[0]).toEqual(['Well', 'Test date', 'Pressure', 'Pressure', 'Temperature', 'Temperature']);
+    expect(blocks[0]?.headerCells[0]).toEqual([
+      'Well',
+      'Test date',
+      'Pressure',
+      'Pressure',
+      'Temperature',
+      'Temperature',
+    ]);
     expect(blocks[0]?.headerCells.flat()).not.toContain('Well test summary - Field Alpha');
   });
 
@@ -120,15 +127,7 @@ describe('detectTables on in-memory sheets', () => {
   });
 
   it('continues a table across a blank row inside its data', () => {
-    const blocks = detectTables(
-      sheetOf([
-        ['Well', 'Oil'],
-        ['A', 1],
-        [],
-        ['B', 2],
-        ['C', 3],
-      ]),
-    );
+    const blocks = detectTables(sheetOf([['Well', 'Oil'], ['A', 1], [], ['B', 2], ['C', 3]]));
     expect(ranges(blocks)).toEqual(['A1:B5']);
   });
 
@@ -162,7 +161,12 @@ describe('detectTables on in-memory sheets', () => {
   });
 
   it('writes non-text header cells as text and joins line breaks with spaces', () => {
-    const blocks = detectTables(sheetOf([['Oil\nrate', 2025, true], [1, 2, 3]]));
+    const blocks = detectTables(
+      sheetOf([
+        ['Oil\nrate', 2025, true],
+        [1, 2, 3],
+      ]),
+    );
     expect(blocks[0]?.flattenedHeader).toEqual(['Oil rate', '2025', 'true']);
     expect(blocks[0]?.headerCells).toEqual([['Oil\nrate', '2025', 'true']]);
   });

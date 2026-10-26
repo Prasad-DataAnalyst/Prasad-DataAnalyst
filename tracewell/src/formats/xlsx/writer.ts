@@ -98,7 +98,8 @@ function checkSheetName(name: unknown, seen: Set<string>): void {
     );
   }
   const key = name.toLowerCase();
-  if (seen.has(key)) throw invalidArgument(`The sheet name "${name}" is used twice (Excel ignores case).`, { sheet: name });
+  if (seen.has(key))
+    throw invalidArgument(`The sheet name "${name}" is used twice (Excel ignores case).`, { sheet: name });
   seen.add(key);
 }
 
@@ -106,9 +107,12 @@ function checkBook(book: XlsxWriteBook): void {
   if (book.sheets.length === 0) throw invalidArgument('A workbook needs at least one sheet.');
   const ms = ISO_UTC.test(book.created) ? Date.parse(book.created) : NaN;
   if (Number.isNaN(ms) || new Date(ms).toISOString() !== book.created) {
-    throw invalidArgument(`The creation time "${book.created}" is not an instant written as YYYY-MM-DDTHH:mm:ss.sssZ.`, {
-      created: book.created,
-    });
+    throw invalidArgument(
+      `The creation time "${book.created}" is not an instant written as YYYY-MM-DDTHH:mm:ss.sssZ.`,
+      {
+        created: book.created,
+      },
+    );
   }
   const seen = new Set<string>();
   for (const sheet of book.sheets) checkSheetName(sheet.name, seen);
@@ -127,7 +131,9 @@ function checkColumns(sheet: XlsxWriteSheet): void {
     checkText(col.header, sheet.name, 1, col.header);
     const w = col.width;
     if (w !== undefined && !(Number.isFinite(w) && w > 0 && w <= 255)) {
-      throw invalidArgument(`Column "${col.header}" of sheet "${sheet.name}" has the width ${String(w)}; use 0 to 255.`);
+      throw invalidArgument(
+        `Column "${col.header}" of sheet "${sheet.name}" has the width ${String(w)}; use more than 0 and at most 255.`,
+      );
     }
   });
 }

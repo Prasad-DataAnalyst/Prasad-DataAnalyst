@@ -1,0 +1,54 @@
+{
+  "fixture": "csv_quoted_newlines_ragged.csv",
+  "format": "csv",
+  "options": { "decimalSeparator": ".", "thousandsSeparator": "" },
+  "header": [["wo_id", "well", "opened", "priority", "description", "Downtime (h)"]],
+  "sampleRows": [
+    {
+      "srcLoc": 2,
+      "fields": [
+        "WO-1001",
+        "NS-A01",
+        "2026-01-03",
+        "high",
+        "Replace choke insert; erosion found\non bean, see photo set 3",
+        "6.5"
+      ]
+    },
+    { "srcLoc": 4, "fields": ["WO-1002", "NS-A02", "2026-01-04", "low", "Routine greasing", "1.0"] },
+    {
+      "srcLoc": 5,
+      "fields": ["WO-1003", "NS-B03", "2026-01-06", "medium", "Operator noted \"hissing\" at flowline flange", "2.5"]
+    },
+    {
+      "srcLoc": 6,
+      "fields": [
+        "WO-1004",
+        "NS-A01",
+        "2026-01-07",
+        "high",
+        "ESD valve failed to close.\r\nRetested OK after solenoid swap.",
+        "8.0"
+      ]
+    },
+    { "srcLoc": 8, "fields": ["WO-1005", "NS-B03", "2026-01-09", "low", "Insulation check", null] },
+    {
+      "srcLoc": 9,
+      "fields": [
+        "WO-1006",
+        "NS-A02",
+        "2026-01-10",
+        "medium",
+        "Multi-step job:\n- isolate\n- drain\n- replace gasket",
+        "3.0"
+      ]
+    },
+    { "srcLoc": 13, "fields": ["WO-1007", "NS-A01", "2026-01-12", "low", "Paint touch-up", "0.5"] },
+    {
+      "srcLoc": 14,
+      "fields": ["WO-1008", "NS-B03", "2026-01-13", "high", "Leak \"as reported\" by night shift", "12.0"]
+    },
+    { "srcLoc": 15, "fields": ["WO-1009", "NS-A02", "2026-01-15", "medium", "Comma, inside, quoted text", "4.0"] },
+    { "srcLoc": 16, "fields": ["WO-1010", "NS-A01", "2026-01-16", "low", "Visual inspection", "0.5"] }
+  ]
+}

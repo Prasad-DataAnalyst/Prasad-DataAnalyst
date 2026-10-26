@@ -224,7 +224,12 @@ function headerRowsNote(sheet: string, block: Omit<TableBlock, 'notes'>): Import
       `Rows ${first + 1} to ${last + 1} of sheet "${sheet}" form a multi-row header and were joined into one ` +
       `header row${example === undefined ? '' : `, for example "${example}"`}.`,
     srcLoc: first + 1,
-    detail: { sheet, range: formatRange(block.range), headerRows: [first + 1, last + 1], columns: block.flattenedHeader },
+    detail: {
+      sheet,
+      range: formatRange(block.range),
+      headerRows: [first + 1, last + 1],
+      columns: block.flattenedHeader,
+    },
   };
 }
 
