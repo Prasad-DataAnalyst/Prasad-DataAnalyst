@@ -1,0 +1,80 @@
+[
+  { "name": "eq number", "p": { "column": "c3", "op": "eq", "value": 1200 }, "rows": [0] },
+  { "name": "ne number (nulls never match)", "p": { "column": "c3", "op": "ne", "value": 1200 }, "rows": [1, 3] },
+  { "name": "lt number", "p": { "column": "c3", "op": "lt", "value": 1000 }, "rows": [1, 3] },
+  { "name": "le number", "p": { "column": "c3", "op": "le", "value": 980.5 }, "rows": [1, 3] },
+  { "name": "gt number", "p": { "column": "c3", "op": "gt", "value": 980.5 }, "rows": [0] },
+  { "name": "ge number", "p": { "column": "c3", "op": "ge", "value": 980.5 }, "rows": [0, 3] },
+  { "name": "eq string", "p": { "column": "c0", "op": "eq", "value": "W-02" }, "rows": [1, 4] },
+  { "name": "lt string", "p": { "column": "c0", "op": "lt", "value": "W-02" }, "rows": [0, 2] },
+  { "name": "eq date", "p": { "column": "c1", "op": "eq", "value": { "date": "2026-01-03" } }, "rows": [2] },
+  { "name": "ge date", "p": { "column": "c1", "op": "ge", "value": { "date": "2026-01-04" } }, "rows": [3, 4] },
+  {
+    "name": "lt datetime",
+    "p": { "column": "c2", "op": "lt", "value": { "datetime": "2026-01-02T06:00:00.000Z" } },
+    "rows": [0]
+  },
+  {
+    "name": "gt datetime",
+    "p": { "column": "c2", "op": "gt", "value": { "datetime": "2026-01-04T06:00:00.000Z" } },
+    "rows": [3, 4]
+  },
+  { "name": "between inclusive", "p": { "column": "c3", "op": "between", "low": 14.7, "high": 980.5 }, "rows": [1, 3] },
+  {
+    "name": "between dates",
+    "p": { "column": "c1", "op": "between", "low": { "date": "2026-01-02" }, "high": { "date": "2026-01-03" } },
+    "rows": [1, 2]
+  },
+  { "name": "in", "p": { "column": "c0", "op": "in", "values": ["W-01", "W-03"] }, "rows": [0, 2, 3] },
+  { "name": "contains case-insensitive", "p": { "column": "c4", "op": "contains", "text": "normal" }, "rows": [0, 4] },
+  {
+    "name": "contains case-sensitive",
+    "p": { "column": "c4", "op": "contains", "text": "CHANGED", "caseSensitive": true },
+    "rows": [1]
+  },
+  {
+    "name": "contains case-sensitive misses",
+    "p": { "column": "c4", "op": "contains", "text": "changed", "caseSensitive": true },
+    "rows": []
+  },
+  { "name": "is_null", "p": { "column": "c3", "op": "is_null" }, "rows": [2, 4] },
+  { "name": "not_null", "p": { "column": "c3", "op": "not_null" }, "rows": [0, 1, 3] },
+  {
+    "name": "all",
+    "p": {
+      "all": [
+        { "column": "c0", "op": "eq", "value": "W-02" },
+        { "column": "c3", "op": "not_null" }
+      ]
+    },
+    "rows": [1]
+  },
+  {
+    "name": "any",
+    "p": {
+      "any": [
+        { "column": "c0", "op": "eq", "value": "W-03" },
+        { "column": "c3", "op": "eq", "value": 1200 }
+      ]
+    },
+    "rows": [0, 3]
+  },
+  { "name": "not", "p": { "not": { "column": "c0", "op": "eq", "value": "W-01" } }, "rows": [1, 3, 4] },
+  {
+    "name": "nested",
+    "p": {
+      "all": [
+        { "not": { "column": "c3", "op": "is_null" } },
+        {
+          "any": [
+            { "column": "c4", "op": "contains", "text": "flow" },
+            { "column": "c4", "op": "contains", "text": "shut" }
+          ]
+        }
+      ]
+    },
+    "rows": [0, 3]
+  },
+  { "name": "bbox over lat/lon", "p": { "bbox": [1.0, 57.0, 2.0, 57.5], "lat": "c5", "lon": "c6" }, "rows": [0, 1] },
+  { "name": "bbox over geometry", "p": { "bbox": [0.0, 56.0, 2.0, 57.2], "geometry": "c7" }, "rows": [0, 3] }
+]
