@@ -5,6 +5,7 @@
  */
 import { tokenizeAll } from '@tw/formats-csv';
 import { readGeoJsonAll } from '@tw/formats-geojson';
+import { PARQUET_TYPES, readParquet } from '@tw/formats-parquet';
 import { openWorkbook, type XlsxSheet } from '@tw/formats-xlsx';
 import { parseChecksumsFile, readZip, sha256Hex } from '@tw/io';
 import {
@@ -110,6 +111,65 @@ function readCsv(bytes: Uint8Array, expected: ExpectedShape, file: string): Vali
   checks.push(headerCheck(expected.columns, head?.fields ?? [], file));
   checks.push(rowsCheck(data.length, expected.rowCount, file));
   const values = expected.columns.map((col, j) => data.map((r) => retypeText(r.fields[j] ?? '', col.type)));
+  checks.push(valuesCheck(expected.columns, values, file));
+  return checks;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parquet
+
+/** Whether a value read from Parquet is a cell of the column's logical type. */
+function fitsType(v: CellValue | undefined, type: ExportColumn['type']): boolean {
+  if (v === null) return true;
+  if (v === undefined) return false;
+  switch (type) {
+    case 'string':
+      return typeof v === 'string';
+    case 'number':
+      return typeof v === 'number';
+    case 'integer':
+      return typeof v === 'number' && Number.isSafeInteger(v);
+    case 'boolean':
+      return typeof v === 'boolean';
+    case 'date':
+      return typeof v === 'object' && 'date' in v;
+    case 'datetime':
+      return typeof v === 'object' && 'datetime' in v;
+    case 'geometry':
+      return typeof v === 'object' && 'geometry' in v;
+  }
+}
+
+async function readParquetFile(bytes: Uint8Array, expected: ExpectedShape, file: string): Promise<ValidationCheck[]> {
+  let table;
+  try {
+    table = await readParquet(bytes);
+  } catch (e) {
+    return [check('RB-OPEN', false, `The file does not open as Apache Parquet: ${messageOf(e)}`, file)];
+  }
+  const checks: ValidationCheck[] = [check('RB-OPEN', true, 'The file opens as Apache Parquet.', file)];
+  const wrong = expected.columns.flatMap((col, j) => {
+    const got = table.columns[j];
+    const want = PARQUET_TYPES[col.type];
+    if (got === undefined || (got.physical === want.physical && want.annotations.includes(got.annotation))) return [];
+    return [`${col.header} is ${got.physical}${got.annotation === null ? '' : ` ${got.annotation}`}`];
+  });
+  checks.push(
+    wrong.length === 0
+      ? check('RB-PARQUET-TYPES', true, 'Every column has the Parquet type of its logical type.', file)
+      : check('RB-PARQUET-TYPES', false, `These columns have the wrong Parquet type: ${wrong.join('; ')}.`, file),
+  );
+  checks.push(
+    headerCheck(
+      expected.columns,
+      table.columns.map((c) => c.name),
+      file,
+    ),
+  );
+  checks.push(rowsCheck(table.rowCount, expected.rowCount, file));
+  const values = expected.columns.map((col, j) =>
+    (table.values[j] ?? []).map((v) => (fitsType(v, col.type) ? v : undefined)),
+  );
   checks.push(valuesCheck(expected.columns, values, file));
   return checks;
 }
@@ -423,6 +483,7 @@ function readPackage(zip: Uint8Array, manifest: ExportManifest): ValidationCheck
 
 export const readBack: {
   csv(bytes: Uint8Array, expected: ExpectedShape, file: string): ValidationCheck[];
+  parquet(bytes: Uint8Array, expected: ExpectedShape, file: string): Promise<ValidationCheck[]>;
   xlsx(
     bytes: Uint8Array,
     expected: ExpectedShape,
@@ -431,4 +492,10 @@ export const readBack: {
   ): ValidationCheck[];
   geojson(bytes: Uint8Array, expected: ExpectedShape, file: string, o: GeoJsonReadOptions): ValidationCheck[];
   package(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[];
-} = Object.freeze({ csv: readCsv, xlsx: readXlsx, geojson: readGeoJson, package: readPackage });
+} = Object.freeze({
+  csv: readCsv,
+  parquet: readParquetFile,
+  xlsx: readXlsx,
+  geojson: readGeoJson,
+  package: readPackage,
+});

@@ -38,6 +38,7 @@ import {
   csvRows,
   dataSheet,
   features,
+  parquetColumns,
   keyValueSheet,
   logSheet,
   type ExportWriters,
@@ -113,7 +114,7 @@ function reportRows(input: ExportInput, plan: ExportPlan, shape: ExpectedShape):
 
 interface WrittenFile {
   path: string;
-  kind: 'csv' | 'xlsx' | 'geojson';
+  kind: 'csv' | 'xlsx' | 'parquet' | 'geojson';
   bytes: Uint8Array;
   shape: ExpectedShape;
 }
@@ -125,6 +126,8 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
     switch (f.kind) {
       case 'csv':
         return { ...f, shape, bytes: writers.csv(csvHeader(view, f.columns), csvRows(view, f.columns)) };
+      case 'parquet':
+        return { ...f, shape, bytes: writers.parquet(parquetColumns(view, f.columns)) };
       case 'geojson': {
         const source = geometrySource(view) ?? 'latlon';
         return { ...f, shape, bytes: writers.geojson(features(view, source)) };
@@ -145,10 +148,12 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
   });
 }
 
-function validateFile(file: WrittenFile, bytes: Uint8Array, input: ExportInput): ValidationCheck[] {
+async function validateFile(file: WrittenFile, bytes: Uint8Array, input: ExportInput): Promise<ValidationCheck[]> {
   switch (file.kind) {
     case 'csv':
       return readBack.csv(bytes, file.shape, file.path);
+    case 'parquet':
+      return readBack.parquet(bytes, file.shape, file.path);
     case 'xlsx':
       return readBack.xlsx(bytes, file.shape, file.path, {
         expectData: file.shape.columns.length > 0,
@@ -194,7 +199,7 @@ export async function buildExport(
   const files = writeFiles(input, plan, writers);
   await Promise.resolve();
   step('Reading back', 1);
-  const dataChecks = files.flatMap((f) => validateFile(f, f.bytes, input));
+  const dataChecks = (await Promise.all(files.map((f) => validateFile(f, f.bytes, input)))).flat();
 
   const readmeFile = 'README.txt';
   const auditText = input.audit.map((e) => `${canonicalJson(e as unknown as JsonValue)}\n`).join('');
@@ -272,9 +277,13 @@ export async function buildExport(
   step('Verifying the package', 3);
   const packageChecks = readBack.package(zip, manifest);
   const reopened = readZip(zip);
-  const insideChecks = files.flatMap((f) =>
-    reopened.has(f.path) ? validateFile(f, reopened.read(f.path), input) : [],
-  );
+  const insideChecks = (
+    await Promise.all(
+      files.map((f) =>
+        reopened.has(f.path) ? validateFile(f, reopened.read(f.path), input) : Promise.resolve<ValidationCheck[]>([]),
+      ),
+    )
+  ).flat();
   const checks = [
     ...dataChecks,
     ...packageChecks,

@@ -23,7 +23,7 @@ export interface ExportPlan {
   reason?: string;
   fix?: string;
   substitutions: Substitution[];
-  dataFiles: { path: string; kind: 'csv' | 'xlsx' | 'geojson'; columns: ColumnId[] }[];
+  dataFiles: { path: string; kind: 'csv' | 'xlsx' | 'parquet' | 'geojson'; columns: ColumnId[] }[];
 }
 
 const WGS84 = new Set(['OGC:CRS84', 'EPSG:4326']);
@@ -134,6 +134,13 @@ export function planExport(view: View, profile: ExportProfileId, crs: Detection<
         available: true,
         substitutions: [],
         dataFiles: [{ path: 'data.csv', kind: 'csv', columns: view.columnIds() }],
+      };
+    case 'parquet':
+      return {
+        profile,
+        available: true,
+        substitutions: [],
+        dataFiles: [{ path: 'data.parquet', kind: 'parquet', columns: view.columnIds() }],
       };
     case 'geojson':
       return geojsonPlan(view, crs);

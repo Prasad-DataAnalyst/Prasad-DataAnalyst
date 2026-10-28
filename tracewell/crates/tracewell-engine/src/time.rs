@@ -110,6 +110,9 @@ pub trait IdSource: Send {
     fn new_project_id(&mut self) -> String {
         format!("p_{}", self.hex(16))
     }
+    fn new_export_id(&mut self) -> String {
+        format!("e_{}", self.hex(8))
+    }
 }
 
 /// Mulberry32, the generator the TypeScript engine's seededIds uses, so seeded IDs agree.

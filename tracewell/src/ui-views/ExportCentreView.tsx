@@ -21,6 +21,7 @@ const CHECK_LABELS: Record<string, string> = {
   'RB-XLSX-TYPES': 'Cell types are right (numbers, dates, text)',
   'RB-XLSX-STRUCTURE': 'Workbook structure (sheets, frozen header, filter)',
   'RB-GEOJSON-STRUCTURE': 'Valid GeoJSON in WGS84',
+  'RB-PARQUET-TYPES': 'Parquet column types are right (numbers, dates, timestamps)',
   'RB-PKG-CHECKSUMS': 'Package checksums verify',
   'RB-PKG-CONTENTS': 'Package contents complete',
 };
@@ -212,15 +213,21 @@ function ExportOutcome(p: { result: ExportResult }): React.JSX.Element {
             <dt>Assumptions</dt>
             <dd>{m.assumptions.length}</dd>
           </dl>
-          <button
-            type="button"
-            className="tw-primary"
-            data-testid={TID.savePackage}
-            disabled={r.bytes === undefined}
-            onClick={() => r.bytes !== undefined && downloadBytes(r.bytes, r.packageName, 'application/zip')}
-          >
-            Save package
-          </button>
+          {r.bytes === undefined && r.path !== undefined ? (
+            <p className="tw-muted" data-testid={TID.savePackage}>
+              Saved to <span className="tw-mono tw-break">{r.path}</span>
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="tw-primary"
+              data-testid={TID.savePackage}
+              disabled={r.bytes === undefined}
+              onClick={() => r.bytes !== undefined && downloadBytes(r.bytes, r.packageName, 'application/zip')}
+            >
+              Save package
+            </button>
+          )}
         </>
       )}
     </div>

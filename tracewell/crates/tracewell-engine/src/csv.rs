@@ -117,6 +117,8 @@ pub struct TableLayout {
     pub skip_lines: u64,
     pub header_rows: usize,
     pub batch_rows: usize,
+    /// Keep blank lines as rows of one empty field, as export read-back counts them.
+    pub keep_blank: bool,
 }
 
 /// Skips the preamble lines, tokenizes, takes the header rows and shapes the data rows into batches.
@@ -125,6 +127,7 @@ pub struct TableReader {
     header_rows: usize,
     line_offset: u64,
     batch_rows: usize,
+    keep_blank: bool,
     // Line skipping (lines.ts).
     skip_left: u64,
     skip_after_cr: bool,
@@ -142,6 +145,8 @@ pub struct TableReader {
     width: usize,
     required: usize,
     ragged: u64,
+    /// Rows whose number of fields differs from the table's width, listed or not.
+    pub mismatched: u64,
     batch: RowBatch,
     full: Vec<RowBatch>,
     pub notes: Vec<Note>,
@@ -154,6 +159,7 @@ impl TableReader {
             header_rows: layout.header_rows,
             line_offset: layout.skip_lines,
             batch_rows: layout.batch_rows.max(1),
+            keep_blank: layout.keep_blank,
             skip_left: layout.skip_lines,
             skip_after_cr: false,
             state: State::FieldStart,
@@ -167,10 +173,16 @@ impl TableReader {
             width: 0,
             required: 0,
             ragged: 0,
+            mismatched: 0,
             batch: RowBatch::new(0, 0),
             full: Vec::new(),
             notes: Vec::new(),
         }
+    }
+
+    /// The first header row's fields, once the header has been read.
+    pub fn header(&self) -> Option<&[String]> {
+        self.header.first().map(|(fields, _)| fields.as_slice())
     }
 
     /// Batches completed so far.
@@ -416,7 +428,7 @@ impl TableReader {
 
     fn record(&mut self) -> Result<()> {
         let line = self.record_line + self.line_offset;
-        let blank = self.spans.len() == 1 && self.spans[0].0 == self.spans[0].1;
+        let blank = !self.keep_blank && self.spans.len() == 1 && self.spans[0].0 == self.spans[0].1;
         if self.started {
             return self.shape(line, blank);
         }
@@ -463,6 +475,9 @@ impl TableReader {
             return Ok(());
         }
         let found = self.spans.len();
+        if found != width {
+            self.mismatched += 1;
+        }
         if found < width {
             if found < self.required {
                 self.report(line, found, 0);
@@ -578,6 +593,7 @@ mod tests {
             skip_lines: skip,
             header_rows: header,
             batch_rows: 2,
+            keep_blank: false,
         });
         let mut batches = Vec::new();
         for chunk in text.as_bytes().chunks(piece) {
@@ -698,6 +714,7 @@ mod tests {
             skip_lines: 0,
             header_rows: 1,
             batch_rows: 10,
+            keep_blank: false,
         });
         let err = r.push(text.as_bytes()).unwrap_err();
         assert_eq!(err.code, "PARSE_FAILED");

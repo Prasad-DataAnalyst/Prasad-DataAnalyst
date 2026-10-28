@@ -1,16 +1,20 @@
 //! tracewell-engine: the Tracewell engine protocol over stdin and stdout (JSON lines plus binary
 //! frames), with DuckDB and Parquet underneath for files beyond browser memory.
 //!
-//!   tracewell-engine serve [--workdir DIR] [--memory-limit BYTES] [--threads N]
+//!   tracewell-engine serve [--workdir DIR] [--memory-limit BYTES] [--threads N] [--owner NAME]
 //!                          [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
+//!
+//! The owner is the registered owner of this copy; every export manifest records it.
 
 mod audit;
 mod canonical;
 mod checks;
 mod csv;
+mod digest;
 mod encoding;
 mod engine;
 mod error;
+mod export;
 mod framing;
 mod import;
 mod issues;
@@ -18,6 +22,7 @@ mod parse;
 mod rules;
 mod time;
 mod units;
+mod zip;
 
 use engine::{Engine, Shared};
 use error::{EngineError, Result};
@@ -35,6 +40,7 @@ struct Args {
     fixed_clock: Option<i64>,
     clock_step: i64,
     seed: Option<u32>,
+    owner: String,
 }
 
 fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
@@ -45,6 +51,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
         fixed_clock: None,
         clock_step: 1000,
         seed: None,
+        owner: String::new(),
     };
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
@@ -70,6 +77,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
                     .map_err(|_| "--clock-step-ms takes a number")?
             }
             "--seed" => a.seed = Some(value()?.parse().map_err(|_| "--seed takes a number")?),
+            "--owner" => a.owner = value()?,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -124,6 +132,7 @@ fn open(args: &Args) -> Result<Engine> {
         ids,
         limit,
         threads,
+        args.owner.clone(),
     ))
 }
 
@@ -137,6 +146,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     }
     if method == "runChecks" {
         return engine::run_checks(shared, param(params, 0));
+    }
+    if method == "exportData" {
+        return engine::export_data(shared, param(params, 0));
     }
     let mut e = shared
         .engine
@@ -153,6 +165,7 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "verifyAudit" => e.verify_audit(),
         "listIssues" => e.list_issues(param(params, 0)),
         "listOccurrences" => e.list_occurrences(param(params, 0), param(params, 1)),
+        "listExportProfiles" => e.list_export_profiles(param(params, 0)),
         "jobOutcome" => e.job_outcome(param(params, 0)),
         "cancelJob" => e.cancel_job(param(params, 0)),
         other => Err(EngineError::unsupported(format!("the call {other}"))),
@@ -178,7 +191,24 @@ fn serve(args: Args) -> io::Result<()> {
             Ok(value) => json!({ "kind": "result", "id": id, "ok": true, "value": value }),
             Err(e) => json!({ "kind": "result", "id": id, "ok": false, "error": e.to_json() }),
         };
-        shared.send(&reply);
+        // A finished export hands its package back as a byte frame under result.bytes.
+        let bytes = (method == "jobOutcome" && reply["value"]["state"] == "done")
+            .then(|| {
+                let job = params.first().and_then(Value::as_str).unwrap_or("");
+                shared.engine.lock().ok()?.job_bytes.get(job).cloned()
+            })
+            .flatten();
+        match bytes {
+            Some(b) => {
+                let framed = framing::with_bytes(
+                    &reply,
+                    |v, marker| v["value"]["result"]["bytes"] = marker,
+                    b.len(),
+                );
+                shared.send_framed(&framed, &[&b]);
+            }
+            None => shared.send(&reply),
+        }
     }
     Ok(())
 }

@@ -591,7 +591,10 @@ export class LocalEngine implements EngineImpl {
   async exportData(req: ExportRequest): Promise<JobHandle> {
     const ds = datasetOf(this.writable(), req?.datasetId);
     if (!EXPORT_PROFILES.some((p) => p.id === req.profile)) {
-      throw invalid(`The export profile ${String(req.profile)} does not exist.`, 'Choose Excel, CSV or GeoJSON.');
+      throw invalid(
+        `The export profile ${String(req.profile)} does not exist.`,
+        'Choose Excel, CSV, Parquet or GeoJSON.',
+      );
     }
     this.requireTarget(req.target);
     const plan = planExport(outputView(ds), req.profile, ds.dataset.schema.crs);
@@ -634,6 +637,7 @@ export class LocalEngine implements EngineImpl {
           if (req.target?.kind === 'path' && result.bytes !== undefined) {
             await this.fs().writeFile(req.target.path, result.bytes);
             delete result.bytes;
+            result.path = req.target.path;
           }
           this.changed(['project', 'exports', 'audit'], current.id);
           this.log('info', `Exported ${current.dataset.schema.name} as ${result.packageName}.`);

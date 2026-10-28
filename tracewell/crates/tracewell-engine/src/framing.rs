@@ -111,12 +111,32 @@ fn escape(v: &Value) -> Value {
     }
 }
 
-/// Writes one message (this engine sends no byte arrays yet) and flushes it.
+/// Writes one message and flushes it.
 pub fn write_message<W: Write>(w: &mut W, v: &Value) -> io::Result<()> {
-    let mut bytes = serde_json::to_vec(&escape(v))
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    write_with_frames(w, &escape(v), &[])
+}
+
+/// A value with byte arrays: the value is escaped first, then each byte array's marker is put in
+/// place, so a marker can never be confused with data.
+pub fn with_bytes(v: &Value, place: impl FnOnce(&mut Value, Value), bytes: usize) -> Value {
+    let mut escaped = escape(v);
+    let mut marker = Map::new();
+    marker.insert(MARK.to_string(), Value::String("b".into()));
+    marker.insert("i".into(), Value::from(0));
+    marker.insert("n".into(), Value::from(bytes));
+    place(&mut escaped, Value::Object(marker));
+    escaped
+}
+
+/// Writes an escaped message and the byte arrays its markers stand for, in marker order.
+pub fn write_with_frames<W: Write>(w: &mut W, escaped: &Value, frames: &[&[u8]]) -> io::Result<()> {
+    let mut bytes =
+        serde_json::to_vec(escaped).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');
     w.write_all(&bytes)?;
+    for f in frames {
+        w.write_all(f)?;
+    }
     w.flush()
 }
 

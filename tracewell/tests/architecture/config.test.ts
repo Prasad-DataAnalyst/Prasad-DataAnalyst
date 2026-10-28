@@ -136,8 +136,8 @@ describe('dependencies', () => {
     expect(pkg.devDependencies['@playwright/test']).toBe('1.56.1');
   });
 
-  it('keeps the runtime dependency count small (SAD section 12: 11 runtime packages)', () => {
-    expect(Object.keys(pkg.dependencies)).toHaveLength(11);
+  it('keeps the runtime dependency count small (SAD section 14: 13 runtime packages)', () => {
+    expect(Object.keys(pkg.dependencies)).toHaveLength(13);
   });
 
   it('saves exact versions and enforces the Node engine', () => {

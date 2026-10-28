@@ -19,6 +19,7 @@ export const TW_MODULE_DIRS: Readonly<Record<string, string>> = {
   'formats-csv': 'src/formats/csv',
   'formats-xlsx': 'src/formats/xlsx',
   'formats-geojson': 'src/formats/geojson',
+  'formats-parquet': 'src/formats/parquet',
   detect: 'src/detect',
   table: 'src/table',
   audit: 'src/audit',

@@ -4,14 +4,15 @@
  * of each stage. It runs only when given a file:
  *
  *   TW_BENCH_CSV=/data/well_daily.csv [TW_BENCH_WORKDIR=/data/work] [TW_BENCH_OUT=result.json] \
- *     npx vitest run tests/bench
+ *     [TW_BENCH_PROFILE=parquet|csv] npx vitest run tests/bench
  *
  * The engine uses its defaults: DuckDB may use half the machine's memory and spills the rest to disk.
  */
-import { statSync, writeFileSync } from 'node:fs';
+import { rmSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, totalmem } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { CheckSummary, DatasetSummary, JsonValue } from '@tw/model';
+import type { CheckSummary, DatasetSummary, ExportResult, JsonValue } from '@tw/model';
 import { ENGINE_FACTORIES } from '../conformance/harness';
 import { nativeBuilt, peakResidentBytes, startNative, stopNative } from '../conformance/native-process';
 
@@ -64,6 +65,16 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
           async () => native.client.awaitJob<CheckSummary>(await native.client.runChecks(ds.id)),
           (c) => ({ issues: c.issues, byRule: c.byRule }),
         );
+        const profile = (process.env['TW_BENCH_PROFILE'] ?? 'parquet') as 'csv' | 'parquet';
+        const target = { kind: 'path' as const, path: join(native.workdir, `benchmark-${profile}.zip`) };
+        const exported = await timed(
+          'export',
+          async () =>
+            native.client.awaitJob<ExportResult>(await native.client.exportData({ datasetId: ds.id, profile, target })),
+          (e) => ({ profile, ok: e.ok, packageBytes: e.size, checks: e.validation.checks.length }),
+        );
+        expect(exported.validation.checks.filter((c) => !c.ok)).toEqual([]);
+        rmSync(target.path, { force: true });
         const result = {
           file: { path, bytes: size },
           engine: { name: info.name, version: info.version, memoryBudgetBytes: info.capabilities.memoryBudgetBytes },

@@ -1,0 +1,32 @@
+{
+  "profiles": [
+    {
+      "id": "excel",
+      "label": "Microsoft Excel",
+      "destinations": ["Microsoft Excel", "LibreOffice Calc", "Google Sheets"],
+      "dataExtension": ".xlsx",
+      "description": "A workbook with a Data sheet (numbers stored as numbers, real dates, one header row, frozen header, filters), a Report sheet describing the sources, rules and steps, and a Log sheet with the audit log."
+    },
+    {
+      "id": "csv",
+      "label": "Databases, Python, R, BI tools (CSV)",
+      "destinations": ["Power BI", "Tableau", "Python (pandas)", "R", "SQL databases"],
+      "dataExtension": ".csv",
+      "description": "UTF-8 CSV without a byte-order mark: comma-separated, ISO dates, \".\" as decimal separator, header \"Name [unit]\"."
+    },
+    {
+      "id": "parquet",
+      "label": "Python, Spark, DuckDB, data lakes (Parquet)",
+      "destinations": ["Python (pandas, Polars)", "Apache Spark", "DuckDB", "Power BI", "Data lakes"],
+      "dataExtension": ".parquet",
+      "description": "Apache Parquet with one typed column per field: numbers as doubles, whole numbers as 64-bit integers, dates as dates, date-times as UTC timestamps; column names \"Name [unit]\"."
+    },
+    {
+      "id": "geojson",
+      "label": "QGIS / ArcGIS / web maps (GeoJSON)",
+      "destinations": ["QGIS", "ArcGIS", "Google Earth", "Web maps"],
+      "dataExtension": ".geojson",
+      "description": "An RFC 7946 GeoJSON FeatureCollection in WGS84 longitude/latitude, built from the geometry column or the latitude and longitude columns."
+    }
+  ]
+}

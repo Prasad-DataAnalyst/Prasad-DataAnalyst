@@ -6,6 +6,27 @@ use sha2::{Digest, Sha256};
 
 /// ECMAScript Number.prototype.toString for a finite double, with -0 written as 0.
 pub fn canonical_number(x: f64) -> String {
+    let mut out = String::new();
+    write_canonical_number(x, &mut out);
+    out
+}
+
+/// Appends canonical_number(x) to `out`. Between 1e-6 and 1e21 ECMAScript writes fixed notation
+/// with the shortest digits that round-trip, which is exactly what Rust's Display writes, so the
+/// common case needs no exponent handling and no allocation.
+pub fn write_canonical_number(x: f64, out: &mut String) {
+    use std::fmt::Write;
+    let a = x.abs();
+    if x == 0.0 {
+        out.push('0');
+    } else if (1e-6..1e21).contains(&a) {
+        let _ = write!(out, "{x}");
+    } else {
+        out.push_str(&scientific(x));
+    }
+}
+
+fn scientific(x: f64) -> String {
     assert!(
         x.is_finite(),
         "a number without a canonical form reached the encoder"
@@ -145,6 +166,33 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_fixed_notation_fast_path_agrees_with_the_general_form() {
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut checked = 0;
+        while checked < 200_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let x = f64::from_bits(seed);
+            if !x.is_finite() || !(1e-6..1e21).contains(&x.abs()) {
+                continue;
+            }
+            assert_eq!(canonical_number(x), scientific(x), "{x:e}");
+            checked += 1;
+        }
+        for x in [
+            1e-6,
+            9.999999999999999e20,
+            0.1 + 0.2,
+            123456789012345680.0,
+            -42.5,
+        ] {
+            assert_eq!(canonical_number(x), scientific(x), "{x:e}");
+        }
+    }
+
     use super::*;
     use serde_json::json;
 

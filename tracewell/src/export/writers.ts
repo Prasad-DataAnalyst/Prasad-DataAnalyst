@@ -4,6 +4,7 @@
  */
 import { writeCsv } from '@tw/formats-csv';
 import { writeGeoJson, type GeoJsonFeatureOut } from '@tw/formats-geojson';
+import { writeParquet, type ParquetColumnIn } from '@tw/formats-parquet';
 import {
   writeXlsx,
   type XlsxColumnKind,
@@ -15,19 +16,31 @@ import { pointFromLatLon } from '@tw/geo';
 import { isGeometryCell, type AuditEntry, type ColumnId, type ColumnSchema, type LogicalType } from '@tw/model';
 import type { View } from '@tw/table';
 import { headerFor } from './profiles';
-import { textOf } from './values';
+import { exportable, textOf } from './values';
 
 export interface ExportWriters {
   csv(header: string[], rows: Iterable<string[]>): Uint8Array;
   xlsx(book: XlsxWriteBook): Uint8Array;
   geojson(features: Iterable<GeoJsonFeatureOut>): Uint8Array;
+  parquet(columns: ParquetColumnIn[]): Uint8Array;
 }
 
 export const DEFAULT_WRITERS: ExportWriters = Object.freeze({
   csv: (header: string[], rows: Iterable<string[]>) => writeCsv(header, rows),
   xlsx: (book: XlsxWriteBook) => writeXlsx(book),
   geojson: (features: Iterable<GeoJsonFeatureOut>) => writeGeoJson(features),
+  parquet: (columns: ParquetColumnIn[]) => writeParquet(columns),
 });
+
+/** The columns of a Parquet data file: header names, logical types and exported values. */
+export function parquetColumns(view: View, cols: ColumnId[]): ParquetColumnIn[] {
+  return cols.map((c) => {
+    const schema = view.columnSchema(c);
+    const values = [];
+    for (const r of view.rows()) values.push(exportable(view.value(r, c)));
+    return { name: headerFor(schema), type: schema.type.value, values };
+  });
+}
 
 export function* csvRows(view: View, cols: ColumnId[]): IterableIterator<string[]> {
   for (const r of view.rows()) yield cols.map((c) => textOf(view.value(r, c)));

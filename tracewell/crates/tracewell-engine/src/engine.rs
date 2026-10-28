@@ -40,6 +40,8 @@ pub struct Dataset {
     /// The reader's notes on the file (ragged rows, multi-row header, assumed encoding).
     pub notes: Vec<Note>,
     pub issues: Vec<IssueState>,
+    /// The rule packs of the last check run, recorded in export manifests.
+    pub check_packs: Vec<Value>,
 }
 
 impl Dataset {
@@ -68,6 +70,8 @@ pub struct Project {
     pub datasets: Vec<Dataset>,
     pub originals: Vec<Value>,
     pub next_dataset: u64,
+    /// Records of the packages exported and verified.
+    pub exports: Vec<Value>,
 }
 
 pub struct Engine {
@@ -79,8 +83,12 @@ pub struct Engine {
     pub memory_limit: u64,
     /// Worker threads for parsing; DuckDB has its own setting.
     pub threads: usize,
+    /// The registered owner of this copy, recorded in every export manifest.
+    pub owner: String,
     pub project: Option<Project>,
     jobs: HashMap<String, Value>,
+    /// Bytes a finished job hands back with its result (a small export package).
+    pub job_bytes: HashMap<String, Vec<u8>>,
     cancels: HashMap<String, Arc<AtomicBool>>,
     next_job: u64,
 }
@@ -97,6 +105,13 @@ impl Shared {
         if let Ok(mut w) = self.out.lock() {
             // A closed output means the client has gone; there is nobody left to tell.
             let _ = write_message(&mut *w, msg);
+        }
+    }
+
+    /// Sends an escaped message carrying byte frames.
+    pub fn send_framed(&self, escaped: &Value, frames: &[&[u8]]) {
+        if let Ok(mut w) = self.out.lock() {
+            let _ = crate::framing::write_with_frames(&mut *w, escaped, frames);
         }
     }
 
@@ -162,6 +177,7 @@ impl Engine {
         ids: Box<dyn IdSource>,
         memory_limit: u64,
         threads: usize,
+        owner: String,
     ) -> Self {
         Engine {
             conn,
@@ -171,8 +187,10 @@ impl Engine {
             version: env!("CARGO_PKG_VERSION").into(),
             memory_limit,
             threads,
+            owner,
             project: None,
             jobs: HashMap::new(),
+            job_bytes: HashMap::new(),
             cancels: HashMap::new(),
             next_job: 1,
         }
@@ -217,7 +235,7 @@ impl Engine {
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
                 "formats": ["csv", "tsv"],
-                "exportProfiles": [],
+                "exportProfiles": ["csv", "parquet"],
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
                 "crsTransform": false,
@@ -263,6 +281,7 @@ impl Engine {
             datasets: Vec::new(),
             originals: Vec::new(),
             next_dataset: 1,
+            exports: Vec::new(),
         });
         let mut d = draft("project.create", json!({}));
         d.insert(
@@ -307,7 +326,7 @@ impl Engine {
             "lastSavedAt": null,
             "originals": p.originals,
             "datasets": p.datasets.iter().map(Self::dataset_summary).collect::<Vec<_>>(),
-            "exports": [],
+            "exports": p.exports,
             "rulePacks": [],
             "auditHead": { "seq": seq, "hash": hash },
         }))
@@ -625,6 +644,11 @@ impl Engine {
         Ok(json!({ "items": items, "total": st.flagged.count(), "offset": offset }))
     }
 
+    pub fn list_export_profiles(&self, dataset: &Value) -> Result<Value> {
+        self.dataset(dataset)?;
+        Ok(json!(crate::export::profile_statuses()))
+    }
+
     pub fn list_audit(&self, q: &Value) -> Result<Value> {
         let p = self.project()?;
         let offset = count(&q["offset"], "offset", 0, u64::MAX >> 11)? as usize;
@@ -774,6 +798,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
                     EngineError::internal("The dataset disappeared during the checks.")
                 })?;
             merge_check_run(&mut ds.issues, drafts, seq, row_count);
+            ds.check_packs = packs.clone();
             Ok(json!({
                 "datasetId": dataset_id,
                 "packs": packs,
@@ -792,6 +817,169 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
         );
     });
     Ok(json!({ "jobId": job, "kind": "check" }))
+}
+
+/// Starts an export job (SAD section 10): the package is written, read back, assembled, re-opened
+/// and verified before it is offered.
+pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let project_id = engine.project()?.id.clone();
+    let profile = req["profile"].as_str().unwrap_or("").to_string();
+    let statuses = crate::export::profile_statuses();
+    let status = statuses
+        .iter()
+        .find(|s| s["profile"]["id"] == profile.as_str())
+        .ok_or_else(|| {
+            EngineError::invalid(
+                format!("The export profile {} does not exist.", req["profile"]),
+                "Choose Excel, CSV, Parquet or GeoJSON.",
+            )
+        })?;
+    let d = engine.dataset(&req["datasetId"])?;
+    if !crate::export::native_profile(&profile) {
+        return Err(EngineError::new(
+            "EXPORT_REFUSED",
+            status["reason"]
+                .as_str()
+                .unwrap_or("This export is not available."),
+            status["fix"]
+                .as_str()
+                .unwrap_or("Choose another export profile."),
+        ));
+    }
+    let target = match &req["target"] {
+        Value::Null => None,
+        t if t["kind"] == "return-bytes" => None,
+        t if t["kind"] == "path" && t["path"].as_str().is_some_and(|p| !p.is_empty()) => {
+            Some(PathBuf::from(t["path"].as_str().unwrap_or_default()))
+        }
+        _ => {
+            return Err(EngineError::invalid(
+                "The save target is not valid.",
+                "Pass { kind: 'return-bytes' } or a file path.",
+            ));
+        }
+    };
+    let columns: Vec<crate::export::OutColumn> = d.spec["columns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(&d.columns)
+        .map(|(c, (id, kind))| crate::export::OutColumn {
+            id: id.clone(),
+            name: c["name"].as_str().unwrap_or_default().to_string(),
+            unit: c["unit"]["value"].as_str().map(String::from),
+            typ: c["type"]["value"].as_str().unwrap_or_default().to_string(),
+            kind: *kind,
+        })
+        .collect();
+    let base_name = req["baseName"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| d.name.clone(), String::from);
+    let p = engine.project()?;
+    let sources: Vec<Value> = p
+        .originals
+        .iter()
+        .filter(|o| o["fileId"] == d.spec["fileId"])
+        .cloned()
+        .collect();
+    let (seq, hash) = p.log.head();
+    let mut input = crate::export::ExportInput {
+        export_id: String::new(),
+        base_name,
+        profile: profile.clone(),
+        at: String::new(),
+        app_version: engine.version.clone(),
+        owner: engine.owner.clone(),
+        project: json!({ "id": p.id, "name": p.name }),
+        dataset_id: d.id.clone(),
+        dataset_name: d.name.clone(),
+        view: quote_ident(&d.view),
+        row_count: d.row_count,
+        columns,
+        sources,
+        rule_packs: d.check_packs.clone(),
+        assumptions: d.assumptions.clone(),
+        issues: d.issues.iter().map(to_issue).collect(),
+        audit: p.log.entries().to_vec(),
+        audit_head: json!({ "seq": seq, "hash": hash }),
+        workdir: engine.workdir.join(&project_id),
+        target,
+        threads: engine.threads,
+    };
+    // In the order the TypeScript engine draws them, so seeded runs give the same IDs and times.
+    input.export_id = engine.ids.new_export_id();
+    input.at = engine.clock.now_iso();
+    let conn = engine.conn.try_clone()?;
+    let (job, cancel) = engine.start_job();
+    drop(engine);
+
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let progress_shared = shared.clone();
+        let progress_job = job_id.clone();
+        let mut progress = move |phase: &str, done: u64| {
+            let p = json!({ "phase": phase, "done": done, "total": 4, "unit": "items" });
+            if let Ok(mut e) = progress_shared.engine.lock() {
+                e.jobs.insert(
+                    progress_job.clone(),
+                    json!({ "state": "running", "progress": p }),
+                );
+            }
+            progress_shared
+                .event(json!({ "type": "job.progress", "jobId": progress_job, "progress": p }));
+        };
+        let outcome =
+            crate::export::build_export(&conn, &input, &cancel, &mut progress).and_then(|out| {
+                let mut engine = shared
+                    .engine
+                    .lock()
+                    .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+                if let Some(record) = out.record {
+                    if engine.project.as_ref().map(|p| p.id.as_str()) != Some(project_id.as_str()) {
+                        return Err(EngineError::new(
+                            "CANCELLED",
+                            "The project was closed before the export finished.",
+                            "Export again from the open project.",
+                        ));
+                    }
+                    let mut entry =
+                        draft("export.create", json!({ "datasetId": input.dataset_id }));
+                    entry.insert(
+                        "new".into(),
+                        json!({ "packageName": out.result["packageName"] }),
+                    );
+                    entry.insert("payload".into(), json!({ "record": record }));
+                    engine.append(entry, None)?;
+                    if let Some(p) = engine.project.as_mut() {
+                        p.exports.push(record);
+                    }
+                }
+                if let Some(bytes) = out.bytes {
+                    engine.job_bytes.insert(job_id.clone(), bytes);
+                }
+                Ok(out.result)
+            });
+        if outcome.is_err() {
+            if let Some(t) = &input.target {
+                let _ = std::fs::remove_file(t);
+            }
+        }
+        finish_job(
+            &shared,
+            &job_id,
+            outcome,
+            &["project", "exports", "audit"],
+            &input.dataset_id,
+        );
+    });
+    Ok(json!({ "jobId": job, "kind": "export" }))
 }
 
 /// Records a job's outcome and tells the client.
@@ -1113,6 +1301,7 @@ fn commit_import(
         columns,
         notes,
         issues: Vec::new(),
+        check_packs: Vec::new(),
     };
     let summary = Engine::dataset_summary(&dataset);
     let p = engine

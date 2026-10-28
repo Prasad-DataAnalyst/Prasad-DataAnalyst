@@ -221,32 +221,33 @@ Engineers can work in parallel, one folder each. If the CLI or the engine ever n
 
 Modules with the same build order can be built in parallel. Lower numbers come first.
 
-| Order | Module          | Path                                                  | Depends on                                                                             |
-| ----- | --------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| 0     | tooling         | `tracewell/` (configs, scripts, `tests/architecture`) | none                                                                                   |
-| 0     | model           | `src/model`                                           | zod                                                                                    |
-| 1     | io              | `src/io`                                              | model, fflate, @noble/hashes                                                           |
-| 1     | units           | `src/units`                                           | model                                                                                  |
-| 1     | geo             | `src/geo`                                             | model                                                                                  |
-| 1     | engine-api      | `src/engine-api`                                      | model                                                                                  |
-| 1     | fixtures        | `fixtures/`                                           | model, io                                                                              |
-| 2     | formats-csv     | `src/formats/csv`                                     | model, io                                                                              |
-| 2     | formats-xlsx    | `src/formats/xlsx`                                    | model, io, saxes                                                                       |
-| 2     | formats-geojson | `src/formats/geojson`                                 | model, io, @streamparser/json                                                          |
-| 2     | detect          | `src/detect`                                          | model, units                                                                           |
-| 2     | table           | `src/table`                                           | model, io                                                                              |
-| 2     | audit           | `src/audit`                                           | model, io                                                                              |
-| 2     | ui-shell        | `src/ui-shell`                                        | model, engine-api, react, zustand, react-resizable-panels, lucide-react                |
-| 3     | ingest          | `src/ingest`                                          | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson                   |
-| 3     | rules           | `src/rules`                                           | model, io, table, units, geo                                                           |
-| 3     | steps           | `src/steps`                                           | model, table, units, geo                                                               |
-| 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson               |
-| 3     | project         | `src/project`                                         | model, io                                                                              |
-| 3     | ui-views        | `src/ui-views`                                        | model, engine-api, ui-shell, @tanstack/react-virtual                                   |
-| 4     | engine          | `src/engine`                                          | model, io, units, geo, engine-api, table, audit, ingest, rules, steps, export, project |
-| 5     | app             | `src/app`, `index.html`                               | model, engine-api, ui-shell, ui-views, engine                                          |
-| 5     | conformance     | `tests/conformance`                                   | model, io, engine-api, engine, fixtures                                                |
-| 6     | e2e             | `tests/e2e`, `tests/oracle`, `playwright.config.ts`   | app (built), fixtures                                                                  |
+| Order | Module          | Path                                                  | Depends on                                                                                |
+| ----- | --------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 0     | tooling         | `tracewell/` (configs, scripts, `tests/architecture`) | none                                                                                      |
+| 0     | model           | `src/model`                                           | zod                                                                                       |
+| 1     | io              | `src/io`                                              | model, fflate, @noble/hashes                                                              |
+| 1     | units           | `src/units`                                           | model                                                                                     |
+| 1     | geo             | `src/geo`                                             | model                                                                                     |
+| 1     | engine-api      | `src/engine-api`                                      | model                                                                                     |
+| 1     | fixtures        | `fixtures/`                                           | model, io                                                                                 |
+| 2     | formats-csv     | `src/formats/csv`                                     | model, io                                                                                 |
+| 2     | formats-xlsx    | `src/formats/xlsx`                                    | model, io, saxes                                                                          |
+| 2     | formats-geojson | `src/formats/geojson`                                 | model, io, @streamparser/json                                                             |
+| 2     | formats-parquet | `src/formats/parquet`                                 | model, hyparquet, hyparquet-writer                                                        |
+| 2     | detect          | `src/detect`                                          | model, units                                                                              |
+| 2     | table           | `src/table`                                           | model, io                                                                                 |
+| 2     | audit           | `src/audit`                                           | model, io                                                                                 |
+| 2     | ui-shell        | `src/ui-shell`                                        | model, engine-api, react, zustand, react-resizable-panels, lucide-react                   |
+| 3     | ingest          | `src/ingest`                                          | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson                      |
+| 3     | rules           | `src/rules`                                           | model, io, table, units, geo                                                              |
+| 3     | steps           | `src/steps`                                           | model, table, units, geo                                                                  |
+| 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson, formats-parquet |
+| 3     | project         | `src/project`                                         | model, io                                                                                 |
+| 3     | ui-views        | `src/ui-views`                                        | model, engine-api, ui-shell, @tanstack/react-virtual                                      |
+| 4     | engine          | `src/engine`                                          | model, io, units, geo, engine-api, table, audit, ingest, rules, steps, export, project    |
+| 5     | app             | `src/app`, `index.html`                               | model, engine-api, ui-shell, ui-views, engine                                             |
+| 5     | conformance     | `tests/conformance`                                   | model, io, engine-api, engine, export, fixtures                                           |
+| 6     | e2e             | `tests/e2e`, `tests/oracle`, `playwright.config.ts`   | app (built), fixtures                                                                     |
 
 ### 6.2 Dependency diagram
 
@@ -823,7 +824,7 @@ From `tracewell/`: `npm ci && npm test`. `scripts/test-all.mjs` runs, failing fa
 
 ## 14. Libraries and licences (slice 1)
 
-Versions verified with `npm view <pkg> version license` on 19 October 2026. Each pin is at least two weeks old, except react-resizable-panels 4.14.2 and lucide-react 1.52.0, which were published on 2 and 4 October 2026, about 15 days before this check; they are kept as the newest stable releases. Pins are exact and the lockfile is committed.
+Versions verified with `npm view <pkg> version license` on 19 October 2026. Each pin is at least two weeks old, except react-resizable-panels 4.14.2 and lucide-react 1.52.0, which were published on 2 and 4 October 2026, about 15 days before this check; they are kept as the newest stable releases. Pins are exact and the lockfile is committed. On 28 October 2026 (slice 2), `npm audit` reported advisories in zod 4.6.5 (memory exhaustion while validating oversized collections, reachable through a crafted project file) and in the Vite 8.3.0–8.3.2 development server; they were fixed by moving to zod 4.6.7 and vite 8.3.4, both more than two weeks old, and hyparquet 1.31.3 with hyparquet-writer 0.16.11 were added for Parquet.
 
 **Runtime (shipped)**
 
@@ -839,14 +840,16 @@ Versions verified with `npm view <pkg> version license` on 19 October 2026. Each
 | saxes                   | 6.0.0 (+ xmlchars 2.2.0, MIT) | ISC     | Streaming XML for the XLSX reader; no DTD or entity expansion                             |
 | @noble/hashes           | 2.4.0                         | MIT     | Incremental SHA-256 in worker and Node (pure JS, audited)                                 |
 | @streamparser/json      | 0.0.26                        | MIT     | Streaming GeoJSON features                                                                |
-| zod                     | 4.6.5                         | MIT     | Schemas for manifests, rule-packs, steps, decisions, audit entries                        |
+| zod                     | 4.6.7                         | MIT     | Schemas for manifests, rule-packs, steps, decisions, audit entries                        |
+| hyparquet               | 1.31.3                        | MIT     | Parquet reader for export read-back (slice 2)                                             |
+| hyparquet-writer        | 0.16.11                       | MIT     | Parquet writer for the Parquet export profile (slice 2)                                   |
 
 **Development and test only**
 
 | Package                        | Version | Licence                         | Purpose                                                                |
 | ------------------------------ | ------- | ------------------------------- | ---------------------------------------------------------------------- |
 | typescript                     | 6.0.3   | Apache-2.0                      | Compiler (typescript-eslint 8.71 supports < 6.1)                       |
-| vite                           | 8.3.2   | MIT                             | Development server and build (Node ≥ 22.12)                            |
+| vite                           | 8.3.4   | MIT                             | Development server and build (Node ≥ 22.12)                            |
 | @vitejs/plugin-react           | 6.1.1   | MIT                             | React transform                                                        |
 | vitest                         | 5.0.3   | MIT                             | Unit, golden, property and conformance tests                           |
 | @vitest/coverage-v8            | 5.0.3   | MIT                             | Coverage                                                               |
@@ -878,7 +881,7 @@ Versions verified with `npm view <pkg> version license` on 19 October 2026. Each
 
 **Planned for later slices (checked 19 October 2026).**
 
-- npm: maplibre-gl 6.15.0 (BSD-3-Clause), pmtiles 4.5.0 (BSD-3-Clause), proj4 2.22.0 (MIT), hyparquet 1.31.5 (MIT), @tauri-apps/api 2.12.4 (Apache-2.0 OR MIT).
+- npm: maplibre-gl 6.15.0 (BSD-3-Clause), pmtiles 4.5.0 (BSD-3-Clause), proj4 2.22.0 (MIT), @tauri-apps/api 2.12.4 (Apache-2.0 OR MIT).
 - Rust crates (crates.io): calamine 0.37.0, rust_xlsxwriter 0.100.0, zip 9.0.5. Each is reviewed again at adoption.
 - DuckDB's spatial extension needs a licence review first, because it links GEOS (LGPL-2.1).
 

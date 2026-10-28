@@ -9,13 +9,13 @@ import type { RulePackRef } from './rules';
 import type { Step } from './steps';
 import type { LogicalType } from './values';
 
-export type ExportProfileId = 'excel' | 'csv' | 'geojson';
+export type ExportProfileId = 'excel' | 'csv' | 'parquet' | 'geojson';
 
 export interface ExportProfile {
   id: ExportProfileId;
   label: string;
   destinations: string[];
-  dataExtension: '.xlsx' | '.csv' | '.geojson';
+  dataExtension: '.xlsx' | '.csv' | '.parquet' | '.geojson';
   description: string;
 }
 
@@ -53,6 +53,7 @@ export interface ValidationCheck {
     | 'RB-XLSX-TYPES'
     | 'RB-XLSX-STRUCTURE'
     | 'RB-GEOJSON-STRUCTURE'
+    | 'RB-PARQUET-TYPES'
     | 'RB-PKG-CHECKSUMS'
     | 'RB-PKG-CONTENTS';
   ok: boolean;
@@ -123,6 +124,8 @@ export interface ExportResult {
   packageSha256: Sha256Hex | null;
   size: number;
   bytes?: Uint8Array;
+  /** Where the package was written, when the request named a file or it was too large to hand back. */
+  path?: string;
   manifest: ExportManifest;
   validation: ValidationReport;
 }

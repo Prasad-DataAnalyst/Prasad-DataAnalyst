@@ -4,13 +4,18 @@
  * audit format and on every value it imports. The suite runs when the engine has been built with
  * `npm run build:native`; without the binary it is skipped and says so.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { AuditLog } from '@tw/audit';
 import { PROTOCOL_VERSION, type EngineClient } from '@tw/engine-api';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
+import { readBack } from '@tw/export';
+import { readZip } from '@tw/io';
 import {
   canonicalJson,
   type AuditEntry,
   type CheckSummary,
+  type ExportResult,
   type DatasetSummary,
   type Issue,
   type IssueOccurrence,
@@ -53,7 +58,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
   const pairs = new Map<string, { nat: string; ref: string }>();
 
   beforeAll(async () => {
-    native = startNative(['--fixed-clock', START, '--seed', '1', '--threads', '2']);
+    native = startNative(['--fixed-clock', START, '--seed', '1', '--threads', '2', '--owner', 'Prasad']);
     reference = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
   });
 
@@ -148,6 +153,51 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       const strip = (o: IssueOccurrence) => ({ ...o, issueId: '' });
       expect({ ...a, items: a.items.map(strip) }, issue.ruleId).toEqual({ ...b, items: b.items.map(strip) });
     }
+  });
+
+  it.each(CSV_FIXTURES)('%s exports CSV and Parquet packages that both engines verify', async (name) => {
+    const { nat, ref } = pairs.get(name) as { nat: string; ref: string };
+    for (const profile of ['csv', 'parquet'] as const) {
+      const a = await native.client.awaitJob<ExportResult>(await native.client.exportData({ datasetId: nat, profile }));
+      const b = await reference.awaitJob<ExportResult>(await reference.exportData({ datasetId: ref, profile }));
+      expect(
+        a.validation.checks.filter((c) => !c.ok),
+        `${profile}: native checks`,
+      ).toEqual([]);
+      expect([a.ok, b.ok]).toEqual([true, true]);
+      expect(a.manifest.dataset.columns, profile).toEqual(b.manifest.dataset.columns);
+      expect(a.manifest.dataset.viewDigest).toBe(b.manifest.dataset.viewDigest);
+      expect(a.validation.checks.map((c) => `${c.id} ${c.file ?? ''}`)).toEqual(
+        b.validation.checks.map((c) => `${c.id} ${c.file ?? ''}`),
+      );
+      // The reference engine's readers verify the native package and its data file independently.
+      const zip = a.bytes as Uint8Array;
+      expect(readBack.package(zip, a.manifest).filter((c) => !c.ok)).toEqual([]);
+      const dataFile = `data.${profile}`;
+      const data = readZip(zip).read(dataFile);
+      const shape = { rowCount: a.manifest.dataset.rowCount, columns: a.manifest.dataset.columns };
+      const checks =
+        profile === 'csv' ? readBack.csv(data, shape, dataFile) : await readBack.parquet(data, shape, dataFile);
+      expect(
+        checks.filter((c) => !c.ok),
+        `${profile}: reference read-back of the native file`,
+      ).toEqual([]);
+      // Both engines write the same CSV, byte for byte.
+      if (profile === 'csv') expect(data).toEqual(readZip(b.bytes as Uint8Array).read(dataFile));
+    }
+  });
+
+  it('writes a large package to the file it is given rather than through the pipe', async () => {
+    const pair = pairs.get('csv_well_daily_golden.csv') as { nat: string };
+    const path = join(native.workdir, 'golden.zip');
+    const a = await native.client.awaitJob<ExportResult>(
+      await native.client.exportData({ datasetId: pair.nat, profile: 'parquet', target: { kind: 'path', path } }),
+    );
+    expect(a).toMatchObject({ ok: true, path });
+    expect(a.bytes).toBeUndefined();
+    expect(readBack.package(new Uint8Array(readFileSync(path)), a.manifest).filter((c) => !c.ok)).toEqual([]);
+    const created = (await native.client.listAudit({ action: ['export.create'], order: 'desc', limit: 1 })).items[0];
+    expect(created?.payload).toMatchObject({ record: { packageSha256: a.packageSha256, profile: 'parquet' } });
   });
 
   it('imports every delimited fixture, and would refuse a plan it cannot execute rather than guess', () => {

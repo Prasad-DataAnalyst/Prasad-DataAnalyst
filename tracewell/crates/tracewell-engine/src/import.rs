@@ -359,6 +359,7 @@ fn read_file(
         skip_lines: plan.skip_lines,
         header_rows: plan.header_rows,
         batch_rows: BATCH_ROWS,
+        keep_blank: false,
     });
     let mut hash = Sha256::new();
     let mut buf = vec![0u8; READ_BYTES];

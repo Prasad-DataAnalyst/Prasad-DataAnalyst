@@ -34,6 +34,7 @@
       "@tw/formats-csv": ["./src/formats/csv/index.ts"],
       "@tw/formats-xlsx": ["./src/formats/xlsx/index.ts"],
       "@tw/formats-geojson": ["./src/formats/geojson/index.ts"],
+      "@tw/formats-parquet": ["./src/formats/parquet/index.ts"],
       "@tw/detect": ["./src/detect/index.ts"],
       "@tw/table": ["./src/table/index.ts"],
       "@tw/audit": ["./src/audit/index.ts"],
