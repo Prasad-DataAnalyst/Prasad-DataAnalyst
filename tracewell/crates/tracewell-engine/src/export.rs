@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
 /// Profiles this engine writes; the others are listed as not available yet.
@@ -185,18 +185,23 @@ fn per_column<T: Send>(
     let conns: Vec<Connection> = (0..workers)
         .map(|_| conn.try_clone())
         .collect::<std::result::Result<_, _>>()?;
+    // Columns are handed out one at a time, text first (the slowest to read), so no worker idles
+    // while another still has a queue of columns.
+    let mut order: Vec<usize> = (0..columns.len()).collect();
+    order.sort_by_key(|&j| columns[j].kind != Kind::String);
+    let next = AtomicUsize::new(0);
     let mut results: Vec<Option<Result<T>>> = (0..columns.len()).map(|_| None).collect();
     std::thread::scope(|s| {
         let handles: Vec<_> = conns
             .into_iter()
-            .enumerate()
-            .map(|(w, c)| {
-                let per_column = &per_column;
+            .map(|c| {
+                let (per_column, order, next) = (&per_column, &order, &next);
                 s.spawn(move || {
-                    (w..columns.len())
-                        .step_by(workers)
-                        .map(|j| (j, per_column(&c, &columns[j])))
-                        .collect::<Vec<_>>()
+                    let mut done = Vec::new();
+                    while let Some(&j) = order.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        done.push((j, per_column(&c, &columns[j])));
+                    }
+                    done
                 })
             })
             .collect();
