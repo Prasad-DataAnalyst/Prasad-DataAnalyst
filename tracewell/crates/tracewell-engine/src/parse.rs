@@ -3,6 +3,7 @@
 //! value. A field that does not fit keeps its raw text; nothing is dropped (SAD section 7.2).
 
 use crate::time::{MS_PER_DAY, days_from_civil};
+use crate::units::js_trim;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -86,7 +87,7 @@ impl ColumnParser {
         let Some(raw) = raw else {
             return Parsed::Value(Cell::Null, None);
         };
-        let t = raw.trim();
+        let t = js_trim(raw);
         if t.is_empty() {
             return Parsed::Value(Cell::Null, None);
         }
@@ -94,9 +95,11 @@ impl ColumnParser {
             return Parsed::Value(Cell::Null, Some(m.clone()));
         }
         // A numeric marker also matches the same number written differently ('-999.250').
-        if let Some(v) = parse_number(raw, self.decimal, "") {
-            if let Some((_, m)) = self.numeric_markers.iter().find(|(x, _)| *x == v) {
-                return Parsed::Value(Cell::Null, Some(m.clone()));
+        if !self.numeric_markers.is_empty() {
+            if let Some(v) = parse_number(raw, self.decimal, "") {
+                if let Some((_, m)) = self.numeric_markers.iter().find(|(x, _)| *x == v) {
+                    return Parsed::Value(Cell::Null, Some(m.clone()));
+                }
             }
         }
         let value = match self.kind {
@@ -160,11 +163,55 @@ fn strip_thousands(int_part: &str, thousands: &str) -> Option<String> {
     ok.then(|| groups.concat())
 }
 
+/// The common case, decided without allocating: an optional ASCII sign, digits with at most one
+/// '.' (when '.' is the decimal separator) and an exponent of 1 to 4 digits. Rust's float parsing
+/// is correctly rounded, as JavaScript's is. None means the text needs the full rules.
+fn plain_number(t: &str, decimal: char) -> Option<Option<f64>> {
+    let b = t.as_bytes();
+    let digits_from = |mut i: usize| {
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        (i, i - start)
+    };
+    let mut i = usize::from(matches!(b.first(), Some(b'-' | b'+')));
+    let (after_int, int_n) = digits_from(i);
+    i = after_int;
+    let mut frac_n = 0;
+    if decimal == '.' && b.get(i) == Some(&b'.') {
+        (i, frac_n) = digits_from(i + 1);
+    }
+    if int_n + frac_n == 0 {
+        return None;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1 + usize::from(matches!(b.get(i + 1), Some(b'+' | b'-')));
+        let (end, exp_n) = digits_from(i);
+        if !(1..=4).contains(&exp_n) {
+            return None;
+        }
+        i = end;
+    }
+    if i != b.len() {
+        return None;
+    }
+    let value: f64 = t.parse().ok()?;
+    Some(
+        value
+            .is_finite()
+            .then_some(if value == 0.0 { 0.0 } else { value }),
+    )
+}
+
 /// Strict locale-aware number parsing, as the TypeScript parseNumber.
 pub fn parse_number(text: &str, decimal: char, thousands: &str) -> Option<f64> {
-    let trimmed = text.trim();
+    let trimmed = js_trim(text);
     if trimmed.is_empty() || trimmed.chars().count() > MAX_NUMBER_TEXT {
         return None;
+    }
+    if let Some(plain) = plain_number(trimmed, decimal) {
+        return plain;
     }
     let (sign, signless) = match trimmed.chars().next() {
         Some('-') => ("-", &trimmed[1..]),
@@ -244,7 +291,7 @@ fn take_digits(s: &str, min: usize, max: usize) -> Option<(i64, &str)> {
 
 /// Parses what follows a date: nothing, or a time with an optional zone. Some(None) means no time.
 fn time_suffix(rest: &str) -> Option<Option<TimeOfDay>> {
-    if rest.trim().is_empty() {
+    if js_trim(rest).is_empty() {
         return Some(None);
     }
     let mut s = if let Some(x) = rest.strip_prefix('T') {
@@ -333,7 +380,7 @@ fn time_suffix(rest: &str) -> Option<Option<TimeOfDay>> {
 }
 
 fn date_parts(text: &str) -> Option<DateParts> {
-    let t = text.trim();
+    let t = js_trim(text);
     if t.chars().count() > MAX_DATE_TEXT {
         return None;
     }
@@ -413,7 +460,7 @@ fn month_day(p: &DateParts, f: DateFormat) -> Option<(i64, i64)> {
 }
 
 fn serial(text: &str) -> Option<f64> {
-    let t = text.trim();
+    let t = js_trim(text);
     let (int, frac) = t.split_once('.').unwrap_or((t, ""));
     if int.is_empty()
         || !all_digits(int)

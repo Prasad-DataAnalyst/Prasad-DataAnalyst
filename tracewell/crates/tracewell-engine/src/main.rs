@@ -6,13 +6,18 @@
 
 mod audit;
 mod canonical;
+mod checks;
+mod csv;
 mod encoding;
 mod engine;
 mod error;
 mod framing;
 mod import;
+mod issues;
 mod parse;
+mod rules;
 mod time;
+mod units;
 
 use engine::{Engine, Shared};
 use error::{EngineError, Result};
@@ -108,7 +113,18 @@ fn open(args: &Args) -> Result<Engine> {
         Some(seed) => Box::new(SeededIds(seed)),
         None => Box::new(RandomIds),
     };
-    Ok(Engine::new(conn, args.workdir.clone(), clock, ids, limit))
+    let threads = args.threads.map_or_else(
+        || std::thread::available_parallelism().map_or(1, |n| n.get()),
+        |t| t.max(1) as usize,
+    );
+    Ok(Engine::new(
+        conn,
+        args.workdir.clone(),
+        clock,
+        ids,
+        limit,
+        threads,
+    ))
 }
 
 fn param(params: &[Value], i: usize) -> &Value {
@@ -118,6 +134,9 @@ fn param(params: &[Value], i: usize) -> &Value {
 fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) -> Result<Value> {
     if method == "importFile" {
         return engine::import_file(shared, msg, param(params, 0), param(params, 1));
+    }
+    if method == "runChecks" {
+        return engine::run_checks(shared, param(params, 0));
     }
     let mut e = shared
         .engine
@@ -132,10 +151,8 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "getColumnStats" => e.column_stats(param(params, 0), param(params, 1)),
         "listAudit" => e.list_audit(param(params, 0)),
         "verifyAudit" => e.verify_audit(),
-        "listIssues" => {
-            e.summary()?;
-            Ok(json!({ "items": [], "total": 0, "offset": 0 }))
-        }
+        "listIssues" => e.list_issues(param(params, 0)),
+        "listOccurrences" => e.list_occurrences(param(params, 0), param(params, 1)),
         "jobOutcome" => e.job_outcome(param(params, 0)),
         "cancelJob" => e.cancel_job(param(params, 0)),
         other => Err(EngineError::unsupported(format!("the call {other}"))),

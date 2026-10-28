@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import type { QuantityKind } from '@tw/model';
 import { describe, expect, it } from 'vitest';
 import { allUnits, defaultTargetUnit, getUnit, physicalBounds } from './index';
+import { loadQuantities } from './quantities';
 
 const QUANTITIES: QuantityKind[] = [
   'length',
@@ -131,5 +133,23 @@ describe('defaultTargetUnit', () => {
         if (code !== null) expect(getUnit(code)?.quantity, `${q} ${system}`).toBe(q);
       }
     }
+  });
+});
+
+describe('loadQuantities', () => {
+  const text = readFileSync(new URL('./quantities-2026.1.json', import.meta.url), 'utf8');
+
+  it('reads the shipped table, which the native engine reads too', () => {
+    const table = loadQuantities(text);
+    expect(table.temperature.bounds?.min).toBe(0);
+    expect(table.energy_rate.family).toBe('power');
+  });
+
+  it('refuses a table with a missing quantity or a damaged entry, naming the problem', () => {
+    const json = JSON.parse(text) as { quantities: Record<string, Record<string, unknown>> };
+    const { length: _length, ...withoutLength } = json.quantities;
+    expect(() => loadQuantities(JSON.stringify({ quantities: withoutLength }))).toThrow(/exactly these quantities/);
+    const damaged = { ...json.quantities, area: { ...json.quantities['area'], bounds: { min: 'zero' } } };
+    expect(() => loadQuantities(JSON.stringify({ quantities: damaged }))).toThrow(/bounds of area/);
   });
 });

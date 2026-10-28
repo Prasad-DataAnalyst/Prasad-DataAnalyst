@@ -4,57 +4,24 @@
  * audit format and on every value it imports. The suite runs when the engine has been built with
  * `npm run build:native`; without the binary it is skipped and says so.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AuditLog } from '@tw/audit';
-import { EngineClient, PROTOCOL_VERSION, stdioTransport } from '@tw/engine-api';
+import { PROTOCOL_VERSION, type EngineClient } from '@tw/engine-api';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
 import {
   canonicalJson,
   type AuditEntry,
+  type CheckSummary,
   type DatasetSummary,
+  type Issue,
+  type IssueOccurrence,
   type ImportPreview,
   type JsonValue,
   type RowWindow,
 } from '@tw/model';
 import { columnDigest } from '@tw/table';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ENGINE_FACTORIES, PROFILE, START } from './harness';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const BINARY = join(ROOT, 'crates', 'tracewell-engine', 'target', 'release', 'tracewell-engine');
-const built = existsSync(BINARY);
-
-interface Native {
-  client: EngineClient;
-  child: ChildProcessWithoutNullStreams;
-  workdir: string;
-}
-
-function startNative(): Native {
-  const workdir = mkdtempSync(join(tmpdir(), 'tw-native-'));
-  const child = spawn(BINARY, ['serve', '--workdir', workdir, '--fixed-clock', START, '--seed', '1', '--threads', '2']);
-  child.stderr.on('data', (d: Buffer) => process.stderr.write(`[native] ${d.toString()}`));
-  const client = new EngineClient(
-    stdioTransport({
-      readable: Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-      write: (bytes) =>
-        new Promise<void>((resolve, reject) => child.stdin.write(bytes, (e) => (e ? reject(e) : resolve()))),
-    }),
-  );
-  return { client, child, workdir };
-}
-
-function stopNative(n: Native): void {
-  n.client.close();
-  n.child.stdin.end();
-  n.child.kill();
-  rmSync(n.workdir, { recursive: true, force: true });
-}
+import { NATIVE_BINARY, nativeBuilt, startNative, stopNative, type NativeProcess } from './native-process';
 
 async function allRows(engine: EngineClient, datasetId: string): Promise<RowWindow['rows']> {
   const rows: RowWindow['rows'] = [];
@@ -77,14 +44,16 @@ function content(e: AuditEntry): Partial<AuditEntry> {
 
 const CSV_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(csv|tsv)$/.test(n));
 
-describe.skipIf(!built)('native engine parity (tracewell-native over a real pipe)', () => {
-  let native: Native;
+describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a real pipe)', () => {
+  let native: NativeProcess;
   let reference: EngineClient;
   const imported: string[] = [];
   const refused: string[] = [];
+  /** Dataset IDs per fixture, native and reference. */
+  const pairs = new Map<string, { nat: string; ref: string }>();
 
   beforeAll(async () => {
-    native = startNative();
+    native = startNative(['--fixed-clock', START, '--seed', '1', '--threads', '2']);
     reference = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
   });
 
@@ -135,6 +104,7 @@ describe.skipIf(!built)('native engine parity (tracewell-native over a real pipe
     expect(natRows.map((r) => r.cells)).toEqual(refRows.map((r) => r.cells));
     expect(natRows.map((r) => r.locator)).toEqual(refRows.map((r) => r.locator));
     imported.push(name);
+    pairs.set(name, { nat: nat.id, ref: ref.id });
 
     const natAdd = (await native.client.listAudit({ action: ['source.add'], order: 'desc', limit: 1 }))
       .items[0] as AuditEntry;
@@ -145,6 +115,39 @@ describe.skipIf(!built)('native engine parity (tracewell-native over a real pipe
       seq: natAdd.seq,
       target: { ...refAdd.target, datasetId: nat.id },
     });
+  });
+
+  it.each(CSV_FIXTURES)('%s raises the same issues with the same rows and messages', async (name) => {
+    const pair = pairs.get(name);
+    expect(pair, 'imported by both engines').toBeDefined();
+    const { nat, ref } = pair as { nat: string; ref: string };
+    const [natSummary, refSummary] = [
+      await native.client.awaitJob<CheckSummary>(await native.client.runChecks(nat)),
+      await reference.awaitJob<CheckSummary>(await reference.runChecks(ref)),
+    ];
+    const { durationMs: _a, datasetId: _b, ...natRest } = natSummary;
+    const { durationMs: _c, datasetId: _d, ...refRest } = refSummary;
+    expect(natRest).toEqual(refRest);
+    const natIssues = (await native.client.listIssues({ datasetId: nat, limit: 1000 })).items;
+    const refIssues = (await reference.listIssues({ datasetId: ref, limit: 1000 })).items;
+    // Issue IDs hash the dataset ID, which differs between the two projects; the rest must agree.
+    const comparable = (i: Issue) => {
+      const { id: _id, datasetId: _ds, firstSeenSeq: _f, lastCheckedSeq: _l, ...rest } = i;
+      return rest;
+    };
+    expect(natIssues.map(comparable)).toEqual(refIssues.map(comparable));
+    if (process.env['TW_DEBUG'] === '1')
+      console.log(name, natIssues.map((i) => `${i.ruleId}:${i.counts.open}`).join(' '));
+    for (const [i, issue] of natIssues.entries()) {
+      const other = refIssues[i] as Issue;
+      const page = { offset: 0, limit: 50 };
+      const [a, b] = [
+        await native.client.listOccurrences(issue.id, page),
+        await reference.listOccurrences(other.id, page),
+      ];
+      const strip = (o: IssueOccurrence) => ({ ...o, issueId: '' });
+      expect({ ...a, items: a.items.map(strip) }, issue.ruleId).toEqual({ ...b, items: b.items.map(strip) });
+    }
   });
 
   it('imports every delimited fixture, and would refuse a plan it cannot execute rather than guess', () => {
@@ -186,7 +189,7 @@ describe.skipIf(!built)('native engine parity (tracewell-native over a real pipe
   });
 
   it('refuses what it does not support yet with a reason and a fix', async () => {
-    await expect(native.client.runChecks('d1')).rejects.toMatchObject({
+    await expect(native.client.saveProject()).rejects.toMatchObject({
       code: 'PROTOCOL_MISMATCH',
       fix: expect.any(String),
     });
@@ -199,8 +202,8 @@ describe.skipIf(!built)('native engine parity (tracewell-native over a real pipe
   });
 });
 
-if (!built) {
+if (!nativeBuilt) {
   describe('native engine parity', () => {
-    it.skip(`needs the native engine: run npm run build:native (looked for ${BINARY})`, () => undefined);
+    it.skip(`needs the native engine: run npm run build:native (looked for ${NATIVE_BINARY})`, () => undefined);
   });
 }

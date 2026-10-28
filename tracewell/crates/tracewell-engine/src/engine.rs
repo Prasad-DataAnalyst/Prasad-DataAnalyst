@@ -4,15 +4,21 @@
 
 use crate::audit::AuditLog;
 use crate::canonical::sha256_hex;
+use crate::checks::{CheckCtx, Col, summarize};
+use crate::csv::Note;
 use crate::error::{EngineError, Result};
 use crate::framing::{Incoming, write_message};
-use crate::import::{CsvPlan, csv_plan, import_csv, quote_ident, quote_text};
+use crate::import::{CsvPlan, EXCEPTIONS_SUFFIX, csv_plan, import_csv, quote_ident, quote_text};
+use crate::issues::{
+    IssueState, Listed, matches, merge_check_run, occurrence_state, sort, to_issue,
+};
 use crate::parse::Kind;
+use crate::rules::check_packs;
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,8 +35,27 @@ pub struct Dataset {
     pub spec: Value,
     pub view: String,
     pub row_count: u64,
-    pub assumptions: usize,
+    pub assumptions: Vec<Value>,
     pub columns: Vec<(String, Kind)>,
+    /// The reader's notes on the file (ragged rows, multi-row header, assumed encoding).
+    pub notes: Vec<Note>,
+    pub issues: Vec<IssueState>,
+}
+
+impl Dataset {
+    fn exceptions_view(&self) -> String {
+        format!("{}{EXCEPTIONS_SUFFIX}", self.view)
+    }
+
+    fn check_columns(&self) -> Vec<Col> {
+        self.spec["columns"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .zip(&self.columns)
+            .map(|(c, (_, kind))| Col::from_schema(c, *kind))
+            .collect()
+    }
 }
 
 pub struct Project {
@@ -52,6 +77,8 @@ pub struct Engine {
     pub ids: Box<dyn IdSource>,
     pub version: String,
     pub memory_limit: u64,
+    /// Worker threads for parsing; DuckDB has its own setting.
+    pub threads: usize,
     pub project: Option<Project>,
     jobs: HashMap<String, Value>,
     cancels: HashMap<String, Arc<AtomicBool>>,
@@ -134,6 +161,7 @@ impl Engine {
         clock: Box<dyn Clock>,
         ids: Box<dyn IdSource>,
         memory_limit: u64,
+        threads: usize,
     ) -> Self {
         Engine {
             conn,
@@ -142,6 +170,7 @@ impl Engine {
             ids,
             version: env!("CARGO_PKG_VERSION").into(),
             memory_limit,
+            threads,
             project: None,
             jobs: HashMap::new(),
             cancels: HashMap::new(),
@@ -257,7 +286,7 @@ impl Engine {
             "rowCount": d.row_count,
             "outputRowCount": d.row_count,
             "columnCount": d.columns.len(),
-            "assumptions": d.assumptions,
+            "assumptions": d.assumptions.len(),
             "partial": false,
             "steps": [],
         })
@@ -412,14 +441,16 @@ impl Engine {
                     "Choose a listed column.",
                 )
             })?;
-        let (v, raw, view) = (
+        let (v, view, exc) = (
             quote_ident(id),
-            quote_ident(&format!("{id}__raw")),
             quote_ident(&d.view),
+            quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", d.view)),
         );
         let numeric = matches!(kind, Kind::Integer | Kind::Number);
         let sql = format!(
-            "SELECT count(*), count(*) FILTER (WHERE {v} IS NULL), count({raw}), count(DISTINCT {v}), {mean} FROM {view}",
+            "SELECT count(*), count(*) FILTER (WHERE {v} IS NULL), \
+             (SELECT count(*) FROM {exc} WHERE col = {col} AND raw IS NOT NULL), count(DISTINCT {v}), {mean} FROM {view}",
+            col = quote_text(id),
             mean = if numeric {
                 format!("avg({v})")
             } else {
@@ -460,6 +491,138 @@ impl Engine {
             "mean": mean,
             "topValues": top,
         }))
+    }
+
+    pub fn list_issues(&self, q: &Value) -> Result<Value> {
+        let p = self.project()?;
+        let offset = count(&q["offset"], "offset", 0, u64::MAX >> 11)? as usize;
+        let limit = count(&q["limit"], "limit", 100, 1000)? as usize;
+        if !q["datasetId"].is_null() {
+            self.dataset(&q["datasetId"])?;
+        }
+        let mut list = Vec::new();
+        for d in &p.datasets {
+            if !q["datasetId"].is_null() && q["datasetId"] != d.id.as_str() {
+                continue;
+            }
+            for st in &d.issues {
+                let names = st
+                    .draft
+                    .columns
+                    .iter()
+                    .map(|id| {
+                        d.spec["columns"]
+                            .as_array()
+                            .and_then(|cs| cs.iter().find(|c| c["id"] == id.as_str()))
+                            .and_then(|c| c["name"].as_str())
+                            .unwrap_or(id)
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let listed = Listed {
+                    issue: to_issue(st),
+                    names,
+                };
+                if matches(&listed, q) {
+                    list.push(listed);
+                }
+            }
+        }
+        sort(&mut list, &q["sort"])?;
+        let total = list.len();
+        let items: Vec<Value> = list
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|l| l.issue)
+            .collect();
+        Ok(json!({ "items": items, "total": total, "offset": offset }))
+    }
+
+    pub fn list_occurrences(&self, issue_id: &Value, page: &Value) -> Result<Value> {
+        let p = self.project()?;
+        let offset = count(&page["offset"], "offset", 0, u64::MAX >> 11)?;
+        let limit = count(&page["limit"], "limit", 100, 1000)?;
+        let id = issue_id.as_str().unwrap_or("");
+        let (d, st) = p
+            .datasets
+            .iter()
+            .find_map(|d| d.issues.iter().find(|s| s.id == id).map(|s| (d, s)))
+            .ok_or_else(|| {
+                EngineError::not_found(
+                    format!("There is no issue {id}."),
+                    "Refresh the issues list and choose a listed issue.",
+                )
+            })?;
+        let first = st.draft.columns.first();
+        let column = first.and_then(|c| {
+            let kind = d.columns.iter().find(|(id, _)| id == c)?.1;
+            let plan = d.spec["columns"]
+                .as_array()?
+                .iter()
+                .find(|p| p["id"] == c.as_str())?
+                .clone();
+            Some((c.clone(), kind, plan))
+        });
+        let rows: Vec<u64> = st
+            .flagged
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect();
+        let mut items = Vec::new();
+        if !rows.is_empty() {
+            let list = rows
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let (select, raw) = match &column {
+                Some((c, _, _)) => (
+                    format!(", v.{}", quote_ident(c)),
+                    format!(
+                        ", (SELECT coalesce(e.raw, e.marker) FROM {exc} e WHERE e.rid = v.__rid AND e.col = {col})",
+                        exc = quote_ident(&d.exceptions_view()),
+                        col = quote_text(c)
+                    ),
+                ),
+                None => (String::new(), String::new()),
+            };
+            let sql = format!(
+                "SELECT v.__rid, v.__loc{select}{raw} FROM {view} v WHERE v.__rid IN ({list}) ORDER BY v.__rid",
+                view = quote_ident(&d.view)
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut result = stmt.query([])?;
+            while let Some(row) = result.next()? {
+                let rid: i64 = row.get(0)?;
+                let loc: i64 = row.get(1)?;
+                let (value, raw, locator) = match &column {
+                    Some((_, kind, plan)) => (
+                        Self::cell(row, 2, *kind)?,
+                        row.get::<_, Option<String>>(3)?
+                            .map_or(Value::Null, Value::String),
+                        format!(
+                            "line {loc}, field {}",
+                            plan["sourceIndex"].as_u64().unwrap_or(0) + 1
+                        ),
+                    ),
+                    None => (Value::Null, Value::Null, format!("line {loc}")),
+                };
+                items.push(json!({
+                    "issueId": id,
+                    "rowId": rid,
+                    "columnId": first,
+                    "value": value,
+                    "raw": raw,
+                    "locator": locator,
+                    "state": occurrence_state(st, rid as u64),
+                    "decidedBy": null,
+                }));
+            }
+        }
+        Ok(json!({ "items": items, "total": st.flagged.count(), "offset": offset }))
     }
 
     pub fn list_audit(&self, q: &Value) -> Result<Value> {
@@ -529,6 +692,171 @@ impl Engine {
     }
 }
 
+/// Starts a check run over a dataset (SAD section 8.3): every rule of the check packs, as SQL.
+pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let project_id = engine.project()?.id.clone();
+    let d = engine.dataset(dataset)?;
+    let dataset_id = d.id.clone();
+    let view = quote_ident(&d.view);
+    let exceptions = quote_ident(&d.exceptions_view());
+    let row_count = d.row_count;
+    let columns = d.check_columns();
+    let crs = d.spec["crs"]["value"]["code"].as_str().map(String::from);
+    let notes = d.notes.clone();
+    let assumptions = d.assumptions.clone();
+    let conn = engine.conn.try_clone()?;
+    let (job, cancel) = engine.start_job();
+    let started = engine.clock.now_ms();
+    drop(engine);
+
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let progress_shared = shared.clone();
+        let progress_job = job_id.clone();
+        let mut last = Instant::now();
+        let mut progress = move |done: usize, total: usize| {
+            if last.elapsed().as_millis() < 100 && done < total {
+                return;
+            }
+            last = Instant::now();
+            let p =
+                json!({ "phase": "Running checks", "done": done, "total": total, "unit": "items" });
+            if let Ok(mut e) = progress_shared.engine.lock() {
+                e.jobs.insert(
+                    progress_job.clone(),
+                    json!({ "state": "running", "progress": p }),
+                );
+            }
+            progress_shared
+                .event(json!({ "type": "job.progress", "jobId": progress_job, "progress": p }));
+        };
+        let ctx = CheckCtx {
+            conn: &conn,
+            view,
+            exceptions,
+            dataset_id: dataset_id.clone(),
+            row_count,
+            columns,
+            crs,
+            notes: &notes,
+            assumptions: &assumptions,
+            project_area: None,
+        };
+        let outcome = ctx.run(&cancel, &mut progress).and_then(|drafts| {
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            if engine.project.as_ref().map(|p| p.id.as_str()) != Some(project_id.as_str()) {
+                return Err(EngineError::new(
+                    "CANCELLED",
+                    "The project was closed before the checks finished.",
+                    "Run the checks again in the open project.",
+                ));
+            }
+            let packs: Vec<Value> = check_packs().iter().map(|p| p.reference()).collect();
+            let mut entry = draft("check.run", json!({ "datasetId": dataset_id }));
+            entry.insert("payload".into(), json!({ "packs": packs }));
+            let seq = engine.append(entry, None)?["seq"].as_u64().unwrap_or(0);
+            let (by_severity, by_rule) = summarize(&drafts);
+            let issues = drafts.len();
+            let duration = (engine.clock.now_ms() - started).max(0);
+            let ds = engine
+                .project
+                .as_mut()
+                .and_then(|p| p.datasets.iter_mut().find(|d| d.id == dataset_id))
+                .ok_or_else(|| {
+                    EngineError::internal("The dataset disappeared during the checks.")
+                })?;
+            merge_check_run(&mut ds.issues, drafts, seq, row_count);
+            Ok(json!({
+                "datasetId": dataset_id,
+                "packs": packs,
+                "issues": issues,
+                "bySeverity": by_severity,
+                "byRule": by_rule,
+                "durationMs": duration,
+            }))
+        });
+        finish_job(
+            &shared,
+            &job_id,
+            outcome,
+            &["project", "issues", "audit"],
+            &dataset_id,
+        );
+    });
+    Ok(json!({ "jobId": job, "kind": "check" }))
+}
+
+/// Records a job's outcome and tells the client.
+fn finish_job(
+    shared: &Arc<Shared>,
+    job_id: &str,
+    outcome: Result<Value>,
+    changed: &[&str],
+    dataset_id: &str,
+) {
+    let Ok(mut engine) = shared.engine.lock() else {
+        return;
+    };
+    match outcome {
+        Ok(result) => {
+            engine.jobs.insert(
+                job_id.to_string(),
+                json!({ "state": "done", "result": result }),
+            );
+            drop(engine);
+            shared.event(json!({ "type": "job.done", "jobId": job_id }));
+            shared.event(
+                json!({ "type": "project.changed", "what": changed, "datasetId": dataset_id }),
+            );
+        }
+        Err(e) if e.code == "CANCELLED" => {
+            engine
+                .jobs
+                .insert(job_id.to_string(), json!({ "state": "cancelled" }));
+            drop(engine);
+            shared.event(json!({ "type": "job.cancelled", "jobId": job_id }));
+        }
+        Err(e) => {
+            engine.jobs.insert(
+                job_id.to_string(),
+                json!({ "state": "failed", "error": e.to_json() }),
+            );
+            drop(engine);
+            shared.event(json!({ "type": "job.failed", "jobId": job_id, "error": e.to_json() }));
+        }
+    }
+}
+
+/// The TW-IMP-004 note for an assumed encoding, restated from the spec as the TypeScript ingest
+/// does, so an import replayed from a project raises it exactly as the first did.
+fn assumed_encoding_note(spec: &Value) -> Option<Note> {
+    let d = &spec["detections"]["encoding"];
+    if d["assumed"].as_bool() != Some(true) {
+        return None;
+    }
+    let value = match &d["value"] {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    Some(Note {
+        code: "TW-IMP-004".into(),
+        message: format!(
+            "The text encoding {value} is assumed. {} If accented letters or symbols such as the degree sign look wrong, choose another encoding in the import settings.",
+            d["evidence"].as_str().unwrap_or("")
+        ),
+        src_loc: None,
+        detail: json!({ "encoding": d["value"], "confidence": d["confidence"], "method": d["method"] }),
+    })
+}
+
 /// Where an import reads from: a path, or bytes the client sent, written to the work folder first.
 fn input_path(engine: &Engine, msg: &Incoming, file: &Value) -> Result<(PathBuf, String)> {
     match file["kind"].as_str() {
@@ -562,26 +890,6 @@ fn input_path(engine: &Engine, msg: &Incoming, file: &Value) -> Result<(PathBuf,
         }
         _ => Err(EngineError::unsupported("files passed as browser Blobs")),
     }
-}
-
-fn file_digest(path: &Path) -> Result<(String, u64)> {
-    use sha2::{Digest, Sha256};
-    let mut f = std::fs::File::open(path)?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    let mut size = 0u64;
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-        size += n as u64;
-    }
-    Ok((
-        h.finalize().iter().map(|b| format!("{b:02x}")).collect(),
-        size,
-    ))
 }
 
 /// Starts an import job: the plan is the preview the user reviewed (SAD decision D-12), executed here.
@@ -621,6 +929,8 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
     let (job, cancel) = engine.start_job();
     let conn = engine.conn.try_clone()?;
     let workdir = engine.workdir.join(&project_id);
+    let threads = engine.threads;
+    let total = std::fs::metadata(&path)?.len();
     drop(engine);
 
     let shared = shared.clone();
@@ -629,12 +939,12 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         let mut last = Instant::now();
         let progress_shared = shared.clone();
         let progress_job = job_id.clone();
-        let mut progress = move |rows: u64| {
+        let mut progress = move |bytes: u64| {
             if last.elapsed().as_millis() < 100 {
                 return;
             }
             last = Instant::now();
-            let p = json!({ "phase": "Importing", "done": rows, "unit": "rows" });
+            let p = json!({ "phase": "Importing", "done": bytes.min(total), "total": total, "unit": "bytes" });
             if let Ok(mut e) = progress_shared.engine.lock() {
                 e.jobs.insert(
                     progress_job.clone(),
@@ -645,18 +955,18 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
                 .event(json!({ "type": "job.progress", "jobId": progress_job, "progress": p }));
         };
         let outcome = (|| -> Result<Value> {
-            let (file_id, size) = file_digest(&path)?;
-            spec["fileId"] = json!(file_id);
-            spec["size"] = json!(size);
             let imported = import_csv(
                 &conn,
                 &path,
                 &plan,
                 &job_id,
                 &workdir,
+                threads,
                 &cancel,
                 &mut progress,
             )?;
+            spec["fileId"] = json!(imported.sha256);
+            spec["size"] = json!(imported.size);
             if cancel.load(Ordering::Relaxed) {
                 return Err(EngineError::new(
                     "CANCELLED",
@@ -735,11 +1045,17 @@ fn commit_import(
     let dataset_id = format!("d{}", engine.project.as_ref().map_or(1, |p| p.next_dataset));
     let view = format!("{project_id}_{dataset_id}");
     let parquet = workdir.join(format!("{job_id}.parquet"));
+    let exc = workdir.join(format!("{job_id}{EXCEPTIONS_SUFFIX}.parquet"));
     engine.conn.execute_batch(&format!(
-        "DROP VIEW IF EXISTS {jobview}; CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet({file});",
+        "DROP VIEW IF EXISTS {jobview}; DROP VIEW IF EXISTS {jobexc}; \
+         CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet({file}); \
+         CREATE OR REPLACE VIEW {excview} AS SELECT * FROM read_parquet({exc});",
         jobview = quote_ident(&imported.view),
+        jobexc = quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", imported.view)),
         view = quote_ident(&view),
+        excview = quote_ident(&format!("{view}{EXCEPTIONS_SUFFIX}")),
         file = quote_text(&parquet.to_string_lossy()),
+        exc = quote_text(&exc.to_string_lossy()),
     ))?;
     let file_id = spec["fileId"].clone();
     let media_type = if spec["options"]["format"] == "tsv" {
@@ -781,14 +1097,22 @@ fn commit_import(
         .iter()
         .map(|c| (c.id.clone(), c.kind))
         .collect();
+    let mut notes = imported.notes;
+    if let Some(note) = assumed_encoding_note(&spec) {
+        if !notes.iter().any(|n| n.code == "TW-IMP-004") {
+            notes.insert(0, note);
+        }
+    }
     let dataset = Dataset {
         id: dataset_id,
         name: spec["datasetName"].as_str().unwrap_or_default().to_string(),
         spec: spec.clone(),
         view,
         row_count: imported.row_count,
-        assumptions: assumptions.len(),
+        assumptions,
         columns,
+        notes,
+        issues: Vec::new(),
     };
     let summary = Engine::dataset_summary(&dataset);
     let p = engine

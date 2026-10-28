@@ -14,6 +14,7 @@ export default mergeConfig(
         'tests/architecture/**/*.test.ts',
         'tests/conformance/**/*.test.ts',
         'tests/oracle/**/*.test.ts',
+        'tests/bench/**/*.test.ts',
       ],
       exclude: ['node_modules/**', 'dist/**', 'tests/e2e/**'],
       testTimeout: 30_000,

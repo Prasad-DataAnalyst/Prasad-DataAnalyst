@@ -1,8 +1,10 @@
 /**
  * Per-quantity knowledge: which quantities convert into each other, the physical bounds that rule
- * TW-DQ-005 checks, and the default target units of the SI and Oilfield unit systems.
+ * TW-DQ-005 checks, and the default target units of the SI and Oilfield unit systems. The table is
+ * one JSON file, quantities-2026.1.json, so both engines check the same bounds.
  */
-import type { QuantityKind, UnitDef } from '@tw/model';
+import { EngineError, type QuantityKind, type UnitDef } from '@tw/model';
+import quantitiesText from './quantities-2026.1.json?raw';
 import { getUnit } from './registry';
 
 export type UnitSystem = 'SI' | 'Oilfield';
@@ -29,106 +31,89 @@ interface QuantitySpec {
   defaults: Record<UnitSystem, string | null>;
 }
 
-const AMOUNT: PhysicalBounds = { min: 0, source: 'An amount of material or energy cannot be negative.' };
+const QUANTITY_KINDS: readonly QuantityKind[] = [
+  'length',
+  'area',
+  'volume',
+  'std_volume',
+  'mass',
+  'time',
+  'temperature',
+  'temperature_diff',
+  'pressure_abs',
+  'pressure_gauge',
+  'pressure_diff',
+  'energy',
+  'power',
+  'density',
+  'mass_rate',
+  'volume_rate',
+  'std_volume_rate',
+  'energy_rate',
+  'fraction',
+  'velocity',
+  'dimensionless',
+];
 
-const FLOW: PhysicalBounds = {
-  min: 0,
-  source:
-    'A produced, delivered or injected amount per unit of time cannot be negative; ' +
-    'flow in the opposite direction is reported in its own column.',
-};
+function broken(message: string): EngineError {
+  return new EngineError(
+    'INTERNAL',
+    `The quantity table is invalid: ${message}`,
+    'The quantity table shipped with Tracewell is damaged; reinstall Tracewell or restore the file.',
+  );
+}
 
-const QUANTITIES: Readonly<Record<QuantityKind, QuantitySpec>> = {
-  length: { label: 'length', family: 'length', bounds: null, defaults: { SI: 'm', Oilfield: 'ft' } },
-  area: {
-    label: 'area',
-    family: 'area',
-    bounds: { min: 0, source: 'An area cannot be negative.' },
-    defaults: { SI: 'm2', Oilfield: 'acre' },
-  },
-  volume: { label: 'volume', family: 'volume', bounds: AMOUNT, defaults: { SI: 'm3', Oilfield: 'bbl' } },
-  std_volume: {
-    label: 'standard volume',
-    family: 'std_volume',
-    bounds: AMOUNT,
-    defaults: { SI: 'Sm3', Oilfield: 'Mscf' },
-  },
-  mass: { label: 'mass', family: 'mass', bounds: AMOUNT, defaults: { SI: 'kg', Oilfield: 'lb' } },
-  time: { label: 'time', family: 'time', bounds: null, defaults: { SI: null, Oilfield: null } },
-  temperature: {
-    label: 'temperature',
-    family: 'temperature',
-    bounds: {
-      min: 0,
-      source: 'No temperature is below absolute zero, 0 K (SI Brochure, 9th edition (2019), section 2.3.1).',
-    },
-    defaults: { SI: 'degC', Oilfield: 'degF' },
-  },
-  temperature_diff: {
-    label: 'temperature difference',
-    family: 'temperature_diff',
-    bounds: null,
-    defaults: { SI: 'delta_degC', Oilfield: 'delta_degF' },
-  },
-  pressure_abs: {
-    label: 'absolute pressure',
-    family: 'pressure_abs',
-    bounds: { min: 0, source: 'Absolute pressure is measured from a perfect vacuum, so it cannot be negative.' },
-    defaults: { SI: 'kPa', Oilfield: 'psia' },
-  },
-  pressure_gauge: {
-    label: 'gauge pressure',
-    family: 'pressure_gauge',
-    bounds: null,
-    defaults: { SI: 'kPag', Oilfield: 'psig' },
-  },
-  pressure_diff: {
-    label: 'pressure difference',
-    family: 'pressure_diff',
-    bounds: null,
-    defaults: { SI: 'delta_kPa', Oilfield: 'delta_psi' },
-  },
-  energy: { label: 'energy', family: 'energy', bounds: AMOUNT, defaults: { SI: 'GJ', Oilfield: 'MMBtu' } },
-  power: { label: 'power', family: 'power', bounds: null, defaults: { SI: 'kW', Oilfield: 'hp' } },
-  density: {
-    label: 'density',
-    family: 'density',
-    bounds: { min: 0, source: 'Density, a mass per volume, cannot be negative.' },
-    defaults: { SI: 'kg/m3', Oilfield: 'lb/ft3' },
-  },
-  mass_rate: { label: 'mass flow rate', family: 'mass_rate', bounds: FLOW, defaults: { SI: 'kg/s', Oilfield: 'lb/h' } },
-  volume_rate: {
-    label: 'volume flow rate',
-    family: 'volume_rate',
-    bounds: FLOW,
-    defaults: { SI: 'm3/d', Oilfield: 'bbl/d' },
-  },
-  std_volume_rate: {
-    label: 'standard volume flow rate',
-    family: 'std_volume_rate',
-    bounds: FLOW,
-    defaults: { SI: 'Sm3/d', Oilfield: 'Mscf/d' },
-  },
-  energy_rate: {
-    label: 'energy flow rate',
-    family: 'power',
-    bounds: FLOW,
-    defaults: { SI: 'GJ/d', Oilfield: 'MMBtu/d' },
-  },
-  fraction: {
-    label: 'fraction',
-    family: 'fraction',
-    bounds: { min: 0, max: 1, source: 'A fraction lies between 0 and 1 (0 % and 100 %).' },
-    defaults: { SI: null, Oilfield: null },
-  },
-  velocity: { label: 'velocity', family: 'velocity', bounds: null, defaults: { SI: 'm/s', Oilfield: 'ft/s' } },
-  dimensionless: {
-    label: 'dimensionless number',
-    family: 'dimensionless',
-    bounds: null,
-    defaults: { SI: null, Oilfield: null },
-  },
-};
+function isUnitOrNull(v: unknown): v is string | null {
+  return v === null || typeof v === 'string';
+}
+
+function checkedBounds(q: string, b: unknown): PhysicalBounds | null {
+  if (b === null) return null;
+  const o = b as Record<string, unknown>;
+  const ok =
+    typeof o === 'object' &&
+    typeof o['source'] === 'string' &&
+    (o['min'] === undefined || typeof o['min'] === 'number') &&
+    (o['max'] === undefined || typeof o['max'] === 'number');
+  if (!ok) throw broken(`the bounds of ${q} are not a source with an optional min and max.`);
+  return Object.freeze({ ...(o as unknown as PhysicalBounds) });
+}
+
+/**
+ * Parses and checks the quantity table: every quantity kind once, with a label, a family that is
+ * itself a quantity kind, bounds and both default units. The native engine reads the same file.
+ */
+export function loadQuantities(text: string): Readonly<Record<QuantityKind, QuantitySpec>> {
+  const json = JSON.parse(text) as { quantities?: Record<string, Record<string, unknown>> };
+  const table = json.quantities ?? {};
+  const keys = Object.keys(table);
+  if (keys.length !== QUANTITY_KINDS.length || !QUANTITY_KINDS.every((k) => Object.hasOwn(table, k))) {
+    throw broken(`it must list exactly these quantities: ${QUANTITY_KINDS.join(', ')}.`);
+  }
+  const out = {} as Record<QuantityKind, QuantitySpec>;
+  for (const q of QUANTITY_KINDS) {
+    const spec = table[q] as Record<string, unknown>;
+    const defaults = spec['defaults'] as Record<string, unknown> | undefined;
+    if (
+      typeof spec['label'] !== 'string' ||
+      !QUANTITY_KINDS.includes(spec['family'] as QuantityKind) ||
+      defaults === undefined ||
+      !isUnitOrNull(defaults['SI']) ||
+      !isUnitOrNull(defaults['Oilfield'])
+    ) {
+      throw broken(`the entry for ${q} needs a label, a family and SI and Oilfield defaults.`);
+    }
+    out[q] = Object.freeze({
+      label: spec['label'],
+      family: spec['family'] as QuantityKind,
+      bounds: checkedBounds(q, spec['bounds']),
+      defaults: Object.freeze({ SI: defaults['SI'], Oilfield: defaults['Oilfield'] }),
+    });
+  }
+  return Object.freeze(out);
+}
+
+const QUANTITIES = loadQuantities(quantitiesText);
 
 /**
  * The spec of `q`, or undefined when `q` is not a quantity kind. Quantity kinds and unit systems
