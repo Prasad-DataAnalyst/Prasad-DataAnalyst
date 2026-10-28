@@ -755,6 +755,7 @@ export class LocalEngine implements EngineImpl {
     return {
       exportId: this.o.ids.newExportId(),
       baseName: req.baseName?.trim() || ds.dataset.schema.name,
+      neutralizeFormulas: req.neutralizeFormulas === true,
       profile: req.profile,
       at: this.o.clock.now().toISOString(),
       appVersion: this.o.appVersion,

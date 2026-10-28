@@ -22,7 +22,7 @@ import {
 import { columnDigest } from '@tw/table';
 import { parseHeader } from './profiles';
 import type { ExpectedShape } from './shape';
-import { retypeText } from './values';
+import { restoreFormula, retypeText } from './values';
 
 type CheckId = ValidationCheck['id'];
 
@@ -69,7 +69,12 @@ function rowsCheck(actual: number, expected: number, file: string): ValidationCh
 // ---------------------------------------------------------------------------------------------
 // CSV
 
-function readCsv(bytes: Uint8Array, expected: ExpectedShape, file: string): ValidationCheck[] {
+function readCsv(
+  bytes: Uint8Array,
+  expected: ExpectedShape,
+  file: string,
+  o: { neutralized?: boolean } = {},
+): ValidationCheck[] {
   let text: string;
   try {
     text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -110,7 +115,11 @@ function readCsv(bytes: Uint8Array, expected: ExpectedShape, file: string): Vali
   );
   checks.push(headerCheck(expected.columns, head?.fields ?? [], file));
   checks.push(rowsCheck(data.length, expected.rowCount, file));
-  const values = expected.columns.map((col, j) => data.map((r) => retypeText(r.fields[j] ?? '', col.type)));
+  const restore = (text: string, col: ExportColumn) =>
+    o.neutralized === true && col.type === 'string' ? restoreFormula(text) : text;
+  const values = expected.columns.map((col, j) =>
+    data.map((r) => retypeText(restore(r.fields[j] ?? '', col), col.type)),
+  );
   checks.push(valuesCheck(expected.columns, values, file));
   return checks;
 }
@@ -482,7 +491,7 @@ function readPackage(zip: Uint8Array, manifest: ExportManifest): ValidationCheck
 }
 
 export const readBack: {
-  csv(bytes: Uint8Array, expected: ExpectedShape, file: string): ValidationCheck[];
+  csv(bytes: Uint8Array, expected: ExpectedShape, file: string, o?: { neutralized?: boolean }): ValidationCheck[];
   parquet(bytes: Uint8Array, expected: ExpectedShape, file: string): Promise<ValidationCheck[]>;
   xlsx(
     bytes: Uint8Array,

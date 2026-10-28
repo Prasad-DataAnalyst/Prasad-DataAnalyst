@@ -15,6 +15,24 @@ export function textOf(v: CellValue): string {
   return JSON.stringify(v.geometry);
 }
 
+/** Text a spreadsheet program would run as a formula, after any apostrophes already added. */
+const FORMULA_START = /^'*[=+\-@\t\r]/;
+
+/**
+ * Formula neutralisation for CSV (OWASP CSV injection guidance): text that a spreadsheet would
+ * run as a formula gets one more leading apostrophe, which spreadsheets show as text. Text that
+ * already starts with apostrophes before such a character gets one more too, so the change can
+ * always be undone exactly.
+ */
+export function neutralizeFormula(text: string): string {
+  return FORMULA_START.test(text) ? `'${text}` : text;
+}
+
+/** The inverse of neutralizeFormula. */
+export function restoreFormula(text: string): string {
+  return text.startsWith("'") && FORMULA_START.test(text.slice(1)) ? text.slice(1) : text;
+}
+
 /** Exported text cannot tell an empty string from no value, so both count as no value. */
 export function exportable(v: CellValue): CellValue {
   return v === '' ? null : v;

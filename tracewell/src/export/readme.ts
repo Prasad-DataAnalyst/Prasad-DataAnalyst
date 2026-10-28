@@ -13,6 +13,12 @@ export function renderReadme(m: ExportManifest, stepDescriptions: string[]): str
     `Profile: ${m.profile}`,
     `Rows: ${m.dataset.rowCount}${m.dataset.partial ? ' (PARTIAL: the import stopped at the memory budget)' : ''}`,
     `Excluded rows: ${m.excludedRows}`,
+    ...(m.options?.neutralizeFormulas === true
+      ? [
+          "Formulas: neutralised. Text starting with = + - @, a tab or a carriage return has a ' added in front,",
+          '  so spreadsheet programs show it as text; remove the first apostrophe to get the original value.',
+        ]
+      : []),
     '',
     'DATA FILES',
     ...data.map((f) => `  ${f.path}  ${f.size} bytes  SHA-256 ${f.sha256}`),

@@ -16,7 +16,7 @@ import { pointFromLatLon } from '@tw/geo';
 import { isGeometryCell, type AuditEntry, type ColumnId, type ColumnSchema, type LogicalType } from '@tw/model';
 import type { View } from '@tw/table';
 import { headerFor } from './profiles';
-import { exportable, textOf } from './values';
+import { exportable, neutralizeFormula, textOf } from './values';
 
 export interface ExportWriters {
   csv(header: string[], rows: Iterable<string[]>): Uint8Array;
@@ -42,8 +42,15 @@ export function parquetColumns(view: View, cols: ColumnId[]): ParquetColumnIn[] 
   });
 }
 
-export function* csvRows(view: View, cols: ColumnId[]): IterableIterator<string[]> {
-  for (const r of view.rows()) yield cols.map((c) => textOf(view.value(r, c)));
+/** Rows as CSV text; with `neutralize`, text columns are protected against formula injection. */
+export function* csvRows(view: View, cols: ColumnId[], neutralize = false): IterableIterator<string[]> {
+  const text = cols.map((c) => neutralize && view.columnSchema(c).type.value === 'string');
+  for (const r of view.rows()) {
+    yield cols.map((c, j) => {
+      const t = textOf(view.value(r, c));
+      return text[j] === true ? neutralizeFormula(t) : t;
+    });
+  }
 }
 
 export function csvHeader(view: View, cols: ColumnId[]): string[] {

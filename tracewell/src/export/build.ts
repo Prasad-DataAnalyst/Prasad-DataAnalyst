@@ -64,6 +64,8 @@ export interface ExportInput {
   issues: Issue[];
   audit: readonly AuditEntry[];
   auditHead: { seq: AuditSeq; hash: Sha256Hex };
+  /** CSV data files: prefix an apostrophe to text a spreadsheet would run as a formula. */
+  neutralizeFormulas?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -125,7 +127,11 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
     const shape = expectedShape(view, f.columns);
     switch (f.kind) {
       case 'csv':
-        return { ...f, shape, bytes: writers.csv(csvHeader(view, f.columns), csvRows(view, f.columns)) };
+        return {
+          ...f,
+          shape,
+          bytes: writers.csv(csvHeader(view, f.columns), csvRows(view, f.columns, input.neutralizeFormulas === true)),
+        };
       case 'parquet':
         return { ...f, shape, bytes: writers.parquet(parquetColumns(view, f.columns)) };
       case 'geojson': {
@@ -151,7 +157,7 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
 async function validateFile(file: WrittenFile, bytes: Uint8Array, input: ExportInput): Promise<ValidationCheck[]> {
   switch (file.kind) {
     case 'csv':
-      return readBack.csv(bytes, file.shape, file.path);
+      return readBack.csv(bytes, file.shape, file.path, { neutralized: input.neutralizeFormulas === true });
     case 'parquet':
       return readBack.parquet(bytes, file.shape, file.path);
     case 'xlsx':
@@ -239,6 +245,7 @@ export async function buildExport(
     openIssues: openIssues(input.issues),
     assumptions: input.assumptions,
     substitutions: plan.substitutions,
+    options: { neutralizeFormulas: input.neutralizeFormulas === true },
     validation,
     auditHead: input.auditHead,
   };

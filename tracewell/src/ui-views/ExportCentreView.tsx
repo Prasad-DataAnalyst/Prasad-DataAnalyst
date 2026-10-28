@@ -87,6 +87,7 @@ function ExportCard(p: {
   const handle = useViews((s) => s.exports[key] ?? null);
   const job = useJob<ExportResult>(handle);
   const readOnly = useWorkbench((s) => s.project?.readOnly === true);
+  const [neutralize, setNeutralize] = useState(false);
   const result = job.result;
 
   const start = async () => {
@@ -95,6 +96,7 @@ function ExportCard(p: {
         datasetId,
         profile: profile.id,
         ...(p.baseName.trim() === '' ? {} : { baseName: p.baseName.trim() }),
+        ...(profile.id === 'csv' && neutralize ? { neutralizeFormulas: true } : {}),
       }),
     );
     if (h === null) return;
@@ -131,6 +133,17 @@ function ExportCard(p: {
           <strong>{s.ruleId}:</strong> {s.what} — {s.why} {s.instead}
         </div>
       ))}
+      {profile.id === 'csv' && (
+        <label className="tw-card-option">
+          <input
+            type="checkbox"
+            checked={neutralize}
+            data-testid={TID.neutralizeFormulas}
+            onChange={(e) => setNeutralize(e.target.checked)}
+          />
+          Protect against spreadsheet formulas: text starting with = + - @ gets a leading apostrophe
+        </label>
+      )}
       <div className="tw-card-actions">
         <button
           type="button"

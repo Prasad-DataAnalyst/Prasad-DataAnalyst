@@ -51,7 +51,8 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
         fixed_clock: None,
         clock_step: 1000,
         seed: None,
-        owner: String::new(),
+        // The product's owner, as the TypeScript build takes it from package.json's author.
+        owner: env!("CARGO_PKG_AUTHORS").to_string(),
     };
     let mut it = argv.iter();
     while let Some(flag) = it.next() {

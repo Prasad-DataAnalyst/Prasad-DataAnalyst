@@ -185,6 +185,13 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       // Both engines write the same CSV, byte for byte.
       if (profile === 'csv') expect(data).toEqual(readZip(b.bytes as Uint8Array).read(dataFile));
     }
+    // And the same with formulas neutralised.
+    const req = { profile: 'csv' as const, neutralizeFormulas: true };
+    const a = await native.client.awaitJob<ExportResult>(await native.client.exportData({ datasetId: nat, ...req }));
+    const b = await reference.awaitJob<ExportResult>(await reference.exportData({ datasetId: ref, ...req }));
+    expect([a.ok, b.ok, a.manifest.options]).toEqual([true, true, { neutralizeFormulas: true }]);
+    const csv = (r: ExportResult) => readZip(r.bytes as Uint8Array).read('data.csv');
+    expect(csv(a)).toEqual(csv(b));
   });
 
   it('writes a large package to the file it is given rather than through the pipe', async () => {

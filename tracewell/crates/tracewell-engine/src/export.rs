@@ -113,6 +113,8 @@ pub struct ExportInput {
     pub workdir: PathBuf,
     pub target: Option<PathBuf>,
     pub threads: usize,
+    /// CSV data files: an apostrophe in front of text a spreadsheet would run as a formula.
+    pub neutralize: bool,
 }
 
 pub struct ExportOutcome {
@@ -304,13 +306,35 @@ pub fn csv_bytes(header: &[String], rows: &[Vec<String>]) -> Vec<u8> {
     out
 }
 
+/// Whether text would run as a formula in a spreadsheet, after any apostrophes already added.
+fn formula_start(text: &str) -> bool {
+    matches!(
+        text.trim_start_matches('\'').chars().next(),
+        Some('=' | '+' | '-' | '@' | '\t' | '\r')
+    )
+}
+
+/// One more apostrophe in front of formula text (values.ts neutralizeFormula).
+fn neutralize_formula(text: String) -> String {
+    if formula_start(&text) { format!("'{text}") } else { text }
+}
+
+/// The inverse of neutralize_formula (values.ts restoreFormula).
+fn restore_formula(text: &str) -> &str {
+    match text.strip_prefix('\'') {
+        Some(rest) if formula_start(rest) => rest,
+        _ => text,
+    }
+}
+
 /// Formats a group of batches as CSV text, in row order.
-fn format_rows(batches: &[RecordBatch], kinds: &[Kind], out: &mut Vec<u8>) {
+fn format_rows(batches: &[RecordBatch], kinds: &[Kind], neutralize: bool, out: &mut Vec<u8>) {
     let mut fields = vec![String::new(); kinds.len()];
     for b in batches {
         for i in 0..b.num_rows() {
             for (j, kind) in kinds.iter().enumerate() {
-                fields[j] = cell_at(b.column(j), i, *kind).text();
+                let text = cell_at(b.column(j), i, *kind).text();
+                fields[j] = if neutralize && *kind == Kind::String { neutralize_formula(text) } else { text };
             }
             csv_record(&fields, false, out);
         }
@@ -343,7 +367,7 @@ fn write_csv(
                     let kinds = &kinds;
                     s.spawn(move || {
                         let mut buf = Vec::new();
-                        format_rows(part, kinds, &mut buf);
+                        format_rows(part, kinds, input.neutralize, &mut buf);
                         buf
                     })
                 })
@@ -588,6 +612,7 @@ fn read_back_csv(
     expected: &Expected,
     file: &str,
     threads: usize,
+    neutralized: bool,
 ) -> Result<Vec<Value>> {
     let mut f = File::open(path)?;
     let mut head = [0u8; 3];
@@ -643,7 +668,11 @@ fn read_back_csv(
                             for i in 0..b.rows() {
                                 let field = if j < b.width { b.cell(i, j) } else { None };
                                 let text = field.map(String::from_utf8_lossy);
-                                match retype_text(text.as_deref().unwrap_or(""), col.kind) {
+                                let mut text = text.as_deref().unwrap_or("");
+                                if neutralized && col.kind == Kind::String {
+                                    text = restore_formula(text);
+                                }
+                                match retype_text(text, col.kind) {
                                     Some(c) => d.push(&c),
                                     None => *u = true,
                                 }
@@ -857,7 +886,7 @@ fn read_back(
     file: &str,
 ) -> Result<Vec<Value>> {
     if input.profile == "csv" {
-        read_back_csv(path, expected, file, input.threads)
+        read_back_csv(path, expected, file, input.threads, input.neutralize)
     } else {
         read_back_parquet(conn, path, expected, file, input.threads)
     }
@@ -958,9 +987,12 @@ fn render_readme(m: &Value) -> String {
             }
         ),
         format!("Excluded rows: {}", text(&m["excludedRows"])),
-        String::new(),
-        "DATA FILES".into(),
     ];
+    if m["options"]["neutralizeFormulas"] == true {
+        lines.push("Formulas: neutralised. Text starting with = + - @, a tab or a carriage return has a ' added in front,".into());
+        lines.push("  so spreadsheet programs show it as text; remove the first apostrophe to get the original value.".into());
+    }
+    lines.extend([String::new(), "DATA FILES".into()]);
     lines.extend(data.iter().map(|f| {
         format!(
             "  {}  {} bytes  SHA-256 {}",
@@ -1407,6 +1439,7 @@ pub fn build_export(
         "openIssues": open_issues(&input.issues),
         "assumptions": input.assumptions,
         "substitutions": [],
+        "options": { "neutralizeFormulas": input.neutralize },
         "validation": { "ok": data_ok, "checks": data_checks },
         "auditHead": input.audit_head,
         "files": [],
@@ -1590,6 +1623,24 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "\"a,b\",\"say \"\"hi\"\"\",\"x\ny\",plain\r\n\"\"\r\n\"\u{feff}x\",y\r\n"
         );
+    }
+
+    #[test]
+    fn neutralizes_formulas_reversibly() {
+        for (text, written) in [
+            ("=SUM(A1)", "'=SUM(A1)"),
+            ("+1", "'+1"),
+            ("-x", "'-x"),
+            ("@cmd", "'@cmd"),
+            ("\tx", "'\tx"),
+            ("'=x", "''=x"),
+            ("plain", "plain"),
+            ("'quoted", "'quoted"),
+            ("", ""),
+        ] {
+            assert_eq!(neutralize_formula(text.into()), written, "{text:?}");
+            assert_eq!(restore_formula(written), text, "{written:?}");
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readZip } from '@tw/io';
 import { CTX, datasetOf, inputOf, viewOf } from './__fixtures__/input';
 import { buildExport, expectedShape, readBack } from './index';
+import { neutralizeFormula, restoreFormula } from './values';
 
 const view = viewOf(datasetOf());
 
@@ -66,5 +67,44 @@ describe('CSV export', () => {
       id: 'RB-OPEN',
       ok: false,
     });
+  });
+});
+
+describe('formula neutralisation (CSV)', () => {
+  const cols = [
+    { name: 'Note', type: 'string' as const, role: 'text' as const },
+    { name: 'Value', type: 'number' as const, role: 'measure' as const },
+  ];
+  const rows = [
+    ['=SUM(A1)', -5],
+    ['+1', 1],
+    ['-x', 2],
+    ['@cmd', 3],
+    ["'=x", 4],
+    ['plain', 5],
+    ['\ttab', 6],
+  ];
+  const formulaView = viewOf(datasetOf(cols, rows, null));
+
+  it('prefixes an apostrophe to text a spreadsheet would run, leaves numbers alone, and still validates', async () => {
+    const result = await buildExport(inputOf(formulaView, { profile: 'csv', neutralizeFormulas: true }), CTX);
+    expect(result.validation.checks.filter((c) => !c.ok)).toEqual([]);
+    const zip = readZip(result.bytes as Uint8Array);
+    const lines = zip.readText('data.csv').split('\r\n');
+    expect(lines.slice(1, 8)).toEqual(["'=SUM(A1),-5", "'+1,1", "'-x,2", "'@cmd,3", "''=x,4", 'plain,5', "'\ttab,6"]);
+    expect(result.manifest.options).toEqual({ neutralizeFormulas: true });
+    expect(zip.readText('README.txt')).toContain('Formulas: neutralised');
+  });
+
+  it('is off unless asked for, and the manifest says so', async () => {
+    const result = await buildExport(inputOf(formulaView, { profile: 'csv' }), CTX);
+    expect(readZip(result.bytes as Uint8Array).readText('data.csv')).toContain('\r\n=SUM(A1),-5\r\n');
+    expect(result.manifest.options).toEqual({ neutralizeFormulas: false });
+  });
+
+  it('restores exactly what neutralisation changed', () => {
+    for (const t of ['=a', "'=a", "''=a", 'a', "'a", '', '-', '\r']) {
+      expect(restoreFormula(neutralizeFormula(t))).toBe(t);
+    }
   });
 });

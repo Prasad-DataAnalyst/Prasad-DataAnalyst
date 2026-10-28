@@ -33,6 +33,16 @@ export interface ExportRequest {
   profile: ExportProfileId;
   baseName?: string;
   target?: FileTarget;
+  /**
+   * CSV data files only: put an apostrophe in front of text that a spreadsheet program would run
+   * as a formula (text starting with = + - @, tab or carriage return). Read-back removes it again.
+   */
+  neutralizeFormulas?: boolean;
+}
+
+/** Settings that change how values are written, recorded in the manifest. */
+export interface ExportOptions {
+  neutralizeFormulas: boolean;
 }
 
 /** A format-limit substitution (TW-EXP-002), e.g. more than 1,048,575 rows delivered as CSV. */
@@ -111,6 +121,8 @@ export interface ExportManifest {
   openIssues: { error: number; warning: number; note: number };
   assumptions: Assumption[];
   substitutions: Substitution[];
+  /** Absent in packages written before slice 2. */
+  options?: ExportOptions;
   files: { path: string; size: number; sha256: Sha256Hex; role: 'data' | 'readme' | 'audit' | 'issues' | 'manifest' }[];
   validation: ValidationReport;
   auditHead: { seq: AuditSeq; hash: Sha256Hex };

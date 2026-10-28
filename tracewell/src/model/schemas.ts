@@ -564,6 +564,7 @@ const exportManifest = z
     openIssues: z.strictObject({ error: count, warning: count, note: count }),
     assumptions: z.array(assumption),
     substitutions: z.array(substitution),
+    options: z.strictObject({ neutralizeFormulas: z.boolean() }).exactOptional(),
     files: z.array(z.strictObject({ path: packagePath, size: count, sha256, role: z.enum(EXPORT_FILE_ROLES) })),
     validation: validationReport,
     auditHead,

@@ -911,6 +911,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         workdir: engine.workdir.join(&project_id),
         target,
         threads: engine.threads,
+        neutralize: req["neutralizeFormulas"] == true,
     };
     // In the order the TypeScript engine draws them, so seeded runs give the same IDs and times.
     input.export_id = engine.ids.new_export_id();
