@@ -1,0 +1,20 @@
+[package]
+name = "tracewell-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Tracewell native engine: the engine protocol over stdio, with DuckDB and Parquet for files beyond browser memory"
+license = "Apache-2.0"
+authors = ["Prasad (Prasad-DataAnalyst)"]
+publish = false
+
+# Direct dependencies are pinned exactly. Cargo.lock is generated on each machine and not kept in
+# the repository: it lists crates for every target platform, including ones Tracewell never builds.
+[dependencies]
+duckdb = { version = "=1.20000.0", features = ["bundled", "parquet", "appender-arrow"] }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
+sha2 = "=0.11.1"
+
+[profile.release]
+codegen-units = 4
+lto = "thin"

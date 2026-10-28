@@ -84,7 +84,7 @@ const DEFAULT_ROOT = fileURLToPath(new URL('..', import.meta.url));
  * name into harmless-looking halves; normalizeRun then removes them.
  */
 const RUN = /[\p{L}\p{N}\p{M}\p{Cf}]+/gu;
-const WALK_SKIP = new Set(['.git', 'node_modules', 'dist', 'coverage', 'test-results', 'playwright-report']);
+const WALK_SKIP = new Set(['.git', 'node_modules', 'dist', 'coverage', 'test-results', 'playwright-report', 'target']);
 
 /**
  * @typedef {{ file: string; line: number; column: number }} Hit   line 0 means the file path itself

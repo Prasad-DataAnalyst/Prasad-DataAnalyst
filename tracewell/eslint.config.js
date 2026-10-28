@@ -119,7 +119,15 @@ const nodeEntryRules = {
 };
 
 export default defineConfig([
-  globalIgnores(['dist/', 'coverage/', 'playwright-report/', 'test-results/', 'node_modules/', 'fixtures/messy/']),
+  globalIgnores([
+    'dist/',
+    'coverage/',
+    'playwright-report/',
+    'test-results/',
+    'node_modules/',
+    'fixtures/messy/',
+    '**/target/',
+  ]),
   js.configs.recommended,
   tseslint.configs.recommended,
   {

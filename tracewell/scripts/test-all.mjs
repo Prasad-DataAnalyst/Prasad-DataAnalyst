@@ -2,11 +2,13 @@
 /**
  * The single test command (SAD section 13.4).
  *
- * Usage: node scripts/test-all.mjs [--slow] [--skip-e2e]
+ * Usage: node scripts/test-all.mjs [--slow] [--skip-e2e] [--skip-native]
  *
- * Runs, in order and stopping at the first failure: hygiene, licences, typecheck, lint, vitest,
- * build, playwright. `--slow` runs only the slow suites (Vitest and the Playwright `@slow` specs)
- * with TW_SLOW=1. `--skip-e2e` leaves out Playwright. Prints a summary table and exits 0 or 1.
+ * Runs, in order and stopping at the first failure: hygiene, licences, typecheck, lint, native,
+ * vitest, build, playwright. The native stage tests and builds the Rust engine first, so the
+ * Vitest parity suite runs against the current binary. `--slow` runs only the slow suites (Vitest
+ * and the Playwright `@slow` specs) with TW_SLOW=1. `--skip-e2e` leaves out Playwright and
+ * `--skip-native` the Rust stage, for a machine without Rust. Prints a summary table and exits 0 or 1.
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -14,10 +16,10 @@ import { isEntryScript } from './is-entry.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-export const USAGE = 'usage: node scripts/test-all.mjs [--slow] [--skip-e2e]';
+export const USAGE = 'usage: node scripts/test-all.mjs [--slow] [--skip-e2e] [--skip-native]';
 
 /**
- * @typedef {{ slow: boolean; skipE2e: boolean }} Options
+ * @typedef {{ slow: boolean; skipE2e: boolean; skipNative: boolean }} Options
  * @typedef {{ name: string; npmArgs: string[]; env: Record<string, string> }} Stage
  * @typedef {'passed' | 'failed' | 'not run'} Outcome
  * @typedef {{ name: string; outcome: Outcome; seconds: number }} StageResult
@@ -29,10 +31,11 @@ export const USAGE = 'usage: node scripts/test-all.mjs [--slow] [--skip-e2e]';
  * @returns {Options}
  */
 export function parseArgs(argv) {
-  const options = { slow: false, skipE2e: false };
+  const options = { slow: false, skipE2e: false, skipNative: false };
   for (const arg of argv) {
     if (arg === '--slow') options.slow = true;
     else if (arg === '--skip-e2e') options.skipE2e = true;
+    else if (arg === '--skip-native') options.skipNative = true;
     else throw new Error(`unknown option "${arg}"\n${USAGE}`);
   }
   return options;
@@ -62,11 +65,14 @@ export function planStages(options) {
         { name: 'licences', npmArgs: ['run', 'check:licences'], env: {} },
         { name: 'typecheck', npmArgs: ['run', 'typecheck'], env: {} },
         { name: 'lint', npmArgs: ['run', 'lint'], env: {} },
+        { name: 'native', npmArgs: ['run', 'test:native'], env: {} },
         { name: 'vitest', npmArgs: ['run', 'test:unit'], env: {} },
         { name: 'build', npmArgs: ['run', 'build'], env: {} },
         { name: 'playwright', npmArgs: ['run', 'test:e2e'], env: E2E_ENV },
       ];
-  return options.skipE2e ? stages.filter((s) => s.name !== 'playwright') : stages;
+  return stages.filter(
+    (s) => !(options.skipE2e && s.name === 'playwright') && !(options.skipNative && s.name === 'native'),
+  );
 }
 
 /**

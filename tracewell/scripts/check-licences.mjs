@@ -29,6 +29,21 @@ export const ALLOWED = [
 /** Single SPDX identifiers on the allow-list, used to evaluate compound expressions. */
 const ALLOWED_IDS = new Set(ALLOWED.filter((entry) => /^[\w.+-]+$/.test(entry)));
 
+/**
+ * Further permissive licences found in the native engine's Rust crates. None of them asks for more
+ * than a notice; each was reviewed when the crate was adopted (SAD section 14).
+ */
+export const RUST_ALSO_ALLOWED = [
+  'Zlib',
+  'Unlicense',
+  'CC0-1.0',
+  'BSL-1.0',
+  'Unicode-3.0',
+  'Unicode-DFS-2016',
+  'CDLA-Permissive-2.0',
+];
+const RUST_IDS = new Set([...ALLOWED_IDS, ...RUST_ALSO_ALLOWED]);
+
 const DEFAULT_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
@@ -82,7 +97,7 @@ function tokenizeExpression(expression) {
  * @param {string} expression
  * @returns {boolean}
  */
-export function isAllowedExpression(expression) {
+export function isAllowedExpression(expression, ids = ALLOWED_IDS) {
   if (ALLOWED.includes(expression)) return true;
   const tokens = tokenizeExpression(expression);
   let position = 0;
@@ -120,7 +135,7 @@ export function isAllowedExpression(expression) {
       position += 2;
       return false;
     }
-    return ALLOWED_IDS.has(token);
+    return ids.has(token);
   }
 
   try {
@@ -225,7 +240,7 @@ function readProductionTree(root) {
 export function formatReport(verdicts) {
   const offenders = verdicts.filter((v) => !v.allowed);
   if (offenders.length === 0) {
-    return `licences: ${verdicts.length} production packages, all on the allow-list.`;
+    return `licences: ${verdicts.length} production packages and crates, all on the allow-list.`;
   }
   return [
     `licences: ${offenders.length} of ${verdicts.length} production packages failed the licence gate:`,
@@ -235,11 +250,68 @@ export function formatReport(verdicts) {
 }
 
 /**
+ * A crate's licence as an SPDX expression: Cargo still accepts the old 'MIT/Apache-2.0' form,
+ * where the slash means OR.
+ * @param {string | null | undefined} licence
+ * @returns {string}
+ */
+export function crateLicence(licence) {
+  return (licence ?? '').replace(/\s*\/\s*/g, ' OR ').trim();
+}
+
+/**
+ * Verdicts for the crates a native build compiles (cargo metadata's resolved graph).
+ * @param {{ packages: { id: string; name: string; version: string; license?: string | null }[]; resolve?: { nodes: { id: string }[] } | null }} metadata
+ * @returns {LicenceVerdict[]}
+ */
+export function classifyCrates(metadata) {
+  const built = new Set((metadata.resolve?.nodes ?? []).map((n) => n.id));
+  return metadata.packages
+    .filter((p) => built.size === 0 || built.has(p.id))
+    .filter((p) => p.name !== 'tracewell-engine')
+    .map((p) => {
+      const licence = crateLicence(p.license);
+      return {
+        name: `crate ${p.name}`,
+        version: p.version,
+        licence: licence || 'NONE',
+        allowed: licence !== '' && isAllowedExpression(licence, RUST_IDS),
+      };
+    });
+}
+
+/**
+ * The native engine's crates, when the crate and cargo are present; otherwise none.
+ * @param {string} root
+ * @returns {LicenceVerdict[]}
+ */
+function rustVerdicts(root) {
+  const manifest = join(root, 'crates', 'tracewell-engine', 'Cargo.toml');
+  if (!existsSync(manifest)) return [];
+  try {
+    const out = execFileSync('cargo', ['metadata', '--format-version', '1', '--manifest-path', manifest], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return classifyCrates(JSON.parse(out.toString()));
+  } catch (e) {
+    return [
+      {
+        name: 'crates/tracewell-engine',
+        version: '-',
+        licence: `UNREADABLE (${e instanceof Error ? e.message.split('\n')[0] : String(e)})`,
+        allowed: false,
+      },
+    ];
+  }
+}
+
+/**
  * @param {string} [root]
  * @returns {number} process exit code
  */
 export function main(root = DEFAULT_ROOT) {
-  const verdicts = installedPackages(readProductionTree(root)).map(verdictFor);
+  const verdicts = [...installedPackages(readProductionTree(root)).map(verdictFor), ...rustVerdicts(root)];
   const text = formatReport(verdicts);
   const failed = verdicts.some((v) => !v.allowed);
   if (failed) console.error(text);

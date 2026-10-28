@@ -5,20 +5,34 @@ import { formatSummary, parseArgs, planStages, runStages, stageFailure } from '.
 const names = (stages: { name: string }[]): string[] => stages.map((s) => s.name);
 
 describe('test-all', () => {
-  it('parses its two options and rejects anything else', () => {
-    expect(parseArgs([])).toEqual({ slow: false, skipE2e: false });
-    expect(parseArgs(['--slow', '--skip-e2e'])).toEqual({ slow: true, skipE2e: true });
+  it('parses its three options and rejects anything else', () => {
+    expect(parseArgs([])).toEqual({ slow: false, skipE2e: false, skipNative: false });
+    expect(parseArgs(['--slow', '--skip-e2e', '--skip-native'])).toEqual({
+      slow: true,
+      skipE2e: true,
+      skipNative: true,
+    });
     expect(() => parseArgs(['--fast'])).toThrow(/unknown option "--fast"/);
   });
 
   it('runs the stages in the SAD order through the npm scripts', () => {
-    const stages = planStages({ slow: false, skipE2e: false });
-    expect(names(stages)).toEqual(['hygiene', 'licences', 'typecheck', 'lint', 'vitest', 'build', 'playwright']);
+    const stages = planStages({ slow: false, skipE2e: false, skipNative: false });
+    expect(names(stages)).toEqual([
+      'hygiene',
+      'licences',
+      'typecheck',
+      'lint',
+      'native',
+      'vitest',
+      'build',
+      'playwright',
+    ]);
     expect(stages.map((s) => s.npmArgs.join(' '))).toEqual([
       'run check:hygiene',
       'run check:licences',
       'run typecheck',
       'run lint',
+      'run test:native',
       'run test:unit',
       'run build',
       'run test:e2e',
@@ -27,22 +41,29 @@ describe('test-all', () => {
   });
 
   it('--slow runs the slow Vitest and Playwright suites with TW_SLOW=1', () => {
-    const stages = planStages({ slow: true, skipE2e: false });
+    const stages = planStages({ slow: true, skipE2e: false, skipNative: false });
     expect(names(stages)).toEqual(['vitest', 'playwright']);
     expect(stages.every((s) => s.env.TW_SLOW === '1')).toBe(true);
     expect(stages[1]?.npmArgs).toEqual(['run', 'test:e2e', '--', '--grep', '@slow']);
   });
 
   it('--skip-e2e leaves out Playwright', () => {
-    expect(names(planStages({ slow: false, skipE2e: true }))).not.toContain('playwright');
-    expect(names(planStages({ slow: true, skipE2e: true }))).toEqual(['vitest']);
+    expect(names(planStages({ slow: false, skipE2e: true, skipNative: false }))).not.toContain('playwright');
+    expect(names(planStages({ slow: true, skipE2e: true, skipNative: false }))).toEqual(['vitest']);
+  });
+
+  it('--skip-native leaves out the Rust stage and nothing else', () => {
+    const all = names(planStages({ slow: false, skipE2e: false, skipNative: false }));
+    expect(names(planStages({ slow: false, skipE2e: false, skipNative: true }))).toEqual(
+      all.filter((n) => n !== 'native'),
+    );
   });
 
   it('stops at the first failure and reports later stages as not run', () => {
     const ran: string[] = [];
     let now = 0;
     const results = runStages(
-      planStages({ slow: false, skipE2e: false }),
+      planStages({ slow: false, skipE2e: false, skipNative: false }),
       (stage) => {
         ran.push(stage.name);
         now += 1500;
@@ -55,6 +76,7 @@ describe('test-all', () => {
       'passed',
       'passed',
       'failed',
+      'not run',
       'not run',
       'not run',
       'not run',

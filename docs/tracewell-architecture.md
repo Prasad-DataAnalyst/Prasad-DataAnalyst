@@ -1,14 +1,14 @@
 # Tracewell: Software Architecture Document
 
-| | |
-|---|---|
-| **Product** | Tracewell Data Workbench |
-| **Document** | Software Architecture Document (SAD) |
-| **Version** | 0.1 (covers the long-term architecture and the R0 slice 1 build) |
-| **Date** | 19 October 2026 |
-| **Author and owner** | Prasad (Prasad-DataAnalyst) |
-| **Companion document** | `docs/tracewell-product-spec.md` (PRD v0.1) |
-| **Status** | Approved for slice 1 implementation |
+|                        |                                                                  |
+| ---------------------- | ---------------------------------------------------------------- |
+| **Product**            | Tracewell Data Workbench                                         |
+| **Document**           | Software Architecture Document (SAD)                             |
+| **Version**            | 0.1 (covers the long-term architecture and the R0 slice 1 build) |
+| **Date**               | 19 October 2026                                                  |
+| **Author and owner**   | Prasad (Prasad-DataAnalyst)                                      |
+| **Companion document** | `docs/tracewell-product-spec.md` (PRD v0.1)                      |
+| **Status**             | Approved for slice 1 implementation                              |
 
 ---
 
@@ -19,7 +19,7 @@ This document settles the open decision "engine implementation language" (PRD §
 - the long-term architecture: desktop application, browser Lite edition, engine abstraction, and the path to 10 GB+;
 - the exact architecture of **R0 slice 1**. This is the first vertical slice that can be fully built, unit-tested and end-to-end tested in a headless Linux container. It covers Import → Check → Review → Process → Extract → Export plus project save and open, on real files.
 
-Requirement IDs (FR-*, NFR-*, UI-*) refer to the PRD.
+Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 
 ---
 
@@ -37,14 +37,14 @@ Requirement IDs (FR-*, NFR-*, UI-*) refer to the PRD.
 
 ### 2.2 Constraints
 
-| Constraint | Consequence |
-|---|---|
-| Offline by default, no telemetry, no data leaves the machine | No network code in the application. A strict Content Security Policy in the production build. An E2E guard fails any test that makes a request off the local origin. |
-| Online only for optional basemaps (later) | The future map module is the only component allowed a network permission, behind an explicit setting. |
-| Enterprise desktop-style UI, not chat-style | Menu bar, process toolbar, project tree, tabbed centre, properties panel, Issues/Log/Jobs panel, status bar. |
-| Build container: Linux, 4 CPU, 15 GB RAM, no display, Node 22.22, npm 10.9, Rust 1.97, Python 3.13, Chromium 1194 for Playwright at `/opt/pw-browsers`, no webkit2gtk | Slice 1 is a web build tested headless. The Tauri desktop shell cannot be built here and comes later. A native engine *can* be built and tested here headless (slice 2). |
-| Permissive licences only (MIT, BSD, Apache-2.0, ISC; MPL-2.0 for unmodified use) | A licence gate script runs in the test pipeline (§14). |
-| Authorship | Code, documents, About screen and commits are in the owner's name only. A repository hygiene check runs in the test pipeline. |
+| Constraint                                                                                                                                                            | Consequence                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Offline by default, no telemetry, no data leaves the machine                                                                                                          | No network code in the application. A strict Content Security Policy in the production build. An E2E guard fails any test that makes a request off the local origin.     |
+| Online only for optional basemaps (later)                                                                                                                             | The future map module is the only component allowed a network permission, behind an explicit setting.                                                                    |
+| Enterprise desktop-style UI, not chat-style                                                                                                                           | Menu bar, process toolbar, project tree, tabbed centre, properties panel, Issues/Log/Jobs panel, status bar.                                                             |
+| Build container: Linux, 4 CPU, 15 GB RAM, no display, Node 22.22, npm 10.9, Rust 1.97, Python 3.13, Chromium 1194 for Playwright at `/opt/pw-browsers`, no webkit2gtk | Slice 1 is a web build tested headless. The Tauri desktop shell cannot be built here and comes later. A native engine _can_ be built and tested here headless (slice 2). |
+| Permissive licences only (MIT, BSD, Apache-2.0, ISC; MPL-2.0 for unmodified use)                                                                                      | A licence gate script runs in the test pipeline (§14).                                                                                                                   |
+| Authorship                                                                                                                                                            | Code, documents, About screen and commits are in the owner's name only. A repository hygiene check runs in the test pipeline.                                            |
 
 ---
 
@@ -53,20 +53,34 @@ Requirement IDs (FR-*, NFR-*, UI-*) refer to the PRD.
 **Decision.** Build the engine first in **TypeScript, behind a versioned, message-based engine protocol**, running in a Web Worker in the browser and in-process in Node for tests. For files beyond browser memory, add a **native engine (Rust + DuckDB + Parquet) behind the same protocol** from slice 2. The **Tauri desktop shell** loads the same UI build and talks to the native engine.
 
 **Why.**
+
 - Everything in slice 1 can be built and verified in this container with npm alone.
 - The browser Lite edition needs an in-browser engine anyway, so the TypeScript engine is permanent product code, not a prototype. In the desktop product it becomes the **reference implementation**: the native engine must reproduce the same issues and digests on the same fixtures (one conformance suite, two independent implementations). That is direct evidence for PRD §16.
 - The owner works in one language for slice 1.
 
 **Alternatives considered.**
 
-| Alternative | Why not chosen for slice 1 |
-|---|---|
-| DuckDB-WASM in the browser plus native DuckDB in Node | Strongest SQL path, but needs two engine builds kept in step, about 9 MB of engine assets, and extensions that must be vendored to stay offline. The browser build is single-threaded with no spill, and the latest npm tag is a development build. The good ideas are kept for the native engine: SQL-translatable check primitives, raw-text staging, the 10 GB benchmark generated by DuckDB. |
-| A Rust core compiled to WebAssembly and linked natively into Tauri | One engine for both editions. But it needs two toolchains plus a WASM toolchain installed from the network, and puts a Rust learning curve on the solo owner at the start. Its key ideas are kept: injected clock and IDs, state rebuilt by replaying the audit log, fixed timestamps in written files. |
+| Alternative                                                        | Why not chosen for slice 1                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| DuckDB-WASM in the browser plus native DuckDB in Node              | Strongest SQL path, but needs two engine builds kept in step, about 9 MB of engine assets, and extensions that must be vendored to stay offline. The browser build is single-threaded with no spill, and the latest npm tag is a development build. The good ideas are kept for the native engine: SQL-translatable check primitives, raw-text staging, the 10 GB benchmark generated by DuckDB. |
+| A Rust core compiled to WebAssembly and linked natively into Tauri | One engine for both editions. But it needs two toolchains plus a WASM toolchain installed from the network, and puts a Rust learning curve on the solo owner at the start. Its key ideas are kept: injected clock and IDs, state rebuilt by replaying the audit log, fixed timestamps in written files.                                                                                          |
 
 **Accepted costs.**
+
 - The TypeScript engine is memory-bound: roughly 1–2 M rows × 30 columns per dataset in a browser tab. It enforces a memory budget and falls back to a partial import with a visible issue.
 - Check primitives and steps will exist in TypeScript and in SQL. This is contained by a small, closed set of primitives, each with a defined SQL template, and by the shared conformance suite.
+
+### 3.1 Decision D-12 (slice 2): import planning is written once
+
+**Context.** Detection (encoding, delimiter, header rows, types, units, roles, null markers, date formats, CRS) is about 1,900 lines of TypeScript heuristics tuned to the messy-file library. Re-implementing it in Rust would double the code most likely to diverge between engines, and the plan it produces is already engine-neutral data: the `ImportSpec` that the `source.add` audit entry records.
+
+**Decision.** Planning stays in TypeScript, the reference implementation. The native engine **executes** a reviewed plan rather than re-deriving one.
+
+- Protocol 0.2 adds an optional `preview` field to `importFile`: the `ImportPreview` the user reviewed. The TypeScript engine plans again (same input, same result); the native engine imports exactly that plan.
+- Sniffing reads at most 1 MiB, so planning in TypeScript costs the same for a 10 GB file as for a small one. In the desktop edition the planner answers `sniff` and the native engine answers everything that touches the full file.
+- What _is_ ported to Rust is the cell parser that a plan drives (numbers with locale separators, null markers, the date families, booleans): a few hundred lines, checked against the TypeScript parser by the conformance suite.
+
+**Consequences.** Both engines write identical `source.add` payloads for the same file and plan, so their audit logs mean the same thing. Parity work moves to execution: reading every format under a plan, check primitives as SQL, steps as SQL views, and exports.
 
 ---
 
@@ -106,12 +120,12 @@ Requirement IDs (FR-*, NFR-*, UI-*) refer to the PRD.
 
 ### 4.3 Path to 10 GB+ (G4, NFR-03, NFR-04)
 
-| Phase | Where | Content |
-|---|---|---|
-| A: contract hardening (slice 2) | this container | Freeze protocol 0.x. Add `stdioTransport` (JSON lines plus binary frames). Grow `tests/conformance` so every scenario is fixture → expected issues and digests. |
+| Phase                                  | Where                                                           | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A: contract hardening (slice 2)        | this container                                                  | Freeze protocol 0.x. Add `stdioTransport` (JSON lines plus binary frames). Grow `tests/conformance` so every scenario is fixture → expected issues and digests.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | B: headless native engine (slices 2–3) | this container (Rust 1.97 works; only the GUI shell is missing) | Crate `crates/tracewell-engine` using `duckdb` (bundled), `arrow`/`parquet`, `calamine`, `rust_xlsxwriter`, `zip`, `sha2`, `csv`. Import stages every column as text (`read_csv(all_varchar=true, store_rejects=true)`), infers types in one aggregate pass, keeps cast failures in a side table (no raw value lost), and writes Parquet working files (FR-IMP-09). DuckDB `memory_limit` and `temp_directory` give spill-to-disk (NFR-04). Each check primitive has one SQL template (§8.3). The overlay becomes an `edits` table joined with `COALESCE`; steps become SQL views; exports stream with `COPY` and `rust_xlsxwriter` (constant-memory mode). The conformance suite and the Playwright suite run against it through a development-only loopback bridge. |
-| C: 10 GB benchmark (slice 2) | this container, then the reference laptop | DuckDB generates a seeded 10 GB CSV (`COPY (SELECT … FROM range(N)) TO …`). Import → check → export is measured under `memory_limit` = 50% of RAM, and results are published in `docs/benchmarks.md`. Large projects need a decision record on `.twp` layout (stored ZIP64 versus a project folder exported to `.twp`), because NFR-11 budgets disk at 3× the data size. |
-| D: desktop shell (later) | a Windows build runner with WebView2 | Tauri 2 loads the same UI build. `tauriTransport` uses commands and events. Native file dialogs pass paths. GDAL and PROJ are linked natively. A crash-recovery journal is kept on disk (FR-PRJ-03 becomes "replay the journal"). |
+| C: 10 GB benchmark (slice 2)           | this container, then the reference laptop                       | DuckDB generates a seeded 10 GB CSV (`COPY (SELECT … FROM range(N)) TO …`). Import → check → export is measured under `memory_limit` = 50% of RAM, and results are published in `docs/benchmarks.md`. Large projects need a decision record on `.twp` layout (stored ZIP64 versus a project folder exported to `.twp`), because NFR-11 budgets disk at 3× the data size.                                                                                                                                                                                                                                                                                                                                                                                              |
+| D: desktop shell (later)               | a Windows build runner with WebView2                            | Tauri 2 loads the same UI build. `tauriTransport` uses commands and events. Native file dialogs pass paths. GDAL and PROJ are linked natively. A crash-recovery journal is kept on disk (FR-PRJ-03 becomes "replay the journal").                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 The Lite edition keeps `LocalEngine`. Above its memory budget it imports a partial preview, raises `TW-IMP-006` and tells the user the desktop edition handles the file.
 
@@ -206,32 +220,32 @@ Engineers can work in parallel, one folder each. If the CLI or the engine ever n
 
 Modules with the same build order can be built in parallel. Lower numbers come first.
 
-| Order | Module | Path | Depends on |
-|---|---|---|---|
-| 0 | tooling | `tracewell/` (configs, scripts, `tests/architecture`) | none |
-| 0 | model | `src/model` | zod |
-| 1 | io | `src/io` | model, fflate, @noble/hashes |
-| 1 | units | `src/units` | model |
-| 1 | geo | `src/geo` | model |
-| 1 | engine-api | `src/engine-api` | model |
-| 1 | fixtures | `fixtures/` | model, io |
-| 2 | formats-csv | `src/formats/csv` | model, io |
-| 2 | formats-xlsx | `src/formats/xlsx` | model, io, saxes |
-| 2 | formats-geojson | `src/formats/geojson` | model, io, @streamparser/json |
-| 2 | detect | `src/detect` | model, units |
-| 2 | table | `src/table` | model, io |
-| 2 | audit | `src/audit` | model, io |
-| 2 | ui-shell | `src/ui-shell` | model, engine-api, react, zustand, react-resizable-panels, lucide-react |
-| 3 | ingest | `src/ingest` | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson |
-| 3 | rules | `src/rules` | model, io, table, units, geo |
-| 3 | steps | `src/steps` | model, table, units, geo |
-| 3 | export | `src/export` | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson |
-| 3 | project | `src/project` | model, io |
-| 3 | ui-views | `src/ui-views` | model, engine-api, ui-shell, @tanstack/react-virtual |
-| 4 | engine | `src/engine` | model, io, units, geo, engine-api, table, audit, ingest, rules, steps, export, project |
-| 5 | app | `src/app`, `index.html` | model, engine-api, ui-shell, ui-views, engine |
-| 5 | conformance | `tests/conformance` | model, io, engine-api, engine, fixtures |
-| 6 | e2e | `tests/e2e`, `tests/oracle`, `playwright.config.ts` | app (built), fixtures |
+| Order | Module          | Path                                                  | Depends on                                                                             |
+| ----- | --------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 0     | tooling         | `tracewell/` (configs, scripts, `tests/architecture`) | none                                                                                   |
+| 0     | model           | `src/model`                                           | zod                                                                                    |
+| 1     | io              | `src/io`                                              | model, fflate, @noble/hashes                                                           |
+| 1     | units           | `src/units`                                           | model                                                                                  |
+| 1     | geo             | `src/geo`                                             | model                                                                                  |
+| 1     | engine-api      | `src/engine-api`                                      | model                                                                                  |
+| 1     | fixtures        | `fixtures/`                                           | model, io                                                                              |
+| 2     | formats-csv     | `src/formats/csv`                                     | model, io                                                                              |
+| 2     | formats-xlsx    | `src/formats/xlsx`                                    | model, io, saxes                                                                       |
+| 2     | formats-geojson | `src/formats/geojson`                                 | model, io, @streamparser/json                                                          |
+| 2     | detect          | `src/detect`                                          | model, units                                                                           |
+| 2     | table           | `src/table`                                           | model, io                                                                              |
+| 2     | audit           | `src/audit`                                           | model, io                                                                              |
+| 2     | ui-shell        | `src/ui-shell`                                        | model, engine-api, react, zustand, react-resizable-panels, lucide-react                |
+| 3     | ingest          | `src/ingest`                                          | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson                   |
+| 3     | rules           | `src/rules`                                           | model, io, table, units, geo                                                           |
+| 3     | steps           | `src/steps`                                           | model, table, units, geo                                                               |
+| 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson               |
+| 3     | project         | `src/project`                                         | model, io                                                                              |
+| 3     | ui-views        | `src/ui-views`                                        | model, engine-api, ui-shell, @tanstack/react-virtual                                   |
+| 4     | engine          | `src/engine`                                          | model, io, units, geo, engine-api, table, audit, ingest, rules, steps, export, project |
+| 5     | app             | `src/app`, `index.html`                               | model, engine-api, ui-shell, ui-views, engine                                          |
+| 5     | conformance     | `tests/conformance`                                   | model, io, engine-api, engine, fixtures                                                |
+| 6     | e2e             | `tests/e2e`, `tests/oracle`, `playwright.config.ts`   | app (built), fixtures                                                                  |
 
 ### 6.2 Dependency diagram
 
@@ -269,28 +283,28 @@ The UI modules (`ui-shell`, `ui-views`) never import `engine`, `table`, `rules`,
 
 ### 6.3 Module responsibilities (summary)
 
-| Module | Responsibility |
-|---|---|
-| model | The shared vocabulary: IDs, values, detections, schemas, issues, rules, audit entries, decisions, steps, export and project manifests, DTOs, error codes. Canonical JSON, number and cell encodings. Zod schemas for every persisted document. |
-| io | Byte sources and sinks over Blob/Uint8Array (and Node files in tests), incremental SHA-256, encoding sniff and decode, deterministic ZIP write and guarded ZIP read. |
-| units | The single units library (FR-PRC-01): about 60 cited units, header-unit parsing, convertibility guards (dimension, convention, gauge/absolute), conversion methods, physical bounds. |
-| geo | Geometry structure validation, bounding boxes, lat/lon range and swap heuristics, point construction. |
-| engine-api | The protocol (`EngineApi`, `EngineEvent`), RPC messages, `EngineClient`, worker, in-process and port transports, `serve()`, and a stub engine for UI development. |
-| formats-* | One adapter per format: sniff (≤ 1 MiB), read as batches of raw rows with exact source locators, write. CSV and GeoJSON stream; XLSX reads a ZIP in memory under a size guard. |
-| detect | Turns header text and sample rows into column plans: type, unit, role, null markers, date format, timezone, decimal separator, each a `Detection`. Builds per-column value parsers. |
-| table | Column store, streaming `TableBuilder` that keeps raw text for values that fail to parse, `RowSet` bitmap, `Overlay` of edits, `View` (overlay → derived columns → exclusions → filters → selection), digests. |
-| audit | Append-only, SHA-256 hash-chained log with no update or delete API (FR-AUD-02); verification; JSON Lines import and export. |
-| ingest | Preview (detections + parsed sample) and full import: streams the source, hashes it in the same pass, enforces the memory budget, returns the dataset, import spec and notes. |
-| rules | Loads declarative rule-packs; runs check primitives over a view; produces issue drafts with stable IDs. Ships `tracewell.generic-dq` 0.1.0 and `tracewell.system` 0.1.0. |
-| steps | Validates steps; builds conversion methods; compiles filter predicates; builds the working and output views from a dataset, overlay, exclusions and steps. |
-| export | Destination profiles, export planning (format-limit substitutions), writers, read-back validation, package assembly, package re-verification. |
-| project | `.twp` writer and reader, manifest validation, entry and original checksum checks. Audit-chain and replay checks are done by `engine`. |
-| engine | `LocalEngine`: project state, a single reducer applied to audit entries (live and replay), jobs with progress and cancel, decisions, issue states, lineage, save and open with replay verification, worker entry. |
-| ui-shell | Window layout, menu bar, process toolbar, project tree, centre tab host, properties host, Issues/Log/Jobs panel, status bar, command registry and shortcuts, design tokens and themes, UI store. |
-| ui-views | Data grid with editing and reason flow, import preview with detections and overrides, issues register with drill-down, Convert, Filter and Columns dialogs, export centre, properties content (column metadata, cell lineage), log view, jobs view, project open report. |
-| app | Bootstraps the worker engine, profile setup on first start, mounts the shell with views. |
-| conformance | Engine-agnostic workflow scenarios that every engine must pass. |
-| e2e | Playwright specs, the offline guard, independent oracle readers in Python and LibreOffice. |
+| Module      | Responsibility                                                                                                                                                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| model       | The shared vocabulary: IDs, values, detections, schemas, issues, rules, audit entries, decisions, steps, export and project manifests, DTOs, error codes. Canonical JSON, number and cell encodings. Zod schemas for every persisted document.                           |
+| io          | Byte sources and sinks over Blob/Uint8Array (and Node files in tests), incremental SHA-256, encoding sniff and decode, deterministic ZIP write and guarded ZIP read.                                                                                                     |
+| units       | The single units library (FR-PRC-01): about 60 cited units, header-unit parsing, convertibility guards (dimension, convention, gauge/absolute), conversion methods, physical bounds.                                                                                     |
+| geo         | Geometry structure validation, bounding boxes, lat/lon range and swap heuristics, point construction.                                                                                                                                                                    |
+| engine-api  | The protocol (`EngineApi`, `EngineEvent`), RPC messages, `EngineClient`, worker, in-process and port transports, `serve()`, and a stub engine for UI development.                                                                                                        |
+| formats-*   | One adapter per format: sniff (≤ 1 MiB), read as batches of raw rows with exact source locators, write. CSV and GeoJSON stream; XLSX reads a ZIP in memory under a size guard.                                                                                           |
+| detect      | Turns header text and sample rows into column plans: type, unit, role, null markers, date format, timezone, decimal separator, each a `Detection`. Builds per-column value parsers.                                                                                      |
+| table       | Column store, streaming `TableBuilder` that keeps raw text for values that fail to parse, `RowSet` bitmap, `Overlay` of edits, `View` (overlay → derived columns → exclusions → filters → selection), digests.                                                           |
+| audit       | Append-only, SHA-256 hash-chained log with no update or delete API (FR-AUD-02); verification; JSON Lines import and export.                                                                                                                                              |
+| ingest      | Preview (detections + parsed sample) and full import: streams the source, hashes it in the same pass, enforces the memory budget, returns the dataset, import spec and notes.                                                                                            |
+| rules       | Loads declarative rule-packs; runs check primitives over a view; produces issue drafts with stable IDs. Ships `tracewell.generic-dq` 0.1.0 and `tracewell.system` 0.1.0.                                                                                                 |
+| steps       | Validates steps; builds conversion methods; compiles filter predicates; builds the working and output views from a dataset, overlay, exclusions and steps.                                                                                                               |
+| export      | Destination profiles, export planning (format-limit substitutions), writers, read-back validation, package assembly, package re-verification.                                                                                                                            |
+| project     | `.twp` writer and reader, manifest validation, entry and original checksum checks. Audit-chain and replay checks are done by `engine`.                                                                                                                                   |
+| engine      | `LocalEngine`: project state, a single reducer applied to audit entries (live and replay), jobs with progress and cancel, decisions, issue states, lineage, save and open with replay verification, worker entry.                                                        |
+| ui-shell    | Window layout, menu bar, process toolbar, project tree, centre tab host, properties host, Issues/Log/Jobs panel, status bar, command registry and shortcuts, design tokens and themes, UI store.                                                                         |
+| ui-views    | Data grid with editing and reason flow, import preview with detections and overrides, issues register with drill-down, Convert, Filter and Columns dialogs, export centre, properties content (column metadata, cell lineage), log view, jobs view, project open report. |
+| app         | Bootstraps the worker engine, profile setup on first start, mounts the shell with views.                                                                                                                                                                                 |
+| conformance | Engine-agnostic workflow scenarios that every engine must pass.                                                                                                                                                                                                          |
+| e2e         | Playwright specs, the offline guard, independent oracle readers in Python and LibreOffice.                                                                                                                                                                               |
 
 The exact exported signatures are listed in the implementation plan that accompanies this document. The type definitions in `src/model` are normative.
 
@@ -300,29 +314,29 @@ The exact exported signatures are listed in the implementation plan that accompa
 
 ### 7.1 Identity
 
-| Concept | Representation |
-|---|---|
-| Project | `ProjectId` `p_` + 16 hex characters, from the injected `IdSource` (seeded in tests) |
-| Original file | `FileId` = full SHA-256 of its bytes (content address) |
-| Dataset | `DatasetId` `d1`, `d2`, … in order of `source.add` audit entries |
-| Column | `ColumnId` `c0`…`cN` by source position. Derived columns are `c3~kPa`. |
-| Row | `RowId` = 0-based data-row ordinal in the original, never reused or renumbered. Filters produce row sets. |
+| Concept        | Representation                                                                                                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project        | `ProjectId` `p_` + 16 hex characters, from the injected `IdSource` (seeded in tests)                                                                                             |
+| Original file  | `FileId` = full SHA-256 of its bytes (content address)                                                                                                                           |
+| Dataset        | `DatasetId` `d1`, `d2`, … in order of `source.add` audit entries                                                                                                                 |
+| Column         | `ColumnId` `c0`…`cN` by source position. Derived columns are `c3~kPa`.                                                                                                           |
+| Row            | `RowId` = 0-based data-row ordinal in the original, never reused or renumbered. Filters produce row sets.                                                                        |
 | Source locator | Per row: CSV physical line (1-based, correct even with quoted newlines), XLSX sheet row (1-based) or GeoJSON feature index. Rendered as `line 1042`, `Sheet1!C17`, `feature 12`. |
-| Issue | `IssueId` = `I-` + the first 12 hex characters of SHA-256(`ruleId|datasetId|sorted columnIds`). Stable across re-runs, which is the basis for recipes later (FR-RCP-02). |
-| Step | `StepId` `s1`, `s2`, … per project |
-| Audit entry | `AuditSeq` 1, 2, … |
+| Issue          | `IssueId` = `I-` + the first 12 hex characters of SHA-256(`ruleId                                                                                                                | datasetId | sorted columnIds`). Stable across re-runs, which is the basis for recipes later (FR-RCP-02). |
+| Step           | `StepId` `s1`, `s2`, … per project                                                                                                                                               |
+| Audit entry    | `AuditSeq` 1, 2, …                                                                                                                                                               |
 
 ### 7.2 Values and types
 
-| Logical type | Column storage (slice 1) | API `CellValue` |
-|---|---|---|
-| `string` | `string[]` | `string` |
-| `integer` | `Float64Array` + validity bitmap (exact to 2^53) | `number` |
-| `number` | `Float64Array` + validity bitmap | `number` (always finite) |
-| `boolean` | `Uint8Array` + validity | `boolean` |
-| `date` | `Float64Array` days since 1970-01-01 | `{ date: 'YYYY-MM-DD' }` |
-| `datetime` | `Float64Array` ms since epoch, UTC | `{ datetime: 'YYYY-MM-DDTHH:mm:ss.sssZ' }` |
-| `geometry` | array of GeoJSON geometry objects | `{ geometry: Geometry }` |
+| Logical type | Column storage (slice 1)                         | API `CellValue`                            |
+| ------------ | ------------------------------------------------ | ------------------------------------------ |
+| `string`     | `string[]`                                       | `string`                                   |
+| `integer`    | `Float64Array` + validity bitmap (exact to 2^53) | `number`                                   |
+| `number`     | `Float64Array` + validity bitmap                 | `number` (always finite)                   |
+| `boolean`    | `Uint8Array` + validity                          | `boolean`                                  |
+| `date`       | `Float64Array` days since 1970-01-01             | `{ date: 'YYYY-MM-DD' }`                   |
+| `datetime`   | `Float64Array` ms since epoch, UTC               | `{ datetime: 'YYYY-MM-DDTHH:mm:ss.sssZ' }` |
+| `geometry`   | array of GeoJSON geometry objects                | `{ geometry: Geometry }`                   |
 
 - **Failed values.** A value that does not parse into its column type becomes null in the typed vector. **Its raw text is kept** in a sparse per-column `raw` map and raises `TW-DQ-004`; nothing is lost silently.
 - **Null markers.** Values matched as null markers keep their raw text too, and raise `TW-DQ-006`.
@@ -334,8 +348,13 @@ The exact exported signatures are listed in the implementation plan that accompa
 
 ```ts
 interface Detection<T> {
-  value: T; confidence: 'high' | 'medium' | 'low'; assumed: boolean;
-  source: 'detected' | 'default' | 'user'; method: string; evidence: string; overriddenBy?: AuditSeq;
+  value: T;
+  confidence: "high" | "medium" | "low";
+  assumed: boolean;
+  source: "detected" | "default" | "user";
+  method: string;
+  evidence: string;
+  overriddenBy?: AuditSeq;
 }
 ```
 
@@ -349,6 +368,7 @@ interface Detection<T> {
 ### 7.4 Schemas
 
 `TableSchema` holds:
+
 - the dataset ID and name;
 - the source (file ID, name, format, sheet);
 - the row count;
@@ -371,11 +391,12 @@ interface Detection<T> {
   - different dimensions → `UNIT_DIMENSION`;
   - standard volumes at different reference conditions → `UNIT_CONVENTION` (FR-CNV-03 behaviour until the conventions engine exists);
   - gauge ↔ absolute pressure → `UNIT_GAUGE_ABSOLUTE`;
-  - temperature *differences* are separate units from absolute temperatures.
+  - temperature _differences_ are separate units from absolute temperatures.
 
 ### 7.6 CRS
 
 `CrsRef = { code: 'OGC:CRS84' | 'EPSG:4326' | 'EPSG:<n>' | 'unknown'; source: 'rfc7946-default' | 'geojson-crs-member' | 'assumed-latlon' | 'user' }` is held at dataset level.
+
 - GeoJSON defaults to CRS84 (high confidence).
 - A legacy `crs` member is recorded and raises `TW-GEO-004` if it is not WGS84.
 - CSV latitude/longitude columns are assumed WGS84 and marked assumed.
@@ -385,15 +406,15 @@ interface Detection<T> {
 
 Issues are grouped per (rule, dataset, columns), with affected rows held as a set. A million missing values is one issue with drill-down.
 
-| Field | Meaning |
-|---|---|
-| `scope` | `rows`, `column` or `dataset` |
-| `counts.flagged` | Every row ever flagged by this issue during the session's check runs |
-| `counts.open` | Currently flagged rows minus accepted rows |
-| `counts.accepted` | Currently flagged and accepted with a reason |
-| `counts.excluded` | Flagged rows that were excluded |
-| `counts.fixed` | Previously flagged, no longer flagged, not excluded (typically corrected by an edit) |
-| `status` | `resolved` when open = 0; `open` when nothing is decided or fixed; otherwise `partly_resolved` |
+| Field             | Meaning                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| `scope`           | `rows`, `column` or `dataset`                                                                  |
+| `counts.flagged`  | Every row ever flagged by this issue during the session's check runs                           |
+| `counts.open`     | Currently flagged rows minus accepted rows                                                     |
+| `counts.accepted` | Currently flagged and accepted with a reason                                                   |
+| `counts.excluded` | Flagged rows that were excluded                                                                |
+| `counts.fixed`    | Previously flagged, no longer flagged, not excluded (typically corrected by an edit)           |
+| `status`          | `resolved` when open = 0; `open` when nothing is decided or fixed; otherwise `partly_resolved` |
 
 Checks run on the **working view**: base data + edits + unit conversions, minus excluded rows. Filters and column selection are output steps and do not affect checks. After a `cell.edit`, the engine re-runs the rules that apply to that column plus dataset-level rules.
 
@@ -401,48 +422,48 @@ Checks run on the **working view**: base data + edits + unit conversions, minus 
 
 Pack `tracewell.generic-dq` 0.1.0 (data rules):
 
-| ID | Check primitive | Severity |
-|---|---|---|
-| TW-DQ-001 missing values | `not_null` | warning |
-| TW-DQ-002 duplicate rows | `duplicate_rows` | warning |
-| TW-DQ-003 duplicate key (id + time) | `duplicate_key` | error |
-| TW-DQ-004 value does not fit column type (raw text kept) | `type_conformance` | warning |
-| TW-DQ-005 physically impossible value (T < 0 K, absolute pressure < 0, negative amounts, fraction outside 0–1 or 0–100 %) | `physical_range` | error |
-| TW-DQ-006 null marker converted | `null_marker` | note |
-| TW-DQ-007 below-detection-limit text kept, not zero | `below_detection_limit` | note |
-| TW-UNIT-001 measure column without a recognised unit | `unit_known` | warning |
-| TW-UNIT-002 mixed units inside a column | `unit_consistent` | error |
-| TW-TIME-001 duplicate timestamps (per asset) | `ts_duplicate` | error |
-| TW-TIME-002 timestamps out of order | `ts_order` | note |
-| TW-TIME-003 gap larger than k × median step (k = 3) | `ts_gap` | warning |
-| TW-TIME-004 timezone not specified (UTC assumed) | `tz_specified` | note |
-| TW-TIME-005 ambiguous day/month order | `date_ambiguous` | warning |
-| TW-TIME-006 flatline (≥ 6 identical consecutive values) | `flatline` | warning |
-| TW-TIME-007 spike (Hampel filter, window 7, k = 3; Hampel 1974, Pearson 2002) | `spike` | warning |
-| TW-GEO-001 invalid geometry | `geometry_valid` | error |
-| TW-GEO-002 coordinates outside the valid range | `coord_range` | error |
-| TW-GEO-003 probable latitude/longitude swap | `latlon_swapped` | warning |
-| TW-GEO-004 CRS undeclared or not WGS84 | `crs_wgs84` | warning |
-| TW-GEO-005 outside the project area (only if an area is set) | `within_area` | warning |
-| TW-GEO-006 missing geometry | `geometry_present` | warning |
+| ID                                                                                                                        | Check primitive         | Severity |
+| ------------------------------------------------------------------------------------------------------------------------- | ----------------------- | -------- |
+| TW-DQ-001 missing values                                                                                                  | `not_null`              | warning  |
+| TW-DQ-002 duplicate rows                                                                                                  | `duplicate_rows`        | warning  |
+| TW-DQ-003 duplicate key (id + time)                                                                                       | `duplicate_key`         | error    |
+| TW-DQ-004 value does not fit column type (raw text kept)                                                                  | `type_conformance`      | warning  |
+| TW-DQ-005 physically impossible value (T < 0 K, absolute pressure < 0, negative amounts, fraction outside 0–1 or 0–100 %) | `physical_range`        | error    |
+| TW-DQ-006 null marker converted                                                                                           | `null_marker`           | note     |
+| TW-DQ-007 below-detection-limit text kept, not zero                                                                       | `below_detection_limit` | note     |
+| TW-UNIT-001 measure column without a recognised unit                                                                      | `unit_known`            | warning  |
+| TW-UNIT-002 mixed units inside a column                                                                                   | `unit_consistent`       | error    |
+| TW-TIME-001 duplicate timestamps (per asset)                                                                              | `ts_duplicate`          | error    |
+| TW-TIME-002 timestamps out of order                                                                                       | `ts_order`              | note     |
+| TW-TIME-003 gap larger than k × median step (k = 3)                                                                       | `ts_gap`                | warning  |
+| TW-TIME-004 timezone not specified (UTC assumed)                                                                          | `tz_specified`          | note     |
+| TW-TIME-005 ambiguous day/month order                                                                                     | `date_ambiguous`        | warning  |
+| TW-TIME-006 flatline (≥ 6 identical consecutive values)                                                                   | `flatline`              | warning  |
+| TW-TIME-007 spike (Hampel filter, window 7, k = 3; Hampel 1974, Pearson 2002)                                             | `spike`                 | warning  |
+| TW-GEO-001 invalid geometry                                                                                               | `geometry_valid`        | error    |
+| TW-GEO-002 coordinates outside the valid range                                                                            | `coord_range`           | error    |
+| TW-GEO-003 probable latitude/longitude swap                                                                               | `latlon_swapped`        | warning  |
+| TW-GEO-004 CRS undeclared or not WGS84                                                                                    | `crs_wgs84`             | warning  |
+| TW-GEO-005 outside the project area (only if an area is set)                                                              | `within_area`           | warning  |
+| TW-GEO-006 missing geometry                                                                                               | `geometry_present`      | warning  |
 
 Pack `tracewell.system` 0.1.0 (raised by the engine; messages and explanations are kept as data):
 
-| ID | Meaning |
-|---|---|
-| TW-IMP-001 | Ragged row |
+| ID         | Meaning                                                           |
+| ---------- | ----------------------------------------------------------------- |
+| TW-IMP-001 | Ragged row                                                        |
 | TW-IMP-002 | Additional table found in a sheet (first imported, others listed) |
-| TW-IMP-003 | Multi-row header flattened |
-| TW-IMP-004 | Encoding assumed |
-| TW-IMP-005 | Low-confidence detections applied (assumed) |
-| TW-IMP-006 | Partial import: file exceeds the browser memory budget |
-| TW-PRJ-001 | Original file checksum mismatch |
-| TW-PRJ-002 | Audit chain broken |
-| TW-PRJ-003 | Replay digest mismatch |
-| TW-PRJ-004 | Project entry checksum mismatch or unsupported format version |
-| TW-EXP-001 | Export read-back mismatch |
-| TW-EXP-002 | Format-limit substitution |
-| TW-EXP-003 | GeoJSON requires WGS84 |
+| TW-IMP-003 | Multi-row header flattened                                        |
+| TW-IMP-004 | Encoding assumed                                                  |
+| TW-IMP-005 | Low-confidence detections applied (assumed)                       |
+| TW-IMP-006 | Partial import: file exceeds the browser memory budget            |
+| TW-PRJ-001 | Original file checksum mismatch                                   |
+| TW-PRJ-002 | Audit chain broken                                                |
+| TW-PRJ-003 | Replay digest mismatch                                            |
+| TW-PRJ-004 | Project entry checksum mismatch or unsupported format version     |
+| TW-EXP-001 | Export read-back mismatch                                         |
+| TW-EXP-002 | Format-limit substitution                                         |
+| TW-EXP-003 | GeoJSON requires WGS84                                            |
 
 Every rule definition carries an ID, version, title, category, severity, column selector, check specification, message template, plain-language explanation and source citation (FR-VAL-01/03).
 
@@ -458,22 +479,22 @@ The audit log is the single source of truth. Project state is rebuilt by one red
 state = fold(applyEntry, emptyState(projectId), auditLog)    // with originals available by FileId
 ```
 
-| Entry | Effect in `applyEntry` |
-|---|---|
-| `project.create` | name, profile, unit system |
-| `source.add` | parse original with the recorded ImportSpec → dataset |
-| `detection.assume` | record assumptions |
-| `detection.override` | update the spec and re-parse the column (or create a new dataset) |
-| `check.run` | run the recorded rule-pack versions on the working view |
-| `cell.edit` | set overlay(row, col) and re-check affected rules |
-| `issue.accept` | add rows to the issue's accepted set |
-| `rows.exclude` | add rows to the excluded set and re-check |
-| `step.apply` / `step.remove` | update the step list |
-| `entry.revert` | apply the compensating change |
-| `issue.comment` | attach a comment |
-| `project.area` | set the project bounding box and re-check spatial rules |
-| `export.create` | add an export record |
-| `project.save` | record the state digest |
+| Entry                        | Effect in `applyEntry`                                            |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `project.create`             | name, profile, unit system                                        |
+| `source.add`                 | parse original with the recorded ImportSpec → dataset             |
+| `detection.assume`           | record assumptions                                                |
+| `detection.override`         | update the spec and re-parse the column (or create a new dataset) |
+| `check.run`                  | run the recorded rule-pack versions on the working view           |
+| `cell.edit`                  | set overlay(row, col) and re-check affected rules                 |
+| `issue.accept`               | add rows to the issue's accepted set                              |
+| `rows.exclude`               | add rows to the excluded set and re-check                         |
+| `step.apply` / `step.remove` | update the step list                                              |
+| `entry.revert`               | apply the compensating change                                     |
+| `issue.comment`              | attach a comment                                                  |
+| `project.area`               | set the project bounding box and re-check spatial rules           |
+| `export.create`              | add an export record                                              |
+| `project.save`               | record the state digest                                           |
 
 **Live operation uses the same reducer:** a decision is validated, appended (hashed) and then applied. Opening a `.twp` replays the log. Replaying and comparing dataset digests with the saved manifest is therefore a real proof, not a formality.
 
@@ -488,17 +509,17 @@ state = fold(applyEntry, emptyState(projectId), auditLog)    // with originals a
 
 Each primitive has a TypeScript implementation now and a fixed SQL template for the native engine:
 
-| Primitive | SQL template (native engine) |
-|---|---|
-| `not_null` | `WHERE c IS NULL` |
-| `duplicate_rows` | `GROUP BY all columns HAVING count(*) > 1` |
-| `duplicate_key`, `ts_duplicate` | `GROUP BY id, t HAVING count(*) > 1` |
-| `type_conformance` | rows in the cast-failure side table |
-| `physical_range` | `WHERE c * f + o < minSI` |
-| `ts_gap` | `lead(t) - t > k * median(step)` |
-| `ts_order` | `t < lag(t)` |
-| `flatline` | run-length via `lag` and window sums |
-| `spike` | rolling median and MAD windows |
+| Primitive                       | SQL template (native engine)               |
+| ------------------------------- | ------------------------------------------ |
+| `not_null`                      | `WHERE c IS NULL`                          |
+| `duplicate_rows`                | `GROUP BY all columns HAVING count(*) > 1` |
+| `duplicate_key`, `ts_duplicate` | `GROUP BY id, t HAVING count(*) > 1`       |
+| `type_conformance`              | rows in the cast-failure side table        |
+| `physical_range`                | `WHERE c * f + o < minSI`                  |
+| `ts_gap`                        | `lead(t) - t > k * median(step)`           |
+| `ts_order`                      | `t < lag(t)`                               |
+| `flatline`                      | run-length via `lag` and window sums       |
+| `spike`                         | rolling median and MAD windows             |
 
 This keeps the semantics engine-neutral, and the conformance suite proves both engines agree.
 
@@ -510,6 +531,7 @@ This keeps the semantics engine-neutral, and the conformance suite proves both e
 ### 8.5 Performance targets to measure (Chromium headless, 4 CPU)
 
 These are targets, recorded in `docs/benchmarks.md`, not claims:
+
 - first preview < 5 s for any file size (sniff reads at most 1 MiB);
 - 1 M rows × 10 columns CSV imported in < 20 s;
 - a grid page fetch < 50 ms;
@@ -524,11 +546,21 @@ These are targets, recorded in `docs/benchmarks.md`, not claims:
 
 ```ts
 interface AuditEntry {
-  seq: number; at: string /* ISO-8601 UTC, ms */;
-  actor: { kind: 'user'; profileId: string; name: string; role: 'Analyst' } | { kind: 'system'; component: 'detector' | 'engine' };
-  action: AuditAction; target: AuditTarget; old?: JsonValue; new?: JsonValue; reason?: string;
-  method?: ConversionMethod; rule?: { id: string; version: string }; payload?: JsonValue;
-  prev: string; hash: string;
+  seq: number;
+  at: string /* ISO-8601 UTC, ms */;
+  actor:
+    | { kind: "user"; profileId: string; name: string; role: "Analyst" }
+    | { kind: "system"; component: "detector" | "engine" };
+  action: AuditAction;
+  target: AuditTarget;
+  old?: JsonValue;
+  new?: JsonValue;
+  reason?: string;
+  method?: ConversionMethod;
+  rule?: { id: string; version: string };
+  payload?: JsonValue;
+  prev: string;
+  hash: string;
 }
 ```
 
@@ -546,6 +578,7 @@ interface AuditEntry {
 ### 9.3 Cell lineage (`explainCell`)
 
 `explainCell` returns:
+
 1. the original file (name, SHA-256) and locator (`line 1042, field 3` / `Sheet1!C17` / `feature 12, property "rate"`);
 2. the raw text;
 3. the parse (type, method, null marker);
@@ -562,15 +595,15 @@ The same encoding is used by every engine and by the Python oracles.
 
 **Canonical cell** (`C`):
 
-| Value | Encoding |
-|---|---|
-| null | `∅` (the two bytes 0xC3 0x98 are not used; the literal is `\u0000N`) |
-| string | `s:` + exact text (no Unicode normalisation) |
-| number | `n:` + canonical number |
-| boolean | `b:1` / `b:0` |
-| date | `d:YYYY-MM-DD` |
+| Value    | Encoding                                                                       |
+| -------- | ------------------------------------------------------------------------------ |
+| null     | `∅` (the two bytes 0xC3 0x98 are not used; the literal is `\u0000N`)           |
+| string   | `s:` + exact text (no Unicode normalisation)                                   |
+| number   | `n:` + canonical number                                                        |
+| boolean  | `b:1` / `b:0`                                                                  |
+| date     | `d:YYYY-MM-DD`                                                                 |
 | datetime | `t:` + ISO UTC with milliseconds (Excel serials are rounded to the ms on read) |
-| geometry | `g:` + canonical JSON of the geometry |
+| geometry | `g:` + canonical JSON of the geometry                                          |
 
 **Canonical JSON.** Object keys sorted by UTF-16 code unit, no whitespace, numbers as canonical numbers, strings escaped as `JSON.stringify` does.
 
@@ -586,13 +619,14 @@ Digests drive export read-back, `.twp` replay verification, the conformance suit
 
 ### 10.1 Profiles (destination, not format)
 
-| Profile | Label in UI | Output |
-|---|---|---|
-| `excel` | Microsoft Excel | `.xlsx` with **Data**, **Report** and **Log** sheets (details below) |
-| `csv` | Databases, Python, R, BI tools (CSV) | UTF-8 without BOM, RFC 4180, comma, CRLF, ISO dates, `.` decimal, canonical numbers, header `Name [unit]` |
-| `geojson` | QGIS / ArcGIS / web maps (GeoJSON) | RFC 7946 FeatureCollection, lon/lat order, full-precision coordinates, no `crs` member. Built from the geometry column or from latitude/longitude roles. Refused (`TW-EXP-003`, with a fix) if the CRS is not WGS84. |
+| Profile   | Label in UI                          | Output                                                                                                                                                                                                               |
+| --------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `excel`   | Microsoft Excel                      | `.xlsx` with **Data**, **Report** and **Log** sheets (details below)                                                                                                                                                 |
+| `csv`     | Databases, Python, R, BI tools (CSV) | UTF-8 without BOM, RFC 4180, comma, CRLF, ISO dates, `.` decimal, canonical numbers, header `Name [unit]`                                                                                                            |
+| `geojson` | QGIS / ArcGIS / web maps (GeoJSON)   | RFC 7946 FeatureCollection, lon/lat order, full-precision coordinates, no `crs` member. Built from the geometry column or from latitude/longitude roles. Refused (`TW-EXP-003`, with a fix) if the CRS is not WGS84. |
 
 Excel profile details:
+
 - **Data sheet:** a single header row `Name [unit]`; numbers stored as numbers; real dates (serial + date format); no merges; frozen header at A2; autofilter over the data range.
 - **Report sheet:** project, sources with SHA-256, rule-packs, unit registry, conversions, steps, exclusions, assumptions, open issues by severity, and the expected column digests.
 - **Log sheet:** the audit log.
@@ -618,24 +652,25 @@ On any failure, no package is offered. The validation report is shown, and `TW-E
 
 ### 10.3 Read-back check IDs
 
-| ID | Check |
-|---|---|
-| RB-OPEN | The file parses with the product reader |
-| RB-ROWS | Row count equals the output view |
-| RB-HEADER | Single header row; names, order and units equal |
-| RB-VALUES | Every column digest equals the view's column digest |
-| RB-CSV-ENCODING | Valid UTF-8, no BOM, consistent field count |
-| RB-XLSX-TYPES | Numeric columns stored as numbers (`t="n"`), date columns have date number formats, no number stored as text |
-| RB-XLSX-STRUCTURE | Sheets Data/Report/Log present, frozen pane A2, autofilter covers the data, no merged cells in Data |
+| ID                   | Check                                                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RB-OPEN              | The file parses with the product reader                                                                                                                        |
+| RB-ROWS              | Row count equals the output view                                                                                                                               |
+| RB-HEADER            | Single header row; names, order and units equal                                                                                                                |
+| RB-VALUES            | Every column digest equals the view's column digest                                                                                                            |
+| RB-CSV-ENCODING      | Valid UTF-8, no BOM, consistent field count                                                                                                                    |
+| RB-XLSX-TYPES        | Numeric columns stored as numbers (`t="n"`), date columns have date number formats, no number stored as text                                                   |
+| RB-XLSX-STRUCTURE    | Sheets Data/Report/Log present, frozen pane A2, autofilter covers the data, no merged cells in Data                                                            |
 | RB-GEOJSON-STRUCTURE | FeatureCollection, feature count, no `crs` member, positions within WGS84 bounds, rings closed with ≥ 4 positions, coordinate order consistent with the source |
-| RB-PKG-CHECKSUMS | Every package entry matches `CHECKSUMS.sha256` (compatible with `sha256sum -c`) |
-| RB-PKG-CONTENTS | Manifest validates against its schema; the README lists every source and its checksum, the rule-packs and the open warnings |
+| RB-PKG-CHECKSUMS     | Every package entry matches `CHECKSUMS.sha256` (compatible with `sha256sum -c`)                                                                                |
+| RB-PKG-CONTENTS      | Manifest validates against its schema; the README lists every source and its checksum, the rule-packs and the open warnings                                    |
 
 `buildExport` accepts injectable writers so fault-injection tests can corrupt one value, truncate a row or drop a sheet. Each of these must fail validation.
 
 ### 10.4 Package contents (FR-EXP-07)
 
 `<baseName>-<exportId>.zip`:
+
 - the data file(s);
 - `README.txt`: what this is, sources with SHA-256, rule-pack versions, unit registry version, steps in plain language, assumptions, open warnings, substitutions, validation result, how to verify;
 - `manifest.json`;
@@ -670,6 +705,7 @@ CHECKSUMS.sha256                 every entry except itself
 Working data is **not** stored in slice 1; it is rebuilt by replay. Slice 2 adds Parquet working files (`data/<datasetId>/*.parquet`) as a cache with digests, so large projects open without re-import.
 
 **On open, in order.** Each failure is recorded as an `IntegrityCheck` and an issue:
+
 1. ZIP readable, mimetype and format version supported (TW-PRJ-004).
 2. Manifest validates.
 3. Every entry's SHA-256 matches the manifest (TW-PRJ-004).
@@ -691,6 +727,7 @@ Any failure opens the project **read-only**, with the reasons shown in an Open r
   ```
 
   The meta tag is injected at build time only, because the development server needs inline styles. The CSP is the technical guarantee.
+
 - **No remote fonts, analytics or update checks.** The system font stack is used. The status bar always shows **Offline** in slice 1.
 - **E2E offline guard.** A shared Playwright fixture routes `**/*` and records any request not to `127.0.0.1:4173`. Every test fails if the list is non-empty.
 - **Untrusted input handling.**
@@ -712,46 +749,47 @@ Any failure opens the project **read-only**, with the reasons shown in an Open r
 
 ### 13.1 Layers
 
-| Layer | Tool | What |
-|---|---|---|
-| Architecture | Vitest | Import allow-list (§6.2); no deep imports; no UI-to-engine imports |
-| Unit | Vitest (Node) | Every module, with named fixtures; clock and IDs injected |
-| Property | fast-check | CSV writer ↔ papaparse and tokenizer ↔ papaparse (differential); XLSX writer → reader digests equal; unit round trips; RowSet algebra; canonical JSON stability |
-| Golden | Vitest | Each messy fixture: detections, schema, row count and issue counts by rule ID equal its `.expected.json` |
-| Conformance | Vitest | Engine-agnostic workflow scenarios over `EngineApi` (runs on LocalEngine now; on the native engine later, unchanged) |
-| E2E | Playwright 1.56.1, headless Chromium 1194 | The real production build, the full workflow per format, offline guard, accessibility smoke |
-| Independent oracles | Python 3.13 (openpyxl 3.1.5, csv, json), LibreOffice 24.2 headless | Exports re-read by independent implementations; digests or values compared |
+| Layer               | Tool                                                               | What                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Architecture        | Vitest                                                             | Import allow-list (§6.2); no deep imports; no UI-to-engine imports                                                                                              |
+| Unit                | Vitest (Node)                                                      | Every module, with named fixtures; clock and IDs injected                                                                                                       |
+| Property            | fast-check                                                         | CSV writer ↔ papaparse and tokenizer ↔ papaparse (differential); XLSX writer → reader digests equal; unit round trips; RowSet algebra; canonical JSON stability |
+| Golden              | Vitest                                                             | Each messy fixture: detections, schema, row count and issue counts by rule ID equal its `.expected.json`                                                        |
+| Conformance         | Vitest                                                             | Engine-agnostic workflow scenarios over `EngineApi` (runs on LocalEngine now; on the native engine later, unchanged)                                            |
+| E2E                 | Playwright 1.56.1, headless Chromium 1194                          | The real production build, the full workflow per format, offline guard, accessibility smoke                                                                     |
+| Independent oracles | Python 3.13 (openpyxl 3.1.5, csv, json), LibreOffice 24.2 headless | Exports re-read by independent implementations; digests or values compared                                                                                      |
 
 ### 13.2 Messy-file library (`fixtures/messy/`)
 
 Small committed files, each with `<name>.expected.json`. `SHA256SUMS` guards against accidental changes, and `.gitattributes` marks them binary so line endings are preserved.
 
-| Group | Fixtures |
-|---|---|
-| CSV/TSV | `csv_well_daily_golden.csv`, `csv_semicolon_decimalcomma_cp1252.csv`, `csv_utf8_bom_crlf.csv`, `tsv_utf16le_bom.tsv`, `csv_title_rows_units_in_header.csv`, `csv_null_markers.csv`, `csv_quoted_newlines_ragged.csv`, `csv_duplicates_rows_and_keys.csv`, `csv_dates_ambiguous_and_mixed.csv`, `csv_leading_zero_ids_ndl.csv`, `csv_latlon_swapped_out_of_range.csv`, `csv_timeseries_gaps_dups_flatline_spike.csv`, `csv_mixed_units_in_cells.csv`, `csv_pipe_delimited.csv`, `csv_physical_impossible.csv` |
-| XLSX | `xlsx_merged_two_row_header_units.xlsx`, `xlsx_text_and_serial_dates.xlsx`, `xlsx_two_tables_one_sheet.xlsx`, `xlsx_date1904.xlsx`, `xlsx_hidden_sheets_formulas.xlsx`, `xlsx_numbers_as_text.xlsx`. Generated by `make_xlsx_fixtures.py` with openpyxl, then re-saved by LibreOffice headless so formulas carry cached values, which gives two independent producers. |
-| GeoJSON | `geojson_wells_points_wgs84.geojson`, `geojson_legacy_crs_27700.geojson`, `geojson_invalid_geometries.geojson`, `geojson_swapped_lonlat.geojson`, `geojson_mixed_geometry_nested_props.geojson` |
-| Generated in tests | `big_1m_rows.csv` (seeded, `@slow`), `excel_limit_1_1m_rows.csv` (`@slow`), tampered `.twp` variants, broken audit chains |
+| Group              | Fixtures                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CSV/TSV            | `csv_well_daily_golden.csv`, `csv_semicolon_decimalcomma_cp1252.csv`, `csv_utf8_bom_crlf.csv`, `tsv_utf16le_bom.tsv`, `csv_title_rows_units_in_header.csv`, `csv_null_markers.csv`, `csv_quoted_newlines_ragged.csv`, `csv_duplicates_rows_and_keys.csv`, `csv_dates_ambiguous_and_mixed.csv`, `csv_leading_zero_ids_ndl.csv`, `csv_latlon_swapped_out_of_range.csv`, `csv_timeseries_gaps_dups_flatline_spike.csv`, `csv_mixed_units_in_cells.csv`, `csv_pipe_delimited.csv`, `csv_physical_impossible.csv` |
+| XLSX               | `xlsx_merged_two_row_header_units.xlsx`, `xlsx_text_and_serial_dates.xlsx`, `xlsx_two_tables_one_sheet.xlsx`, `xlsx_date1904.xlsx`, `xlsx_hidden_sheets_formulas.xlsx`, `xlsx_numbers_as_text.xlsx`. Generated by `make_xlsx_fixtures.py` with openpyxl, then re-saved by LibreOffice headless so formulas carry cached values, which gives two independent producers.                                                                                                                                       |
+| GeoJSON            | `geojson_wells_points_wgs84.geojson`, `geojson_legacy_crs_27700.geojson`, `geojson_invalid_geometries.geojson`, `geojson_swapped_lonlat.geojson`, `geojson_mixed_geometry_nested_props.geojson`                                                                                                                                                                                                                                                                                                              |
+| Generated in tests | `big_1m_rows.csv` (seeded, `@slow`), `excel_limit_1_1m_rows.csv` (`@slow`), tampered `.twp` variants, broken audit chains                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Every bug found becomes a new fixture (PRD §16).
 
 ### 13.3 E2E specs (`tests/e2e/`)
 
-| Spec | Covers |
-|---|---|
-| `shell.spec.ts` | Landmarks, keyboard menu bar, process toolbar states, status bar shows Offline, About shows the owner's name |
-| `import-csv.spec.ts` | Messy windows-1252 semicolon file; assumed badges; delimiter override logged |
-| `import-xlsx.spec.ts` | Merged two-row header flattened; additional-table issue; sheet choice |
-| `import-geojson.spec.ts` | Geometry column; invalid-geometry issues; legacy CRS issue |
-| `check-review.spec.ts` | Rule-ID counts; Save disabled without a reason; Log shows old/new/reason/time; accept; exclude; revert creates a compensating entry; lineage panel |
-| `process-extract.spec.ts` | psia → kPa values checked; conversion logged with factor and citation; gauge → absolute refused with a fix; filter changes the row count |
-| `export-excel.spec.ts`, `export-csv.spec.ts`, `export-geojson.spec.ts` | Download the package → Node verifies `CHECKSUMS.sha256` → Python oracle and LibreOffice round trip → in-app report says Validated |
-| `project-roundtrip.spec.ts` | Save `.twp` → reload page → open → same issues, audit and digests |
-| `project-tamper.spec.ts` | Modified original → read-only with TW-PRJ-001; edited audit line → TW-PRJ-002 |
-| `a11y.spec.ts` | axe: no serious or critical violations on the main screens; keyboard-only golden path |
-| `large-file.spec.ts` (`@slow`) | 1 M-row import timing, grid latency, memory-budget fallback |
+| Spec                                                                   | Covers                                                                                                                                             |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shell.spec.ts`                                                        | Landmarks, keyboard menu bar, process toolbar states, status bar shows Offline, About shows the owner's name                                       |
+| `import-csv.spec.ts`                                                   | Messy windows-1252 semicolon file; assumed badges; delimiter override logged                                                                       |
+| `import-xlsx.spec.ts`                                                  | Merged two-row header flattened; additional-table issue; sheet choice                                                                              |
+| `import-geojson.spec.ts`                                               | Geometry column; invalid-geometry issues; legacy CRS issue                                                                                         |
+| `check-review.spec.ts`                                                 | Rule-ID counts; Save disabled without a reason; Log shows old/new/reason/time; accept; exclude; revert creates a compensating entry; lineage panel |
+| `process-extract.spec.ts`                                              | psia → kPa values checked; conversion logged with factor and citation; gauge → absolute refused with a fix; filter changes the row count           |
+| `export-excel.spec.ts`, `export-csv.spec.ts`, `export-geojson.spec.ts` | Download the package → Node verifies `CHECKSUMS.sha256` → Python oracle and LibreOffice round trip → in-app report says Validated                  |
+| `project-roundtrip.spec.ts`                                            | Save `.twp` → reload page → open → same issues, audit and digests                                                                                  |
+| `project-tamper.spec.ts`                                               | Modified original → read-only with TW-PRJ-001; edited audit line → TW-PRJ-002                                                                      |
+| `a11y.spec.ts`                                                         | axe: no serious or critical violations on the main screens; keyboard-only golden path                                                              |
+| `large-file.spec.ts` (`@slow`)                                         | 1 M-row import timing, grid latency, memory-budget fallback                                                                                        |
 
 The oracle comparisons:
+
 - **Python** reimplements §9.4 (`tests/oracle/canonical.py`). A Vitest test cross-checks it against the TypeScript implementation on 10,000 random values.
 - **LibreOffice** round trip (`--convert-to csv`) compares row counts, headers and dates exactly, and numbers within a relative 1e-12, because spreadsheet text output may shorten digits.
 
@@ -763,9 +801,10 @@ From `tracewell/`: `npm ci && npm test`. `scripts/test-all.mjs` runs, failing fa
 2. licence check
 3. `tsc --noEmit`
 4. `eslint . --max-warnings 0`
-5. `vitest run` (architecture, unit, property, golden, conformance)
-6. `vite build`
-7. `playwright test`, including the oracles. Uses `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` and never runs `playwright install`.
+5. native (slice 2): `cargo test --release`, then the release build of `crates/tracewell-engine`, so step 6 runs the parity suite against the current binary. `--skip-native` leaves it out on a machine without Rust; the parity suite is then reported as skipped.
+6. `vitest run` (architecture, unit, property, golden, conformance)
+7. `vite build`
+8. `playwright test`, including the oracles. Uses `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` and never runs `playwright install`.
 
 `@slow` tests run with `npm run test:slow`.
 
@@ -787,63 +826,65 @@ Versions verified with `npm view <pkg> version license` on 19 October 2026. Each
 
 **Runtime (shipped)**
 
-| Package | Version | Licence | Purpose |
-|---|---|---|---|
-| react | 19.3.0 | MIT | UI |
-| react-dom | 19.3.0 | MIT | UI |
-| zustand | 5.0.15 | MIT | UI store (summaries, selection, layout) |
-| @tanstack/react-virtual | 3.14.13 | MIT | Virtualised DOM grid, issues and log lists (ARIA grid; chosen over canvas grids for WCAG) |
-| react-resizable-panels | 4.14.2 | MIT | Keyboard-resizable enterprise layout |
-| lucide-react | 1.52.0 | ISC | Icons |
-| fflate | 0.8.3 | MIT | Deterministic ZIP and DEFLATE (XLSX, `.twp`, packages) |
-| saxes | 6.0.0 (+ xmlchars 2.2.0, MIT) | ISC | Streaming XML for the XLSX reader; no DTD or entity expansion |
-| @noble/hashes | 2.4.0 | MIT | Incremental SHA-256 in worker and Node (pure JS, audited) |
-| @streamparser/json | 0.0.26 | MIT | Streaming GeoJSON features |
-| zod | 4.6.5 | MIT | Schemas for manifests, rule-packs, steps, decisions, audit entries |
+| Package                 | Version                       | Licence | Purpose                                                                                   |
+| ----------------------- | ----------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| react                   | 19.3.0                        | MIT     | UI                                                                                        |
+| react-dom               | 19.3.0                        | MIT     | UI                                                                                        |
+| zustand                 | 5.0.15                        | MIT     | UI store (summaries, selection, layout)                                                   |
+| @tanstack/react-virtual | 3.14.13                       | MIT     | Virtualised DOM grid, issues and log lists (ARIA grid; chosen over canvas grids for WCAG) |
+| react-resizable-panels  | 4.14.2                        | MIT     | Keyboard-resizable enterprise layout                                                      |
+| lucide-react            | 1.52.0                        | ISC     | Icons                                                                                     |
+| fflate                  | 0.8.3                         | MIT     | Deterministic ZIP and DEFLATE (XLSX, `.twp`, packages)                                    |
+| saxes                   | 6.0.0 (+ xmlchars 2.2.0, MIT) | ISC     | Streaming XML for the XLSX reader; no DTD or entity expansion                             |
+| @noble/hashes           | 2.4.0                         | MIT     | Incremental SHA-256 in worker and Node (pure JS, audited)                                 |
+| @streamparser/json      | 0.0.26                        | MIT     | Streaming GeoJSON features                                                                |
+| zod                     | 4.6.5                         | MIT     | Schemas for manifests, rule-packs, steps, decisions, audit entries                        |
 
 **Development and test only**
 
-| Package | Version | Licence | Purpose |
-|---|---|---|---|
-| typescript | 6.0.3 | Apache-2.0 | Compiler (typescript-eslint 8.71 supports < 6.1) |
-| vite | 8.3.2 | MIT | Development server and build (Node ≥ 22.12) |
-| @vitejs/plugin-react | 6.1.1 | MIT | React transform |
-| vitest | 5.0.3 | MIT | Unit, golden, property and conformance tests |
-| @vitest/coverage-v8 | 5.0.3 | MIT | Coverage |
-| @playwright/test | 1.56.1 | Apache-2.0 | E2E; matches chromium-1194 at /opt/pw-browsers |
-| @axe-core/playwright | 4.13.0 | MPL-2.0 (unmodified, test only) | Accessibility smoke test |
-| fast-check | 4.10.2 | MIT | Property tests |
-| papaparse | 5.7.0 | MIT | Differential test oracle for the CSV tokenizer and writer; not shipped |
-| @types/papaparse | 5.5.2 | MIT | Types |
-| eslint | 10.12.0 | MIT | Lint |
-| @eslint/js | 10.0.1 | MIT | Lint configuration |
-| typescript-eslint | 8.71.0 | MIT | TypeScript lint |
-| eslint-plugin-react-hooks | 7.1.1 | MIT | Hooks lint |
-| globals | 17.13.0 | MIT | Lint globals |
-| prettier | 3.9.9 | MIT | Formatting |
-| @types/node | 22.20.5 | MIT | Node 22 types |
-| @types/react, @types/react-dom | 19.3.0 | MIT | Types |
+| Package                        | Version | Licence                         | Purpose                                                                |
+| ------------------------------ | ------- | ------------------------------- | ---------------------------------------------------------------------- |
+| typescript                     | 6.0.3   | Apache-2.0                      | Compiler (typescript-eslint 8.71 supports < 6.1)                       |
+| vite                           | 8.3.2   | MIT                             | Development server and build (Node ≥ 22.12)                            |
+| @vitejs/plugin-react           | 6.1.1   | MIT                             | React transform                                                        |
+| vitest                         | 5.0.3   | MIT                             | Unit, golden, property and conformance tests                           |
+| @vitest/coverage-v8            | 5.0.3   | MIT                             | Coverage                                                               |
+| @playwright/test               | 1.56.1  | Apache-2.0                      | E2E; matches chromium-1194 at /opt/pw-browsers                         |
+| @axe-core/playwright           | 4.13.0  | MPL-2.0 (unmodified, test only) | Accessibility smoke test                                               |
+| fast-check                     | 4.10.2  | MIT                             | Property tests                                                         |
+| papaparse                      | 5.7.0   | MIT                             | Differential test oracle for the CSV tokenizer and writer; not shipped |
+| @types/papaparse               | 5.5.2   | MIT                             | Types                                                                  |
+| eslint                         | 10.12.0 | MIT                             | Lint                                                                   |
+| @eslint/js                     | 10.0.1  | MIT                             | Lint configuration                                                     |
+| typescript-eslint              | 8.71.0  | MIT                             | TypeScript lint                                                        |
+| eslint-plugin-react-hooks      | 7.1.1   | MIT                             | Hooks lint                                                             |
+| globals                        | 17.13.0 | MIT                             | Lint globals                                                           |
+| prettier                       | 3.9.9   | MIT                             | Formatting                                                             |
+| @types/node                    | 22.20.5 | MIT                             | Node 22 types                                                          |
+| @types/react, @types/react-dom | 19.3.0  | MIT                             | Types                                                                  |
 
 **System test oracles (already installed, not distributed).** Python 3.13 with openpyxl 3.1.5 (MIT); LibreOffice 24.2.7 (MPL-2.0, run as an external program).
 
 **Planned for later slices (checked 19 October 2026).**
+
 - npm: maplibre-gl 6.15.0 (BSD-3-Clause), pmtiles 4.5.0 (BSD-3-Clause), proj4 2.22.0 (MIT), hyparquet 1.31.5 (MIT), @tauri-apps/api 2.12.4 (Apache-2.0 OR MIT).
 - Rust crates (crates.io): duckdb 1.10506.1, arrow and parquet 60.0.0, calamine 0.37.0, rust_xlsxwriter 0.100.0, zip 9.0.5, sha2 0.11.1. Each is reviewed again at adoption.
 - DuckDB's spatial extension needs a licence review first, because it links GEOS (LGPL-2.1).
 
 **Rejected.**
 
-| Package | Reason |
-|---|---|
-| `xlsx` 0.18.5 | Stale on npm |
-| exceljs | Last release 2023; whole workbook in memory; heavy dependency tree |
-| jszip | Redundant; dual MIT/GPL |
-| comlink | The in-house RPC mirrors Tauri invoke/events exactly |
+| Package                | Reason                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `xlsx` 0.18.5          | Stale on npm                                                                                                                                 |
+| exceljs                | Last release 2023; whole workbook in memory; heavy dependency tree                                                                           |
+| jszip                  | Redundant; dual MIT/GPL                                                                                                                      |
+| comlink                | The in-house RPC mirrors Tauri invoke/events exactly                                                                                         |
 | apache-arrow (slice 1) | Not needed until Parquet and native interop. The column store keeps Arrow-compatible layouts (values + validity), so adoption is mechanical. |
-| @duckdb/duckdb-wasm | See §3 |
-| canvas data grids | Weaker WCAG story |
+| @duckdb/duckdb-wasm    | See §3                                                                                                                                       |
+| canvas data grids      | Weaker WCAG story                                                                                                                            |
 
 **Why in-house CSV and XLSX code.**
+
 - exact source locators;
 - the same streaming API in Node and the worker;
 - access to merged cells, number formats and the 1904 date system (FR-IMP-05);
@@ -875,19 +916,20 @@ Layout follows PRD §11.2 with fixed, resizable regions (docking comes later):
 
 **Menus**
 
-| Menu | Items |
-|---|---|
+| Menu | Items                                                                          |
+| ---- | ------------------------------------------------------------------------------ |
 | File | New project, Open project…, Save project, Import file…, Export…, Project area… |
-| Edit | Edit cell, Undo last change (revert with reason) |
-| View | Panels, Light/Dark theme, Compact/Comfortable density |
-| Data | Run checks, Convert units…, Filter…, Columns…, Exclude rows… |
-| Help | Keyboard shortcuts, Open-source licences, About Tracewell (owner's name) |
+| Edit | Edit cell, Undo last change (revert with reason)                               |
+| View | Panels, Light/Dark theme, Compact/Comfortable density                          |
+| Data | Run checks, Convert units…, Filter…, Columns…, Exclude rows…                   |
+| Help | Keyboard shortcuts, Open-source licences, About Tracewell (owner's name)       |
 
 Other menus from the PRD (Analysis, Map, Reports, Tools) appear when they have content.
 
 **Keyboard.** F10 or Alt focuses the menu bar; F6 cycles regions; Ctrl+O, Ctrl+S, Ctrl+I and Ctrl+E; Enter or F2 edits a cell; Esc cancels.
 
 **Design and accessibility.**
+
 - Design tokens are CSS custom properties: a neutral palette with one accent, and red/amber/green only for status (UI-02).
 - Tabular figures in numeric cells (UI-03).
 - Light/dark themes and compact/comfortable density (UI-04).
@@ -898,47 +940,47 @@ Other menus from the PRD (Analysis, Map, Reports, Tools) appear when they have c
 
 ## 16. Risks and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| TypeScript engine memory ceiling disappoints users with big files | Memory budget with partial import and an explicit issue; documented working envelope; `@slow` benchmarks; native engine starts in slice 2, here, headless |
+| Risk                                                              | Mitigation                                                                                                                                                                                         |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript engine memory ceiling disappoints users with big files | Memory budget with partial import and an explicit issue; documented working envelope; `@slow` benchmarks; native engine starts in slice 2, here, headless                                          |
 | Protocol shaped only by the TypeScript engine misses native needs | Files by reference, windowed reads, declarative steps and rules, `capabilities` from day one; spike three protocol methods in Rust + DuckDB at the start of slice 2; conformance suite is the gate |
-| Double implementation of primitives (TypeScript and SQL) | Small closed primitive set, each with a defined SQL template; shared fixtures and digests; the TypeScript engine stays as the Lite engine and reference, so the cost buys product value |
-| Bugs in the in-house CSV and XLSX code | Differential tests (papaparse), property tests, openpyxl and LibreOffice oracles, fixtures from two XLSX producers, every bug becomes a fixture |
-| Wrong conversion factors | Every factor cited and flagged exact or not; reference tests against NIST SP 811 values; convention and gauge guards refuse unsafe conversions |
-| Determinism traps (time, map ordering, deflate, float formatting) | Injected clock and IDs; fixed ZIP and XLSX timestamps; pure-JS deflate; canonical number encoding; byte-equality tests |
-| Replay cost on open grows with project size | Fine for Lite sizes; slice 2 adds Parquet caches with digests so replay can be verified lazily or by sampling |
-| UI scope creep | Fixed layout; only the tabs listed; docking, command palette and i18n later |
-| Very fresh dependency versions | Exact pins; lockfile; licence gate; fall back to Vite 7 if build issues appear; TypeScript held at 6.0.x |
-| `@streamparser/json` is 0.0.x; saxes is rarely released | Small surfaces behind adapters; oracle tests; replaceable (JSON.parse fallback for small files; another SAX parser) |
-| Desktop behaviour untested here | Use only web APIs that WebView2 and WebKitGTK both support; Windows build runner before the desktop release |
-| Authorship constraint | Hygiene check in `npm test`; About screen, LICENSE and NOTICE in the owner's name |
+| Double implementation of primitives (TypeScript and SQL)          | Small closed primitive set, each with a defined SQL template; shared fixtures and digests; the TypeScript engine stays as the Lite engine and reference, so the cost buys product value            |
+| Bugs in the in-house CSV and XLSX code                            | Differential tests (papaparse), property tests, openpyxl and LibreOffice oracles, fixtures from two XLSX producers, every bug becomes a fixture                                                    |
+| Wrong conversion factors                                          | Every factor cited and flagged exact or not; reference tests against NIST SP 811 values; convention and gauge guards refuse unsafe conversions                                                     |
+| Determinism traps (time, map ordering, deflate, float formatting) | Injected clock and IDs; fixed ZIP and XLSX timestamps; pure-JS deflate; canonical number encoding; byte-equality tests                                                                             |
+| Replay cost on open grows with project size                       | Fine for Lite sizes; slice 2 adds Parquet caches with digests so replay can be verified lazily or by sampling                                                                                      |
+| UI scope creep                                                    | Fixed layout; only the tabs listed; docking, command palette and i18n later                                                                                                                        |
+| Very fresh dependency versions                                    | Exact pins; lockfile; licence gate; fall back to Vite 7 if build issues appear; TypeScript held at 6.0.x                                                                                           |
+| `@streamparser/json` is 0.0.x; saxes is rarely released           | Small surfaces behind adapters; oracle tests; replaceable (JSON.parse fallback for small files; another SAX parser)                                                                                |
+| Desktop behaviour untested here                                   | Use only web APIs that WebView2 and WebKitGTK both support; Windows build runner before the desktop release                                                                                        |
+| Authorship constraint                                             | Hygiene check in `npm test`; About screen, LICENSE and NOTICE in the owner's name                                                                                                                  |
 
 ---
 
 ## 17. Roadmap of next slices
 
-| Slice | Content | Exit evidence |
-|---|---|---|
-| **1 (this document)** | Core workflow end to end on CSV/TSV, XLSX and GeoJSON in the browser engine; `.twp`; validated export packages | `npm test` green; oracles pass |
-| **2** | Native headless engine (Rust + DuckDB + Parquet) behind `stdioTransport`; conformance parity on slice 1 scenarios; 10 GB benchmark; Parquet working files and `.twp` caches (FR-IMP-09); recipes `.twr` with "only new or changed issues" (FR-RCP-01..03); autosave/crash recovery journal (OPFS / disk); `.xls`, Parquet and JSON import; Parquet export profile; mapping templates (FR-IMP-06); data health score (FR-VAL-05); CSV formula neutralisation | Parity suite green on both engines; benchmark published |
-| **3** | CRS transformation (PROJ native; proj4 in Lite with documented limits); map view with MapLibre and offline PMTiles; draw-an-area filter; Shapefile, GeoPackage, FlatGeobuf, KML/KMZ; QGIS/ArcGIS and Google Earth profiles; Shapefile rules (FR-EXP-04) | Spatial reference cases; GDAL read-back |
-| **4** | Conventions engine (FR-CNV); signed `.twrules` rule-packs with offline install and policy lock; local profiles with roles, Reviewer mode, sign-off stamps, assignment (FR-AUD-03/04); comparison view (FR-AUD-05); time-series resampling (FR-PRC-03); joins and calculated fields (FR-PRC-04) | Rule-pack signature tests; method reference cases |
-| **5** | Tauri desktop shell on a Windows build runner; installers (per-user, MSI, portable); code signing; software bill of materials; dockable panels, command palette, saved layouts, i18n/RTL; full WCAG 2.2 AA audit; PDF report | R0 exit: core suite green, 10 GB benchmark met, messy-file library passes |
+| Slice                 | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Exit evidence                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **1 (this document)** | Core workflow end to end on CSV/TSV, XLSX and GeoJSON in the browser engine; `.twp`; validated export packages                                                                                                                                                                                                                                                                                                                                              | `npm test` green; oracles pass                                            |
+| **2**                 | Native headless engine (Rust + DuckDB + Parquet) behind `stdioTransport`; conformance parity on slice 1 scenarios; 10 GB benchmark; Parquet working files and `.twp` caches (FR-IMP-09); recipes `.twr` with "only new or changed issues" (FR-RCP-01..03); autosave/crash recovery journal (OPFS / disk); `.xls`, Parquet and JSON import; Parquet export profile; mapping templates (FR-IMP-06); data health score (FR-VAL-05); CSV formula neutralisation | Parity suite green on both engines; benchmark published                   |
+| **3**                 | CRS transformation (PROJ native; proj4 in Lite with documented limits); map view with MapLibre and offline PMTiles; draw-an-area filter; Shapefile, GeoPackage, FlatGeobuf, KML/KMZ; QGIS/ArcGIS and Google Earth profiles; Shapefile rules (FR-EXP-04)                                                                                                                                                                                                     | Spatial reference cases; GDAL read-back                                   |
+| **4**                 | Conventions engine (FR-CNV); signed `.twrules` rule-packs with offline install and policy lock; local profiles with roles, Reviewer mode, sign-off stamps, assignment (FR-AUD-03/04); comparison view (FR-AUD-05); time-series resampling (FR-PRC-03); joins and calculated fields (FR-PRC-04)                                                                                                                                                              | Rule-pack signature tests; method reference cases                         |
+| **5**                 | Tauri desktop shell on a Windows build runner; installers (per-user, MSI, portable); code signing; software bill of materials; dockable panels, command palette, saved layouts, i18n/RTL; full WCAG 2.2 AA audit; PDF report                                                                                                                                                                                                                                | R0 exit: core suite green, 10 GB benchmark met, messy-file library passes |
 
 ---
 
 ## 18. Effort estimate (slice 1)
 
-| Milestone | Content | Person-days |
-|---|---|---|
-| M0 Walking skeleton | Tooling, model, CSV only, six rules, edit with reason, one conversion, filter, CSV and Excel export with read-back, `.twp` save/open, one green E2E | 10–12 (included below) |
-| M1 Foundations | model, io, units (about 60 cited units), geo, audit, engine-api | 8–10 |
-| M2 Formats and detection | CSV sniff, tokenizer, writer; XLSX reader with layout heuristics and writer; GeoJSON; detect | 14–18 |
-| M3 Core services | table, ingest, rules (22 primitives), steps, export with read-back and package, project | 14–18 |
-| M4 Engine | reducer, jobs, decisions, issue states, lineage, replay, conformance | 8–10 |
-| M5 UI | shell, grid with editing, import preview, issues register, dialogs, export centre, properties, log and jobs | 16–20 |
-| M6 Hardening | E2E suite, oracles, accessibility, benchmarks, documentation | 8–10 |
-| **Total** | | **68–86 person-days (about 14–17 weeks for one developer)** |
+| Milestone                | Content                                                                                                                                             | Person-days                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| M0 Walking skeleton      | Tooling, model, CSV only, six rules, edit with reason, one conversion, filter, CSV and Excel export with read-back, `.twp` save/open, one green E2E | 10–12 (included below)                                      |
+| M1 Foundations           | model, io, units (about 60 cited units), geo, audit, engine-api                                                                                     | 8–10                                                        |
+| M2 Formats and detection | CSV sniff, tokenizer, writer; XLSX reader with layout heuristics and writer; GeoJSON; detect                                                        | 14–18                                                       |
+| M3 Core services         | table, ingest, rules (22 primitives), steps, export with read-back and package, project                                                             | 14–18                                                       |
+| M4 Engine                | reducer, jobs, decisions, issue states, lineage, replay, conformance                                                                                | 8–10                                                        |
+| M5 UI                    | shell, grid with editing, import preview, issues register, dialogs, export centre, properties, log and jobs                                         | 16–20                                                       |
+| M6 Hardening             | E2E suite, oracles, accessibility, benchmarks, documentation                                                                                        | 8–10                                                        |
+| **Total**                |                                                                                                                                                     | **68–86 person-days (about 14–17 weeks for one developer)** |
 
 - **With parallel engineers following the build order:** about 5–7 weeks elapsed.
 - **With code-generation assistance**, the writing time shrinks substantially. The owner's work does not compress: reviewing behaviour, curating real-world messy files, checking unit citations, wording rule explanations, and judging Excel and GIS output in the target tools. Plan 10–15 owner days.

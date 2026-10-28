@@ -116,6 +116,12 @@ export interface ImportRequestOptions {
   options?: FormatOptions;
   columnOverrides?: ColumnOverride[];
   overrideReason?: string;
+  /**
+   * The preview the user reviewed (protocol 0.2). An engine that plans imports itself (the
+   * TypeScript engine) plans again and gets the same result; an engine that executes plans (the
+   * native engine) imports exactly this plan, so detection is written once (decision D-12).
+   */
+  preview?: ImportPreview;
 }
 
 export interface CheckSummary {

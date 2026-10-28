@@ -131,6 +131,8 @@ function Preview(p: {
           ...(optionsChanged ? { options } : {}),
           ...(overrides.length > 0 ? { columnOverrides: overrides } : {}),
           ...(why === null ? {} : { overrideReason: why }),
+          // The plan the user reviewed: engines that execute plans import exactly this.
+          preview,
         },
       );
       store.trackJob(handle, `Import ${file.name}`);

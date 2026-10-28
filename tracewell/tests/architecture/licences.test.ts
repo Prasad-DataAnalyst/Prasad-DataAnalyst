@@ -2,7 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   ALLOWED,
+  classifyCrates,
   classifyPackage,
+  crateLicence,
   declaredLicence,
   formatReport,
   installedPackages,
@@ -115,5 +117,29 @@ describe('production tree', () => {
     ]);
     expect(text).toContain('1 of 2 production packages failed the licence gate');
     expect(text).toContain('bad@2.0.0: GPL-3.0');
+  });
+});
+
+describe('Rust crate licences', () => {
+  it('reads the legacy slash form as OR and accepts permissive crate licences', () => {
+    expect(crateLicence('MIT/Apache-2.0')).toBe('MIT OR Apache-2.0');
+    const verdicts = classifyCrates({
+      packages: [
+        { id: 'a', name: 'a', version: '1.0.0', license: 'MIT/Apache-2.0' },
+        { id: 'b', name: 'b', version: '1.0.0', license: 'Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT' },
+        { id: 'c', name: 'c', version: '1.0.0', license: '(MIT OR Apache-2.0) AND Unicode-3.0' },
+        { id: 'd', name: 'd', version: '1.0.0', license: 'GPL-3.0-only' },
+        { id: 'e', name: 'e', version: '1.0.0', license: null },
+        { id: 'f', name: 'f', version: '1.0.0', license: 'GPL-3.0-only' },
+      ],
+      resolve: { nodes: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }] },
+    });
+    expect(verdicts.map((v) => [v.name, v.allowed])).toEqual([
+      ['crate a', true],
+      ['crate b', true],
+      ['crate c', true],
+      ['crate d', false],
+      ['crate e', false],
+    ]);
   });
 });

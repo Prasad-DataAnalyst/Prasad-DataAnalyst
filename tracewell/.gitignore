@@ -4,3 +4,6 @@ test-results/
 playwright-report/
 coverage/
 *.log
+# Rust build output and the per-machine lockfile of crates/*
+target/
+crates/*/Cargo.lock
