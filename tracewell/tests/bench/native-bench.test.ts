@@ -4,11 +4,13 @@
  * of each stage. It runs only when given a file:
  *
  *   TW_BENCH_CSV=/data/well_daily.csv [TW_BENCH_WORKDIR=/data/work] [TW_BENCH_OUT=result.json] \
- *     [TW_BENCH_PROFILE=parquet|csv] npx vitest run tests/bench
+ *     [TW_BENCH_PROFILE=parquet|csv] [TW_BENCH_LOG=progress.log] npx vitest run tests/bench
+ *
+ * TW_BENCH_LOG names a file that gets a line as each stage starts and ends, for following a long run.
  *
  * The engine uses its defaults: DuckDB may use half the machine's memory and spills the rest to disk.
  */
-import { rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -18,6 +20,11 @@ import { nativeBuilt, peakResidentBytes, startNative, stopNative } from '../conf
 
 const CSV = process.env['TW_BENCH_CSV'];
 const HOUR_MS = 3_600_000;
+
+function progress(line: string): void {
+  const log = process.env['TW_BENCH_LOG'];
+  if (log !== undefined) appendFileSync(log, `${new Date().toISOString()} ${line}\n`);
+}
 
 interface Stage {
   name: string;
@@ -38,9 +45,14 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
       const native = startNative([], process.env['TW_BENCH_WORKDIR']);
       const stages: Stage[] = [];
       const timed = async <T>(name: string, run: () => Promise<T>, detail: (r: T) => Record<string, JsonValue>) => {
+        progress(`${name}: started`);
         const started = performance.now();
-        const result = await run();
+        const result = await run().catch((e: unknown) => {
+          progress(`${name}: failed: ${e instanceof Error ? e.message : String(e)}`);
+          throw e;
+        });
         const seconds = (performance.now() - started) / 1000;
+        progress(`${name}: ${seconds.toFixed(1)} s`);
         stages.push({ name, seconds, peakResidentBytes: peakResidentBytes(native.child.pid), detail: detail(result) });
         console.log(`${name}: ${seconds.toFixed(1)} s`);
         return result;
