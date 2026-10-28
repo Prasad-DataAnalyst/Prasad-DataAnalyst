@@ -14,6 +14,7 @@ use crate::encoding::TextDecoder;
 use crate::error::{EngineError, Result};
 use crate::import::{quote_ident, quote_text};
 use crate::parse::Kind;
+use crate::stream::each_batch;
 use crate::units::REGISTRY_JSON;
 use crate::zip::{Entry, ZipWriter, read_entries, read_entry};
 use duckdb::Connection;
@@ -218,9 +219,9 @@ fn scan_column(
     c: &OutColumn,
     mut f: impl FnMut(Cell),
 ) -> Result<()> {
-    let mut stmt = conn.prepare(&format!("SELECT __rid, {} FROM {view}", quote_ident(&c.id)))?;
+    let sql = format!("SELECT __rid, {} FROM {view}", quote_ident(&c.id));
     let mut next: i64 = 0;
-    for batch in stmt.query_arrow([])? {
+    each_batch(conn, &sql, |batch| {
         let rids = batch.column(0).as_primitive::<Int64Type>();
         let values = batch.column(1);
         for i in 0..batch.num_rows() {
@@ -235,8 +236,8 @@ fn scan_column(
             next += 1;
             f(cell_at(values, i, c.kind));
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn view_digests(conn: &Connection, input: &ExportInput) -> Result<Vec<ColumnDigests>> {
@@ -316,7 +317,11 @@ fn formula_start(text: &str) -> bool {
 
 /// One more apostrophe in front of formula text (values.ts neutralizeFormula).
 fn neutralize_formula(text: String) -> String {
-    if formula_start(&text) { format!("'{text}") } else { text }
+    if formula_start(&text) {
+        format!("'{text}")
+    } else {
+        text
+    }
 }
 
 /// The inverse of neutralize_formula (values.ts restoreFormula).
@@ -334,7 +339,11 @@ fn format_rows(batches: &[RecordBatch], kinds: &[Kind], neutralize: bool, out: &
         for i in 0..b.num_rows() {
             for (j, kind) in kinds.iter().enumerate() {
                 let text = cell_at(b.column(j), i, *kind).text();
-                fields[j] = if neutralize && *kind == Kind::String { neutralize_formula(text) } else { text };
+                fields[j] = if neutralize && *kind == Kind::String {
+                    neutralize_formula(text)
+                } else {
+                    text
+                };
             }
             csv_record(&fields, false, out);
         }
@@ -354,7 +363,7 @@ fn write_csv(
     out.write_all(&head)?;
     let kinds: Vec<Kind> = input.columns.iter().map(|c| c.kind).collect();
     let select: Vec<String> = input.columns.iter().map(|c| quote_ident(&c.id)).collect();
-    let mut stmt = conn.prepare(&format!("SELECT {} FROM {}", select.join(", "), input.view))?;
+    let sql = format!("SELECT {} FROM {}", select.join(", "), input.view);
     let workers = input.threads.max(1);
     let mut group: Vec<RecordBatch> = Vec::new();
     let flush = |group: &mut Vec<RecordBatch>, out: &mut BufWriter<File>| -> Result<()> {
@@ -384,7 +393,7 @@ fn write_csv(
         Ok(())
     };
     let mut rows = 0usize;
-    for batch in stmt.query_arrow([])? {
+    each_batch(conn, &sql, |batch| {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
@@ -394,7 +403,8 @@ fn write_csv(
             flush(&mut group, &mut out)?;
             rows = 0;
         }
-    }
+        Ok(())
+    })?;
     flush(&mut group, &mut out)?;
     out.flush()?;
     Ok(())
@@ -858,21 +868,27 @@ fn read_back_parquet(
     let readable: Vec<OutColumn> = expected.columns.iter().take(names.len()).cloned().collect();
     let digests = per_column(conn, &readable, threads, |conn, c| {
         let j = readable.iter().position(|x| x.id == c.id).unwrap_or(0);
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {} FROM read_parquet({p})",
-            quote_ident(&names[j])
-        ))?;
+        let sql = format!("SELECT {} FROM read_parquet({p})", quote_ident(&names[j]));
         let mut d = ColumnDigest::default();
-        for batch in stmt.query_arrow([])? {
+        let mut exact = true;
+        each_batch(conn, &sql, |batch| {
+            // Once a value no cell holds exactly turns up, the column cannot match.
+            if !exact {
+                return Ok(());
+            }
             let a = batch.column(0);
             for i in 0..batch.num_rows() {
                 match read_back_cell(a, i, c.kind) {
                     Some(cell) => d.push(&cell),
-                    None => return Ok(None),
+                    None => {
+                        exact = false;
+                        break;
+                    }
                 }
             }
-        }
-        Ok(Some(d.finish()))
+            Ok(())
+        })?;
+        Ok(exact.then(|| d.finish()))
     })?;
     checks.push(values_check(expected, &digests, file));
     Ok(checks)

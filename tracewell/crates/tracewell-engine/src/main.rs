@@ -20,6 +20,7 @@ mod import;
 mod issues;
 mod parse;
 mod rules;
+mod stream;
 mod time;
 mod units;
 mod zip;
@@ -167,6 +168,7 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "listIssues" => e.list_issues(param(params, 0)),
         "listOccurrences" => e.list_occurrences(param(params, 0), param(params, 1)),
         "listExportProfiles" => e.list_export_profiles(param(params, 0)),
+        "getHealth" => e.health(param(params, 0)),
         "jobOutcome" => e.job_outcome(param(params, 0)),
         "cancelJob" => e.cancel_job(param(params, 0)),
         other => Err(EngineError::unsupported(format!("the call {other}"))),

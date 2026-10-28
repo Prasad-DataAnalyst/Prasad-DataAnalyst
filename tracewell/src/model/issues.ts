@@ -83,3 +83,31 @@ export interface IssueQuery {
   offset?: number;
   limit?: number;
 }
+
+/** One rule category of a dataset's health (FR-VAL-05). */
+export interface HealthCategory {
+  category: RuleCategory;
+  /** 0 to 100 with one decimal, rounded down, so 100 means no row is affected. */
+  score: number;
+  /** Rows open in at least one error or warning issue of this category. */
+  affectedRows: number;
+  /** Error and warning issues of this category with something open, whatever their scope. */
+  openIssues: number;
+}
+
+/**
+ * The data health score of a dataset (FR-VAL-05): the share of its rows that no open error or
+ * warning concerns. Accepted and excluded rows no longer count against it; notes never do. Issues
+ * about a whole column or the dataset are counted in `openIssues` but affect no row.
+ */
+export interface DatasetHealth {
+  datasetId: DatasetId;
+  /** False until checks have run on the dataset; the scores are null until then. */
+  checked: boolean;
+  /** The rows counted: the dataset's rows that are not excluded. */
+  rows: number;
+  affectedRows: number;
+  score: number | null;
+  /** Every data category, in a fixed order. */
+  categories: (Omit<HealthCategory, 'score'> & { score: number | null })[];
+}

@@ -13,6 +13,7 @@ import {
   type ColumnId,
   type ColumnOverride,
   type ColumnStats,
+  type DatasetHealth,
   type DatasetId,
   type DatasetSummary,
   type Decision,
@@ -64,7 +65,16 @@ import { openReport, planExport, planSave, profileStatuses } from './stub-export
 import { StubJobs } from './stub-jobs';
 import { planOverride } from './stub-overrides';
 import { StubClock, StubProject } from './stub-project';
-import { importPreview, lineage, listAudit, listIssues, listOccurrences, listUnits, rowWindow } from './stub-queries';
+import {
+  datasetHealth,
+  importPreview,
+  lineage,
+  listAudit,
+  listIssues,
+  listOccurrences,
+  listUnits,
+  rowWindow,
+} from './stub-queries';
 import { planStep, previewStep, removeStep } from './stub-steps';
 import { columnStats, findColumn, rowCount, workingView } from './stub-view';
 
@@ -309,6 +319,10 @@ class StubEngine implements EngineImpl {
 
   async listOccurrences(issueId: IssueId, p: PageRequest): Promise<Page<IssueOccurrence>> {
     return listOccurrences(this.project, issueId, p);
+  }
+
+  async getHealth(datasetId: DatasetId): Promise<DatasetHealth> {
+    return datasetHealth(this.project, datasetId);
   }
 
   async decide(d: Decision): Promise<AuditEntry[]> {

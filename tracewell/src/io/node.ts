@@ -107,14 +107,17 @@ function plainBytes(buffer: Uint8Array): Uint8Array {
 }
 
 /**
- * Whole-file reads and writes. readFile returns a plain Uint8Array rather than a Node Buffer and
- * throws EngineError('NOT_FOUND') when the path does not exist or is not a regular file.
+ * Whole-file reads and writes, and file-backed sources. readFile returns a plain Uint8Array rather
+ * than a Node Buffer; readFile and open throw EngineError('NOT_FOUND') when the path does not exist
+ * or is not a regular file.
  */
 export function nodeFs(): {
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, bytes: Uint8Array): Promise<void>;
+  open(path: string): Promise<ByteSource>;
 } {
   return {
+    open: (path: string) => nodeFileSource(path),
     async readFile(path: string): Promise<Uint8Array> {
       const buffer = await readFile(path).catch((e: unknown) => {
         throw isMissingFile(e) ? notFound(path) : e;

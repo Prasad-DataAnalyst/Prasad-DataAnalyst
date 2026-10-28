@@ -821,3 +821,63 @@ fieldset.tw-field {
   padding: 2px 0;
   border-bottom: 1px solid var(--tw-surface-2);
 }
+
+/* Data health score (FR-VAL-05) */
+.tw-health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--tw-border);
+}
+.tw-health-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tw-health-value {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.tw-health-label {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+}
+.tw-health-label .tw-muted {
+  font-weight: 400;
+  font-size: 12px;
+}
+.tw-health-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tw-health-categories li {
+  display: flex;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--tw-border);
+  border-radius: 10px;
+  font-size: 12px;
+}
+.tw-health-categories strong {
+  font-variant-numeric: tabular-nums;
+}
+.tw-health-good .tw-health-value,
+li.tw-health-good strong {
+  color: var(--tw-ok);
+}
+.tw-health-fair .tw-health-value,
+li.tw-health-fair strong {
+  color: var(--tw-warn);
+}
+.tw-health-poor .tw-health-value,
+li.tw-health-poor strong {
+  color: var(--tw-error);
+}

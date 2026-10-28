@@ -76,7 +76,8 @@ Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 
 **Decision.** Planning stays in TypeScript, the reference implementation. The native engine **executes** a reviewed plan rather than re-deriving one.
 
-- Protocol 0.2 adds an optional `preview` field to `importFile`: the `ImportPreview` the user reviewed. The TypeScript engine plans again (same input, same result); the native engine imports exactly that plan.
+- Protocol 0.2 adds an optional `preview` field to `importFile`: the `ImportPreview` the user reviewed. The TypeScript engine plans again (same input, same result); the native engine imports exactly that plan. (Protocol 0.3 adds `getHealth`, section 7.7.)
+- A file given by path is previewed through a source that reads only the ranges asked for (`FileSystem.open`), so planning never loads a large file.
 - Sniffing reads at most 1 MiB, so planning in TypeScript costs the same for a 10 GB file as for a small one. In the desktop edition the planner answers `sniff` and the native engine answers everything that touches the full file.
 - What _is_ ported to Rust is what executes a plan: the CSV reader (line skipping, the RFC 4180 tokenizer with its tolerances, header assembly and ragged-row shaping, so rows, physical-line locators and import notes come out the same) and the cell parser (numbers with locale separators, null markers, the date families, booleans). Both are checked against the TypeScript code by the conformance suite over the whole messy-file library.
 - The check primitives run in the native engine as SQL over the working view (SAD section 8.3). The two windowed series checks, flatline runs and the Hampel spike test, stream the ordered series from DuckDB through Rust, because a sliding median over millions of short frames is slow in SQL. Rule packs, the unit registry and the quantity table (`src/units/quantities-2026.1.json`) are the same JSON files in both engines, so a pack's SHA-256 names the same rules whichever engine ran them.
@@ -420,6 +421,8 @@ Issues are grouped per (rule, dataset, columns), with affected rows held as a se
 
 Checks run on the **working view**: base data + edits + unit conversions, minus excluded rows. Filters and column selection are output steps and do not affect checks. After a `cell.edit`, the engine re-runs the rules that apply to that column plus dataset-level rules.
 
+**Data health score (FR-VAL-05, slice 2, protocol 0.3 `getHealth`).** A dataset's score is the share of its rows that no open error or warning concerns: `100 × (rows − affected) / rows`, rounded down to one decimal, where `rows` excludes excluded rows and a row is affected when it is open (neither accepted nor excluded) in at least one `rows`-scope issue of severity error or warning. Notes never count. Rounding down means 100 is shown only when nothing is open. The same formula gives one score per data category (completeness, uniqueness, validity, range, units, time, spatial, import), each with its affected rows and its number of open issues of any scope, so a column-level finding such as an unknown unit is listed without moving a row score. Before checks have run the scores are null. Both engines compute it from the same issue register and agree exactly (conformance suite).
+
 ### 7.8 Rule catalogue (slice 1)
 
 Pack `tracewell.generic-dq` 0.1.0 (data rules):
@@ -621,11 +624,12 @@ Digests drive export read-back, `.twp` replay verification, the conformance suit
 
 ### 10.1 Profiles (destination, not format)
 
-| Profile   | Label in UI                          | Output                                                                                                                                                                                                               |
-| --------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `excel`   | Microsoft Excel                      | `.xlsx` with **Data**, **Report** and **Log** sheets (details below)                                                                                                                                                 |
-| `csv`     | Databases, Python, R, BI tools (CSV) | UTF-8 without BOM, RFC 4180, comma, CRLF, ISO dates, `.` decimal, canonical numbers, header `Name [unit]`                                                                                                            |
-| `geojson` | QGIS / ArcGIS / web maps (GeoJSON)   | RFC 7946 FeatureCollection, lon/lat order, full-precision coordinates, no `crs` member. Built from the geometry column or from latitude/longitude roles. Refused (`TW-EXP-003`, with a fix) if the CRS is not WGS84. |
+| Profile   | Label in UI                          | Output                                                                                                                                                                                                                                                                 |
+| --------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `excel`   | Microsoft Excel                      | `.xlsx` with **Data**, **Report** and **Log** sheets (details below)                                                                                                                                                                                                   |
+| `csv`     | Databases, Python, R, BI tools (CSV) | UTF-8 without BOM, RFC 4180, comma, CRLF, ISO dates, `.` decimal, canonical numbers, header `Name [unit]`. Optional formula neutralisation (below)                                                                                                                     |
+| `parquet` | Python, Spark, DuckDB, data lakes    | Apache Parquet (slice 2): one typed column per field, names `Name [unit]`; DOUBLE, INT64, BOOLEAN, DATE, UTC TIMESTAMP (microseconds; values are whole milliseconds), UTF8; Snappy compression, which every Parquet reader supports. Read-back adds `RB-PARQUET-TYPES` |
+| `geojson` | QGIS / ArcGIS / web maps (GeoJSON)   | RFC 7946 FeatureCollection, lon/lat order, full-precision coordinates, no `crs` member. Built from the geometry column or from latitude/longitude roles. Refused (`TW-EXP-003`, with a fix) if the CRS is not WGS84.                                                   |
 
 Excel profile details:
 
@@ -664,6 +668,7 @@ On any failure, no package is offered. The validation report is shown, and `TW-E
 | RB-XLSX-TYPES        | Numeric columns stored as numbers (`t="n"`), date columns have date number formats, no number stored as text                                                   |
 | RB-XLSX-STRUCTURE    | Sheets Data/Report/Log present, frozen pane A2, autofilter covers the data, no merged cells in Data                                                            |
 | RB-GEOJSON-STRUCTURE | FeatureCollection, feature count, no `crs` member, positions within WGS84 bounds, rings closed with ≥ 4 positions, coordinate order consistent with the source |
+| RB-PARQUET-TYPES     | Every column has the physical and converted (or logical) type of its logical type; other writers' equivalent annotations are accepted (DuckDB's `INT_64`)      |
 | RB-PKG-CHECKSUMS     | Every package entry matches `CHECKSUMS.sha256` (compatible with `sha256sum -c`)                                                                                |
 | RB-PKG-CONTENTS      | Manifest validates against its schema; the README lists every source and its checksum, the rule-packs and the open warnings                                    |
 
@@ -681,6 +686,10 @@ On any failure, no package is offered. The validation report is shown, and `TW-E
 - `CHECKSUMS.sha256`.
 
 ZIP entries are sorted and use a fixed timestamp (1980-01-01). DEFLATE is pure JavaScript (fflate), so bytes are identical in Node and the browser.
+
+**Native engine (slice 2).** The native engine follows the same pipeline for the CSV and Parquet profiles. The CSV writer is ported, so both engines write the same `data.csv` byte for byte; Parquet is written by DuckDB `COPY`. Read-back uses separate readers (the ported CSV reader in strict mode; DuckDB's Parquet reader), and the package is re-opened, its checksums verified and the data file inside extracted and read back again. Entries are STORED, with ZIP64 fields when an entry or offset reaches 4 GiB, so a package of any size opens in standard tools. A request may name a file (`target: {kind: 'path'}`); a package larger than 256 MiB that names none stays in the work folder, and `ExportResult.path` says where.
+
+**Formula neutralisation (slice 2, `ExportRequest.neutralizeFormulas`).** For CSV data files, text that a spreadsheet program would run as a formula (starting with `= + - @`, a tab or a carriage return) gets one more leading apostrophe, which spreadsheets show as text (OWASP CSV injection guidance). Text that already starts with apostrophes before such a character gets one more too, so read-back removes exactly one and the column digests still match. The manifest records `options.neutralizeFormulas`, and the README says how to restore the values.
 
 ---
 
@@ -737,7 +746,7 @@ Any failure opens the project **read-only**, with the reasons shown in an Open r
   - The ZIP reader has a decompressed-size cap and an entry-count cap (zip-bomb guard).
   - CSV fields and JSON depth are capped.
   - All parsers run in the worker; the UI never evaluates file content.
-- **Formula injection.** The XLSX writer never writes formulas. The CSV README warns that spreadsheet programs may interpret leading `= + - @`. An optional neutralise setting is planned for slice 2.
+- **Formula injection.** The XLSX writer never writes formulas. The CSV export has an optional neutralise setting (section 10.4) that prefixes an apostrophe to text a spreadsheet would run as a formula.
 - **Supply chain.**
   - Exact version pins and a committed lockfile.
   - Few runtime dependencies (11).

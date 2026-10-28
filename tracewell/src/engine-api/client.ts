@@ -7,6 +7,7 @@ import {
   type ChainReport,
   type ColumnId,
   type ColumnStats,
+  type DatasetHealth,
   type DatasetId,
   type Decision,
   type ExportProfileStatus,
@@ -124,6 +125,10 @@ export class EngineClient implements EngineApi {
 
   listOccurrences(issueId: IssueId, p: PageRequest): Promise<Page<IssueOccurrence>> {
     return this.invoke('listOccurrences', issueId, p);
+  }
+
+  getHealth(datasetId: DatasetId): Promise<DatasetHealth> {
+    return this.invoke('getHealth', datasetId);
   }
 
   decide(d: Decision): Promise<AuditEntry[]> {

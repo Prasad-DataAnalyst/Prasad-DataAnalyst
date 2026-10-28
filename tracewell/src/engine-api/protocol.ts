@@ -4,6 +4,7 @@
  * so a native engine can implement the same interface behind another transport.
  */
 import type {
+  DatasetHealth,
   AuditEntry,
   AuditQuery,
   CellLineage,
@@ -48,7 +49,7 @@ import type {
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.2.0';
+export const PROTOCOL_VERSION = '0.3.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -92,6 +93,8 @@ export interface EngineApi {
   runChecks(datasetId: DatasetId): Promise<JobHandle>;
   listIssues(q: IssueQuery): Promise<Page<Issue>>;
   listOccurrences(issueId: IssueId, p: PageRequest): Promise<Page<IssueOccurrence>>;
+  /** The data health score of a dataset (FR-VAL-05). Protocol 0.3. */
+  getHealth(datasetId: DatasetId): Promise<DatasetHealth>;
   decide(d: Decision): Promise<AuditEntry[]>;
   listAudit(q: AuditQuery): Promise<Page<AuditEntry>>;
   verifyAudit(): Promise<ChainReport>;
@@ -164,6 +167,7 @@ export const ENGINE_METHODS = [
   'runChecks',
   'listIssues',
   'listOccurrences',
+  'getHealth',
   'decide',
   'listAudit',
   'verifyAudit',

@@ -3,6 +3,8 @@ import { findRule, issueId } from '@tw/rules';
 import {
   EngineError,
   type ColumnId,
+  type DatasetHealth,
+  type DatasetId,
   type Issue,
   type IssueDraft,
   type IssueOccurrence,
@@ -10,13 +12,15 @@ import {
   type Page,
   type PageRequest,
   type QuantityKind,
+  type RuleCategory,
   type UnitInfo,
 } from '@tw/model';
-import { locator } from '@tw/table';
+import { locator, RowSet } from '@tw/table';
 import { allUnits, compatibleUnits, getUnit, unitInfo } from '@tw/units';
-import { occurrenceState, severityRank, toIssue } from './issues-state';
+import { datasetOf } from './decisions';
+import { issueCounts, occurrenceState, severityRank, toIssue } from './issues-state';
 import { CHECK_PACKS } from './reducer';
-import type { DatasetState, ProjectState } from './state';
+import type { DatasetState, IssueState, ProjectState } from './state';
 import { workingView } from './views';
 import { invalid, requireCount, rootColumn } from './windows';
 
@@ -218,4 +222,47 @@ export function listUnits(q: { quantity?: QuantityKind; compatibleWith?: string 
   }
   if (q?.quantity !== undefined) units = units.filter((u) => u.quantity === q.quantity);
   return units;
+}
+
+/** The categories of data findings, in the order the health breakdown lists them. */
+const DATA_CATEGORIES: RuleCategory[] = [
+  'completeness',
+  'uniqueness',
+  'validity',
+  'range',
+  'units',
+  'time',
+  'spatial',
+  'import',
+];
+
+/** 100 × (rows − affected) / rows, rounded down to one decimal, in integers so it is exact. */
+export function healthScore(rows: number, affected: number): number {
+  return rows === 0 ? 100 : Math.floor((1000 * (rows - affected)) / rows) / 10;
+}
+
+/** The data health score of a dataset (FR-VAL-05). */
+export function datasetHealth(state: ProjectState, datasetId: DatasetId): DatasetHealth {
+  const ds = datasetOf(state, datasetId);
+  const n = ds.dataset.rowCount;
+  const rows = n - ds.excluded.size;
+  const counted = [...ds.issues.values()].filter((st) => st.draft.severity !== 'note');
+  const affected = (sts: IssueState[]): RowSet =>
+    sts
+      .filter((st) => st.draft.scope === 'rows')
+      .reduce((all, st) => all.union(st.current.minus(ds.excluded).minus(st.accepted)), new RowSet(n));
+  const open = (sts: IssueState[]) => sts.filter((st) => issueCounts(st, ds.excluded).open > 0).length;
+  const all = affected(counted).size;
+  return {
+    datasetId,
+    checked: ds.checked,
+    rows,
+    affectedRows: all,
+    score: ds.checked ? healthScore(rows, all) : null,
+    categories: DATA_CATEGORIES.map((category) => {
+      const sts = counted.filter((st) => st.draft.category === category);
+      const hit = affected(sts).size;
+      return { category, score: ds.checked ? healthScore(rows, hit) : null, affectedRows: hit, openIssues: open(sts) };
+    }),
+  };
 }

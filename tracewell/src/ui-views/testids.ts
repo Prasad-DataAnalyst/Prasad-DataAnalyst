@@ -32,6 +32,8 @@ export const TID = {
   exportCentre: 'tw-export-centre',
   exportCard: (profile: string) => `tw-export-card-${profile}`,
   neutralizeFormulas: 'tw-export-neutralize-formulas',
+  health: 'tw-health',
+  healthCategory: (category: string) => `tw-health-${category}`,
   exportButton: (profile: string) => `tw-export-${profile}`,
   exportStatus: 'tw-export-status',
   validation: 'tw-validation',

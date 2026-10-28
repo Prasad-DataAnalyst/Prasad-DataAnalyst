@@ -8,6 +8,7 @@ import {
   type CellLineage,
   type ColumnId,
   type ColumnSchema,
+  type DatasetHealth,
   type DatasetId,
   type ImportPreview,
   type Issue,
@@ -19,6 +20,7 @@ import {
   type RowId,
   type RowWindow,
   type RowWindowRequest,
+  type RuleCategory,
   type Severity,
   type Step,
   type UnitInfo,
@@ -35,7 +37,16 @@ import {
 } from './stub-data';
 import { occurrences, openRows, SEVERITY_ORDER, toIssue, type StubIssue } from './stub-issues';
 import { actorName, type StubProject } from './stub-project';
-import { findColumn, parseText, rootColumn, viewOf, workingView, type StubDataset, type ViewColumn } from './stub-view';
+import {
+  findColumn,
+  parseText,
+  rootColumn,
+  rowCount,
+  viewOf,
+  workingView,
+  type StubDataset,
+  type ViewColumn,
+} from './stub-view';
 
 const DEFAULT_PAGE = 100;
 const MAX_PAGE = 1000;
@@ -355,5 +366,45 @@ export function importPreview(project: StubProject, fileName: string, previewId:
     assumptions: project.assumptions(draft),
     estimatedRows: SOURCE_ROWS.length,
     exceedsBudget: false,
+  };
+}
+
+const HEALTH_CATEGORIES: RuleCategory[] = [
+  'completeness',
+  'uniqueness',
+  'validity',
+  'range',
+  'units',
+  'time',
+  'spatial',
+  'import',
+];
+
+/** The stub's data health score, by the same definition as the engine's (FR-VAL-05). */
+export function datasetHealth(project: StubProject, datasetId: DatasetId): DatasetHealth {
+  const ds = project.dataset(datasetId);
+  const rows = rowCount() - ds.excluded.size;
+  const counted = [...project.issues.values()].filter((i) => i.datasetId === datasetId && i.rule.severity !== 'note');
+  const affected = (issues: StubIssue[]) =>
+    new Set(issues.flatMap((i) => openRows(i).filter((r) => !ds.excluded.has(r)))).size;
+  const score = (hit: number) =>
+    ds.checked ? (rows === 0 ? 100 : Math.floor((1000 * (rows - hit)) / rows) / 10) : null;
+  const all = affected(counted);
+  return {
+    datasetId,
+    checked: ds.checked,
+    rows,
+    affectedRows: all,
+    score: score(all),
+    categories: HEALTH_CATEGORIES.map((category) => {
+      const issues = counted.filter((i) => i.rule.category === category);
+      const hit = affected(issues);
+      return {
+        category,
+        score: score(hit),
+        affectedRows: hit,
+        openIssues: issues.filter((i) => openRows(i).length > 0).length,
+      };
+    }),
   };
 }

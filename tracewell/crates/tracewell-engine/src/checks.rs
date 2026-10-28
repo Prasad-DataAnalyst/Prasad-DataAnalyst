@@ -11,6 +11,7 @@ use crate::import::quote_ident;
 use crate::import::quote_text;
 use crate::parse::Kind;
 use crate::rules::{Draft, Pack, RowSet, Rule, Var, check_packs, render_message};
+use crate::stream::each_batch;
 use crate::units::{is_js_space, js_trim, physical_bounds, split_value_unit};
 use duckdb::Connection;
 use duckdb::arrow::array::{Array, AsArray};
@@ -327,16 +328,30 @@ impl Key {
 impl CheckCtx<'_> {
     fn rows(&self, sql: &str) -> Result<RowSet> {
         let mut set = RowSet::new(self.row_count);
-        let mut stmt = self.conn.prepare(sql)?;
-        for batch in stmt.query_arrow([])? {
+        each_batch(self.conn, sql, |batch| {
             let ids = batch.column(0).as_primitive::<Int64Type>();
             for i in 0..ids.len() {
                 if ids.is_valid(i) {
                     set.insert(ids.value(i) as u64);
                 }
             }
-        }
+            Ok(())
+        })?;
         Ok(set)
+    }
+
+    /// Streams (row id, text) pairs of a two-column query.
+    fn each_text(&self, sql: &str, mut f: impl FnMut(i64, &str)) -> Result<()> {
+        each_batch(self.conn, sql, |batch| {
+            let ids = batch.column(0).as_primitive::<Int64Type>();
+            let texts = batch.column(1);
+            for i in 0..batch.num_rows() {
+                if let Some(t) = (!texts.is_null(i)).then(|| text_at(texts, i)).flatten() {
+                    f(ids.value(i), t);
+                }
+            }
+            Ok(())
+        })
     }
 
     fn strings(&self, sql: &str) -> Result<Vec<(i64, String)>> {
@@ -466,12 +481,16 @@ impl CheckCtx<'_> {
         Ok(out)
     }
 
-    fn failed_texts(&self, c: &Col) -> Result<Vec<(i64, String)>> {
-        self.strings(&format!(
-            "SELECT rid, raw FROM {e} WHERE col = {id} AND raw IS NOT NULL ORDER BY rid",
-            e = self.exceptions,
-            id = quote_text(&c.id)
-        ))
+    /// Streams the source text of every value of `c` that failed to parse, in row order.
+    fn failed_texts(&self, c: &Col, f: impl FnMut(i64, &str)) -> Result<()> {
+        self.each_text(
+            &format!(
+                "SELECT rid, raw FROM {e} WHERE col = {id} AND raw IS NOT NULL ORDER BY rid",
+                e = self.exceptions,
+                id = quote_text(&c.id)
+            ),
+            f,
+        )
     }
 
     fn type_conformance(
@@ -484,13 +503,16 @@ impl CheckCtx<'_> {
         let mut out = Vec::new();
         for c in cols {
             let mut rows = RowSet::new(self.row_count);
-            let mut texts = Vec::new();
-            for (rid, text) in self.failed_texts(c)? {
-                if is_below_detection_limit(&text) == bdl {
+            // The first distinct texts, enough to list three examples and say whether there are more.
+            let mut texts: Vec<String> = Vec::new();
+            self.failed_texts(c, |rid, text| {
+                if is_below_detection_limit(text) == bdl {
                     rows.insert(rid as u64);
-                    texts.push(text);
+                    if texts.len() < 4 && !texts.iter().any(|t| t == text) {
+                        texts.push(text.to_string());
+                    }
                 }
-            }
+            })?;
             if rows.count() == 0 {
                 continue;
             }
@@ -701,49 +723,53 @@ impl CheckCtx<'_> {
                 |r| r.get(0),
             )?;
             // Only text that starts with a number can be a value with a unit (splitValueUnit).
-            let candidates = self.strings(&format!(
-                "SELECT __rid, {c} FROM {v} WHERE regexp_matches({c}, '^[{JS_SPACE_CLASS}]*[-+\\x{{2212}}]?[.,]?[0-9]') ORDER BY __rid",
+            let candidates = format!(
+                "SELECT __rid, {c} FROM {v} WHERE regexp_matches({c}, '^[{JS_SPACE_CLASS}]*[-+\\x{{2212}}]?[.,]?[0-9]')",
                 v = self.view,
                 c = c.q()
-            ))?;
-            let units: Vec<(i64, String)> = candidates
-                .iter()
-                .filter_map(|(rid, text)| {
-                    split_value_unit(text).map(|(_, u)| (*rid, u.code.clone()))
-                })
-                .collect();
-            if units.len() < 2 || (units.len() as i64) * 2 < present {
+            );
+            // Two passes, so memory stays with the number of distinct units: count each unit
+            // (with the first row it appears on), then flag the rows not in the main one.
+            let mut counts: HashMap<String, (usize, i64)> = HashMap::new();
+            self.each_text(&candidates, |rid, text| {
+                if let Some((_, u)) = split_value_unit(text) {
+                    let e = counts.entry(u.code.clone()).or_insert((0, rid));
+                    e.0 += 1;
+                    e.1 = e.1.min(rid);
+                }
+            })?;
+            let units: usize = counts.values().map(|(n, _)| n).sum();
+            if units < 2 || (units as i64) * 2 < present {
                 continue;
             }
-            let mut counts: Vec<(String, usize)> = Vec::new();
-            for (_, code) in &units {
-                match counts.iter_mut().find(|(c, _)| c == code) {
-                    Some((_, n)) => *n += 1,
-                    None => counts.push((code.clone(), 1)),
+            // Units in the order they first appear; the main one is the most common, the
+            // earliest on a tie.
+            let mut order: Vec<(String, usize, i64)> = counts
+                .into_iter()
+                .map(|(code, (n, first))| (code, n, first))
+                .collect();
+            order.sort_by_key(|(_, _, first)| *first);
+            let mut main = 0;
+            for (i, (_, n, _)) in order.iter().enumerate() {
+                if *n > order[main].1 {
+                    main = i;
                 }
             }
-            let mut main = units[0].1.clone();
-            for (code, n) in &counts {
-                let main_n = counts
-                    .iter()
-                    .find(|(c, _)| *c == main)
-                    .map_or(0, |(_, n)| *n);
-                if *n > main_n {
-                    main = code.clone();
-                }
-            }
+            let main = order[main].0.clone();
             let mut rows = RowSet::new(self.row_count);
-            for (rid, code) in &units {
-                if *code != main {
-                    rows.insert(*rid as u64);
+            self.each_text(&candidates, |rid, text| {
+                if let Some((_, u)) = split_value_unit(text)
+                    && u.code != main
+                {
+                    rows.insert(rid as u64);
                 }
-            }
+            })?;
             if rows.count() == 0 {
                 continue;
             }
-            let others: Vec<&str> = counts
+            let others: Vec<&str> = order
                 .iter()
-                .map(|(c, _)| c.as_str())
+                .map(|(c, _, _)| c.as_str())
                 .filter(|c| *c != main)
                 .collect();
             let detail = format!("mostly {main}; also {}", others.join(", "));
@@ -861,9 +887,8 @@ impl CheckCtx<'_> {
             time = s.time.q(),
             t = s.ms()
         );
-        let mut stmt = self.conn.prepare(&sql)?;
         let mut previous: Option<Key> = None;
-        for batch in stmt.query_arrow([])? {
+        each_batch(self.conn, &sql, |batch| {
             let rids = batch.column(0).as_primitive::<Int64Type>().clone();
             let group = batch.column(1).clone();
             let cols: Vec<duckdb::arrow::array::ArrayRef> = batch.columns()[2..].to_vec();
@@ -877,8 +902,8 @@ impl CheckCtx<'_> {
                 }
                 row(starts, rids.value(i) as u64, &cols, i);
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn flatline(&self, rule: &Rule, pack: &Pack, cols: &[&Col]) -> Result<Vec<Draft>> {

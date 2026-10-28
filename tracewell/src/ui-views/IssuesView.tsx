@@ -165,6 +165,7 @@ function IssuesRegister(p: {
         <span className="tw-view-meta">{formatCount(issues.data?.total ?? 0)} issues</span>
       </div>
       <ErrorNote error={issues.error} />
+      {p.variant === 'view' && p.datasetId !== null && <HealthStrip engine={engine} datasetId={p.datasetId} />}
       {!checked && items.length === 0 ? (
         <div className="tw-empty">
           No checks have run yet. Choose Data › Run checks (or the Check stage) to find issues.
@@ -469,6 +470,62 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
         </>
       )}
       {reason.element}
+    </section>
+  );
+}
+
+const CATEGORY_NAMES: Record<string, string> = {
+  completeness: 'Completeness',
+  uniqueness: 'Uniqueness',
+  validity: 'Validity',
+  range: 'Physical range',
+  units: 'Units',
+  time: 'Time',
+  spatial: 'Spatial',
+  import: 'Import',
+};
+
+function healthClass(score: number): string {
+  return score >= 99 ? 'tw-health-good' : score >= 90 ? 'tw-health-fair' : 'tw-health-poor';
+}
+
+/**
+ * The data health score (FR-VAL-05): the share of rows that no open error or warning concerns,
+ * overall and per rule category.
+ */
+function HealthStrip(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.Element | null {
+  const { engine, datasetId } = p;
+  const health = useEngineQuery(engine, `health:${datasetId}`, () => engine.getHealth(datasetId), [
+    'issues',
+    'datasets',
+    'project',
+  ]);
+  const h = health.data;
+  if (h === null || h === undefined || !h.checked || h.score === null) return null;
+  return (
+    <section className="tw-health" aria-label="Data health" data-testid={TID.health}>
+      <div className={`tw-health-score ${healthClass(h.score)}`} data-score={h.score}>
+        <span className="tw-health-value">{h.score.toFixed(1)}</span>
+        <span className="tw-health-label">
+          Data health
+          <span className="tw-muted">
+            {formatCount(h.rows - h.affectedRows)} of {formatCount(h.rows)} rows without open errors or warnings
+          </span>
+        </span>
+      </div>
+      <ul className="tw-health-categories" aria-label="Data health by category">
+        {h.categories.map((c) => (
+          <li
+            key={c.category}
+            className={c.score === null ? '' : healthClass(c.score)}
+            data-testid={TID.healthCategory(c.category)}
+            title={`${formatCount(c.affectedRows)} rows affected; ${c.openIssues} open ${c.openIssues === 1 ? 'issue' : 'issues'}`}
+          >
+            <span>{CATEGORY_NAMES[c.category] ?? c.category}</span>
+            <strong>{c.score === null ? '-' : c.score.toFixed(1)}</strong>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

@@ -171,6 +171,23 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
       [7, 'line 9', 'open', 'NA', null],
     ]);
   },
+  getHealth: async (c) => {
+    const ds = (await c.getProject()).datasets[0]?.id as string;
+    const health = await c.getHealth(ds);
+    expect(health).toMatchObject({ datasetId: ds, checked: true });
+    expect(health.score).toBeGreaterThan(0);
+    expect(health.score).toBeLessThan(100);
+    expect(health.categories.map((x) => x.category)).toEqual([
+      'completeness',
+      'uniqueness',
+      'validity',
+      'range',
+      'units',
+      'time',
+      'spatial',
+      'import',
+    ]);
+  },
   decide: async (c) => {
     const issue = await issueOf(c, 'TW-DQ-006');
     const entries = await c.decide({

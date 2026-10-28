@@ -22,6 +22,7 @@ import {
   type ColumnId,
   type ColumnOverride,
   type ColumnStats,
+  type DatasetHealth,
   type DatasetId,
   type DatasetSummary,
   type Decision,
@@ -73,7 +74,7 @@ import { toIssue } from './issues-state';
 import { JobManager } from './jobs';
 import { explainCell } from './lineage';
 import { datasetDigests, openProjectBytes, projectBytes } from './project-io';
-import { listIssues, listOccurrences, listUnits } from './queries';
+import { datasetHealth, listIssues, listOccurrences, listUnits } from './queries';
 import { applyEntry, checkDrafts, overrideOutcome, type Prepared } from './reducer';
 import { emptyProject, type DatasetState, type ProjectState } from './state';
 import { outputView, viewFor, workingView } from './views';
@@ -99,7 +100,15 @@ const EVERYTHING: Change[] = ['project', 'datasets', 'schema', 'issues', 'audit'
 export interface FileSystem {
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, bytes: Uint8Array): Promise<void>;
+  /**
+   * A source over the file that reads only the ranges asked for. Previews use it, so the preview
+   * of a file of any size reads at most PREVIEW_MAX_BYTES (SAD decision D-12).
+   */
+  open?(path: string): Promise<ByteSource>;
 }
+
+/** The most a file read whole can hold: the largest typed array JavaScript engines allow. */
+const MAX_WHOLE_FILE_BYTES = 2 ** 31 - 1;
 
 export interface LocalEngineOptions {
   appVersion: string;
@@ -464,6 +473,10 @@ export class LocalEngine implements EngineImpl {
 
   async listOccurrences(issueId: IssueId, p: PageRequest): Promise<Page<IssueOccurrence>> {
     return listOccurrences(this.project(), issueId, p);
+  }
+
+  async getHealth(datasetId: DatasetId): Promise<DatasetHealth> {
+    return datasetHealth(this.project(), datasetId);
   }
 
   async decide(d: Decision): Promise<AuditEntry[]> {
@@ -855,6 +868,7 @@ export class LocalEngine implements EngineImpl {
   private async source(file: FileInput): Promise<ByteSource> {
     const name = this.fileName(file);
     if (file.kind === 'blob') return blobSource(file.blob, name);
+    if (file.kind === 'path' && this.o.fs?.open !== undefined) return this.o.fs.open(file.path);
     return bytesSource(await this.readAll(file), name);
   }
 
@@ -865,7 +879,17 @@ export class LocalEngine implements EngineImpl {
       return file.bytes;
     }
     if (file.kind === 'blob') return new Uint8Array(await file.blob.arrayBuffer());
-    return this.fs().readFile(file.path);
+    const fs = this.fs();
+    const size = fs.open === undefined ? 0 : (await fs.open(file.path)).size;
+    if (size > MAX_WHOLE_FILE_BYTES) {
+      throw new EngineError(
+        'MEMORY_BUDGET',
+        `The file ${this.fileName(file)} is ${size} bytes, more than this edition can hold in memory.`,
+        'Open it with the desktop edition, which reads files of any size.',
+        { size, limit: MAX_WHOLE_FILE_BYTES },
+      );
+    }
+    return fs.readFile(file.path);
   }
 
   private emit(e: EngineEvent): void {

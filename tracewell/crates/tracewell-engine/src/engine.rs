@@ -13,7 +13,7 @@ use crate::issues::{
     IssueState, Listed, matches, merge_check_run, occurrence_state, sort, to_issue,
 };
 use crate::parse::Kind;
-use crate::rules::check_packs;
+use crate::rules::{RowSet, check_packs};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub const ENGINE_NAME: &str = "tracewell-native";
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 const ROW_WINDOW_MAX: u64 = 1000;
 const DISTINCT_CAP: i64 = 10_000;
 
@@ -642,6 +642,57 @@ impl Engine {
             }
         }
         Ok(json!({ "items": items, "total": st.flagged.count(), "offset": offset }))
+    }
+
+    /// The data health score (FR-VAL-05), as queries.ts datasetHealth.
+    pub fn health(&self, dataset: &Value) -> Result<Value> {
+        let d = self.dataset(dataset)?;
+        let checked = !d.check_packs.is_empty();
+        let rows = d.row_count;
+        let counted: Vec<&IssueState> = d
+            .issues
+            .iter()
+            .filter(|st| st.draft.severity != "note")
+            .collect();
+        let affected = |sts: &[&IssueState]| {
+            sts.iter()
+                .filter(|st| st.draft.scope == "rows")
+                .fold(RowSet::new(rows), |all, st| {
+                    all.union(&st.current.minus(&st.accepted))
+                })
+                .count()
+        };
+        let open = |sts: &[&IssueState]| {
+            sts.iter()
+                .filter(|st| to_issue(st)["counts"]["open"].as_u64().unwrap_or(0) > 0)
+                .count()
+        };
+        let score = |hit: u64| -> Value {
+            if !checked {
+                return Value::Null;
+            }
+            match (1000 * (rows - hit)).checked_div(rows) {
+                Some(per_mille) => json!(per_mille as f64 / 10.0),
+                None => json!(100),
+            }
+        };
+        let all = affected(&counted);
+        let categories: Vec<Value> = ["completeness", "uniqueness", "validity", "range", "units", "time", "spatial", "import"]
+            .iter()
+            .map(|cat| {
+                let sts: Vec<&IssueState> = counted.iter().copied().filter(|st| st.draft.category == *cat).collect();
+                let hit = affected(&sts);
+                json!({ "category": cat, "score": score(hit), "affectedRows": hit, "openIssues": open(&sts) })
+            })
+            .collect();
+        Ok(json!({
+            "datasetId": d.id,
+            "checked": checked,
+            "rows": rows,
+            "affectedRows": all,
+            "score": score(all),
+            "categories": categories,
+        }))
     }
 
     pub fn list_export_profiles(&self, dataset: &Value) -> Result<Value> {

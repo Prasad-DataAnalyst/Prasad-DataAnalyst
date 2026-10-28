@@ -141,6 +141,9 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       return rest;
     };
     expect(natIssues.map(comparable)).toEqual(refIssues.map(comparable));
+    const { datasetId: _h1, ...natHealth } = await native.client.getHealth(nat);
+    const { datasetId: _h2, ...refHealth } = await reference.getHealth(ref);
+    expect(natHealth).toEqual(refHealth);
     if (process.env['TW_DEBUG'] === '1')
       console.log(name, natIssues.map((i) => `${i.ruleId}:${i.counts.open}`).join(' '));
     for (const [i, issue] of natIssues.entries()) {
