@@ -1,0 +1,18 @@
+{
+  "file": "json_api_wrapper_nested.json",
+  "format": "json",
+  "detections": {"encoding": "utf-8"},
+  "confidence": {"encoding": "high"},
+  "rowCount": 6,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "test_date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Oil rate", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Water cut", "type": "number", "unit": "%", "role": "measure"},
+    {"name": "choke", "type": "string", "unit": null, "role": "text", "assumed": ["type"]},
+    {"name": "flowing", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "comment", "type": "string", "unit": null, "role": "text"}
+  ],
+  "issues": {"TW-DQ-001": 8, "TW-DQ-005": 1, "TW-IMP-005": 1},
+  "notes": []
+}

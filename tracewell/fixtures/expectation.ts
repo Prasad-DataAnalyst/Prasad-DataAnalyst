@@ -44,7 +44,7 @@ export interface FixtureExpectation {
   workingDigest?: Sha256Hex;
 }
 
-const FORMATS: ReadonlySet<string> = new Set<SourceFormat>(['csv', 'tsv', 'xlsx', 'geojson']);
+const FORMATS: ReadonlySet<string> = new Set<SourceFormat>(['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet']);
 const TYPES: ReadonlySet<string> = new Set<LogicalType>([
   'string',
   'integer',

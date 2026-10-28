@@ -83,6 +83,7 @@ function hashingSource(src: ByteSource) {
 
 function schemaFor(datasetId: DatasetId, spec: ImportSpec, partial: boolean): Omit<TableSchema, 'rowCount'> {
   const sheet = spec.options.format === 'xlsx' ? spec.options.xlsx.sheet : undefined;
+  const layout = spec.options.format === 'json' ? spec.options.json.layout : undefined;
   return {
     datasetId,
     name: spec.datasetName,
@@ -91,6 +92,7 @@ function schemaFor(datasetId: DatasetId, spec: ImportSpec, partial: boolean): Om
       fileName: spec.fileName,
       format: spec.options.format,
       ...(sheet === undefined ? {} : { sheet }),
+      ...(layout === undefined ? {} : { layout }),
     },
     columns: spec.columns,
     crs: spec.crs,

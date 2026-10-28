@@ -1,6 +1,7 @@
 /**
  * Human-readable source locators (SAD sections 7.1 and 9.3): 'line 1042, field 3' for delimited
- * text, 'Sheet1!C17' for workbooks and 'feature 12, property "rate"' for GeoJSON.
+ * text, 'Sheet1!C17' for workbooks, 'feature 12, property "rate"' for GeoJSON, 'record 12, key
+ * "rate"' for JSON ('line 13, key "rate"' for JSON Lines) and 'row 12, column "rate"' for Parquet.
  */
 import type { ColumnSchema, TableSchema } from '@tw/model';
 
@@ -36,11 +37,21 @@ export function locator(schema: TableSchema, srcLoc: number, column?: ColumnSche
     }
     case 'geojson':
       return column === undefined ? `feature ${srcLoc}` : `feature ${srcLoc}, ${geoJsonMember(schema, column)}`;
+    case 'json': {
+      const at = `${schema.source.layout === 'lines' ? 'line' : 'record'} ${srcLoc}`;
+      return column === undefined ? at : `${at}, key ${JSON.stringify(sourceName(column))}`;
+    }
+    case 'parquet':
+      return column === undefined ? `row ${srcLoc}` : `row ${srcLoc}, column ${JSON.stringify(sourceName(column))}`;
   }
+}
+
+/** The column's name in the source file, before any renaming. */
+function sourceName(column: ColumnSchema): string {
+  return column.sourceHeader[0] ?? column.name;
 }
 
 function geoJsonMember(schema: TableSchema, column: ColumnSchema): string {
   if (column.id === schema.geometryColumn) return 'geometry';
-  const property = column.sourceHeader[0] ?? column.name;
-  return `property ${JSON.stringify(property)}`;
+  return `property ${JSON.stringify(sourceName(column))}`;
 }

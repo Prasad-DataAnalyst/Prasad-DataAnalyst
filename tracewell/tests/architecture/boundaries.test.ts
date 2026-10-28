@@ -33,6 +33,7 @@ export type ModuleName =
   | 'formats-csv'
   | 'formats-xlsx'
   | 'formats-geojson'
+  | 'formats-json'
   | 'formats-parquet'
   | 'detect'
   | 'table'
@@ -60,12 +61,23 @@ export const ALLOWED: Record<ModuleName, ModuleName[]> = {
   'formats-csv': ['model', 'io'],
   'formats-xlsx': ['model', 'io'],
   'formats-geojson': ['model', 'io'],
+  'formats-json': ['model', 'io'],
   'formats-parquet': ['model'],
   detect: ['model', 'units'],
   table: ['model', 'io'],
   audit: ['model', 'io'],
   'ui-shell': ['model', 'engine-api'],
-  ingest: ['model', 'io', 'detect', 'table', 'formats-csv', 'formats-xlsx', 'formats-geojson'],
+  ingest: [
+    'model',
+    'io',
+    'detect',
+    'table',
+    'formats-csv',
+    'formats-xlsx',
+    'formats-geojson',
+    'formats-json',
+    'formats-parquet',
+  ],
   rules: ['model', 'io', 'table', 'units', 'geo'],
   steps: ['model', 'table', 'units', 'geo'],
   export: ['model', 'io', 'table', 'units', 'geo', 'formats-csv', 'formats-xlsx', 'formats-geojson', 'formats-parquet'],
@@ -113,6 +125,7 @@ export const ALLOWED_NPM: Record<ModuleName, string[]> = {
   'formats-csv': [],
   'formats-xlsx': ['saxes'],
   'formats-geojson': ['@streamparser/json'],
+  'formats-json': ['@streamparser/json'],
   'formats-parquet': ['hyparquet', 'hyparquet-writer'],
   detect: [],
   table: [],
@@ -148,6 +161,7 @@ const ENGINE_SIDE: ModuleName[] = [
   'formats-csv',
   'formats-xlsx',
   'formats-geojson',
+  'formats-json',
   'formats-parquet',
   'ingest',
   'steps',

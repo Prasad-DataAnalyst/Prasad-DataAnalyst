@@ -6,17 +6,63 @@ import { decodeAll, sniffEncoding } from '@tw/io';
 import { detection, type Detection, type Importer, type SourceFormat } from '@tw/model';
 import { csvImporter } from '@tw/formats-csv';
 import { geojsonImporter } from '@tw/formats-geojson';
+import { jsonImporter } from '@tw/formats-json';
+import { parquetImporter } from '@tw/formats-parquet';
 import { xlsxImporter } from '@tw/formats-xlsx';
 
 /** Enough of the file to see past a BOM, leading whitespace and the first line. */
 export const FORMAT_SNIFF_BYTES = 65_536;
 
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
+const PARQUET_MAGIC = [0x50, 0x41, 0x52, 0x31];
+/** GeoJSON object types; one of them as the top-level "type" marks a JSON file as GeoJSON. */
+const GEOJSON_TYPES: ReadonlySet<string> = new Set([
+  'FeatureCollection',
+  'Feature',
+  'Point',
+  'MultiPoint',
+  'LineString',
+  'MultiLineString',
+  'Polygon',
+  'MultiPolygon',
+  'GeometryCollection',
+]);
 const WORKBOOK_ENTRY = new TextEncoder().encode('xl/workbook');
 
 function extensionOf(fileName: string): string {
   const dot = fileName.lastIndexOf('.');
   return dot < 0 ? '' : fileName.slice(dot + 1).toLowerCase();
+}
+
+/** The index of the quote closing the string that opens at `start`, or -1 when the text ends first. */
+function stringEnd(text: string, start: number): number {
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] === '\\') i++;
+    else if (text[i] === '"') return i;
+  }
+  return -1;
+}
+
+/**
+ * The value of the top-level object's "type" member when it is a string within `text`, else null.
+ * Members of nested objects (a record's own "type", say) are skipped.
+ */
+function topLevelType(text: string): string | null {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      const end = stringEnd(text, i);
+      if (end < 0) return null;
+      if (depth === 1 && text.slice(i, end + 1) === '"type"') {
+        const value = /^\s*:\s*"([^"\\]*)"/.exec(text.slice(end + 1, end + 64));
+        if (value !== null) return value[1] ?? null;
+      }
+      i = end;
+    } else if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') depth--;
+  }
+  return null;
 }
 
 function startsWith(bytes: Uint8Array, prefix: readonly number[]): boolean {
@@ -46,20 +92,35 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
     );
   }
 
+  if (startsWith(head, PARQUET_MAGIC)) {
+    return detection('parquet', 'high', 'parquet-magic', 'The file starts with the Parquet marker PAR1.');
+  }
+
   const sample = head.subarray(0, Math.min(head.length, FORMAT_SNIFF_BYTES));
   const { bomLength, value: encoding } = sniffEncoding(sample);
   const text = decodeAll(sample, encoding, bomLength).replace(/^\uFEFF/, '');
   const first = text.trimStart().charAt(0);
 
   if (first === '{' || first === '[') {
-    const known = ext === 'geojson' || ext === 'json';
+    if (ext === 'geojson') {
+      return detection('geojson', 'high', 'json-start', 'The file starts with JSON and has the .geojson extension.');
+    }
+    if (first === '{' && GEOJSON_TYPES.has(topLevelType(text.trimStart()) ?? '')) {
+      return detection(
+        'geojson',
+        ext === 'json' ? 'high' : 'medium',
+        'geojson-type',
+        'The file is a JSON object with a GeoJSON "type" member, so it is read as GeoJSON.',
+      );
+    }
+    const known = ext === 'json' || ext === 'jsonl' || ext === 'ndjson';
     return detection(
-      'geojson',
+      'json',
       known ? 'high' : 'medium',
       'json-start',
       known
         ? `The file starts with JSON and has the .${ext} extension.`
-        : 'The file starts with JSON, so it is read as GeoJSON.',
+        : 'The file starts with JSON and holds no GeoJSON object type, so it is read as JSON records.',
     );
   }
 
@@ -93,5 +154,9 @@ export function importerFor(format: SourceFormat): Importer {
       return xlsxImporter;
     case 'geojson':
       return geojsonImporter;
+    case 'json':
+      return jsonImporter;
+    case 'parquet':
+      return parquetImporter;
   }
 }

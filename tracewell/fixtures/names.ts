@@ -26,7 +26,10 @@ export type FixtureName =
   | 'geojson_legacy_crs_27700.geojson'
   | 'geojson_invalid_geometries.geojson'
   | 'geojson_swapped_lonlat.geojson'
-  | 'geojson_mixed_geometry_nested_props.geojson';
+  | 'geojson_mixed_geometry_nested_props.geojson'
+  | 'json_api_wrapper_nested.json'
+  | 'jsonl_well_tests_crlf.jsonl'
+  | 'parquet_well_daily_typed.parquet';
 
 export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'csv_well_daily_golden.csv',
@@ -55,4 +58,7 @@ export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'geojson_invalid_geometries.geojson',
   'geojson_swapped_lonlat.geojson',
   'geojson_mixed_geometry_nested_props.geojson',
+  'json_api_wrapper_nested.json',
+  'jsonl_well_tests_crlf.jsonl',
+  'parquet_well_daily_typed.parquet',
 ]);

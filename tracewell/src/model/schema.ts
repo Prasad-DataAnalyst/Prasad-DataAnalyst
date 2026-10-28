@@ -1,6 +1,7 @@
 /** Table schemas (SAD section 7.4): what each column is, and how sure the engine is about it. */
 import type { Detection } from './detection';
 import type { ColumnId, DatasetId, FileId, StepId } from './ids';
+import type { JsonLayout } from './formats';
 import type { LogicalType } from './values';
 
 export type ColumnRole =
@@ -62,12 +63,13 @@ export interface ColumnSchema {
 /** A column as planned by detection, before any step can derive from it. */
 export type ColumnPlan = Omit<ColumnSchema, 'derivedFrom'>;
 
-export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson';
+export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet';
 
 export interface TableSchema {
   datasetId: DatasetId;
   name: string;
-  source: { fileId: FileId; fileName: string; format: SourceFormat; sheet?: string };
+  /** `sheet` is set for workbooks, `layout` for JSON (it decides how rows are located). */
+  source: { fileId: FileId; fileName: string; format: SourceFormat; sheet?: string; layout?: JsonLayout };
   rowCount: number;
   columns: ColumnSchema[];
   crs: Detection<CrsRef> | null;

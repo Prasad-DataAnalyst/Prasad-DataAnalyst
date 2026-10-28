@@ -53,7 +53,7 @@ const LINE = z.number().int().positive();
 const expectationSchema = z
   .object({
     file: z.enum(FIXTURE_NAMES as [FixtureName, ...FixtureName[]]),
-    format: z.enum(['csv', 'tsv', 'xlsx', 'geojson']),
+    format: z.enum(['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet']),
     detections: z
       .object({
         encoding: z.enum(['utf-8', 'utf-16le', 'utf-16be', 'windows-1252']),
@@ -117,8 +117,8 @@ function rawExpectation(name: FixtureName): unknown {
 // The library and its checksums
 
 describe('the messy-file library', () => {
-  it('lists 26 distinct fixtures', () => {
-    expect(new Set(FIXTURE_NAMES).size).toBe(26);
+  it('lists 29 distinct fixtures', () => {
+    expect(new Set(FIXTURE_NAMES).size).toBe(29);
     expect(DELIMITED).toHaveLength(15);
     expect(XLSX).toHaveLength(6);
     expect(GEOJSON).toHaveLength(5);
@@ -185,7 +185,8 @@ describe('expected files', () => {
 
   it.each(FIXTURE_NAMES)('%s: the format follows the file extension', (name) => {
     const extension = name.slice(name.lastIndexOf('.') + 1);
-    expect(fixtureExpectation(name).format).toBe(extension);
+    // JSON Lines files are JSON records in the 'lines' layout.
+    expect(fixtureExpectation(name).format).toBe(extension === 'jsonl' ? 'json' : extension);
   });
 
   it.each(FIXTURE_NAMES)('%s: the expectation follows the README conventions', (name) => {
@@ -198,6 +199,8 @@ const DETECTIONS_BY_FORMAT: Record<FixtureExpectation['format'], string[]> = {
   tsv: ['encoding', 'delimiter', 'decimalSeparator', 'skipLines', 'headerRows'],
   xlsx: ['sheet', 'date1904', 'skipLines', 'headerRows'],
   geojson: ['encoding', 'crs'],
+  json: ['encoding'],
+  parquet: [],
 };
 
 /** Rules flagging rows across the whole dataset: their count can never exceed the row count. */

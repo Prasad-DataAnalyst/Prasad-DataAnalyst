@@ -136,7 +136,12 @@ function estimateRows(src: ByteSource, sniff: SniffResult): number | null {
     }
     return null;
   }
-  if (sniff.format === 'geojson' || n === 0) return null;
+  if (sniff.format === 'parquet') {
+    // The footer states the row count exactly.
+    const rows = sniff.detections['rowCount']?.value;
+    return typeof rows === 'number' ? rows : null;
+  }
+  if (sniff.format === 'geojson' || sniff.format === 'json' || n === 0) return null;
   const avg =
     sniff.sampleRows.reduce(
       (sum, r) => sum + r.fields.reduce<number>((s, f) => s + (f === null ? 0 : String(f).length + 1), 1),

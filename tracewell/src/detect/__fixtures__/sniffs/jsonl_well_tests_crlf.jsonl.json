@@ -1,0 +1,39 @@
+{
+  "fixture": "jsonl_well_tests_crlf.jsonl",
+  "format": "json",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": ""
+  },
+  "header": [["well_id", "start", "Gas rate (MMscf/d)", "Separator pressure (psig)", "notes"]],
+  "sampleRows": [
+    {
+      "srcLoc": 1,
+      "fields": ["WT-01", "2026-02-01T06:00:00Z", 12.4, 850]
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["WT-02", "2026-02-01T18:00:00Z", 11.95, 842]
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["WT-03", "2026-02-02T06:00:00Z", 13.1, 861]
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["WT-04", "2026-02-02T18:00:00Z", -999.25, 838]
+    },
+    {
+      "srcLoc": 6,
+      "fields": ["WT-05", "2026-02-03T06:00:00Z", 12.75, 855]
+    },
+    {
+      "srcLoc": 7,
+      "fields": ["WT-06", "2026-02-03T18:00:00Z", 12.2, 849, "choke changed to 40/64"]
+    },
+    {
+      "srcLoc": 8,
+      "fields": ["WT-07", "2026-02-04T06:00:00Z", 12.6, 851, null]
+    }
+  ]
+}

@@ -13,12 +13,12 @@ fixtures/
 ├── expectation.test.ts          the expected-file check on malformed documents
 ├── generators.test.ts           the generators reproduce the library; the large CSV is deterministic
 ├── messy/
-│   ├── <name>                   26 fixtures, byte-exact (.gitattributes marks them binary)
+│   ├── <name>                   29 fixtures, byte-exact (.gitattributes marks them binary)
 │   ├── <name>.expected.json     what importing and checking <name> must give
 │   └── SHA256SUMS               SHA-256 of every fixture, for `sha256sum -c SHA256SUMS`
 └── generators/
     ├── make_xlsx_fixtures.py    the 6 XLSX files (openpyxl, 4 of them saved again by LibreOffice)
-    ├── gen-text-fixtures.mjs    the 20 CSV, TSV and GeoJSON files with exact bytes, then SHA256SUMS
+    ├── gen-text-fixtures.mjs    the 22 CSV, TSV, GeoJSON and JSON files with exact bytes, the Parquet file, then SHA256SUMS
     ├── gen-large-csv.mjs        seeded large CSV for the @slow tests (never committed)
     └── shared.mjs               fixture list, seeded random numbers, the Hampel test used by the generators
 ```
@@ -54,7 +54,7 @@ The loader is for Node (tests and tools). It reads from disk synchronously and t
 
 | Field            | Meaning                                                                                                                                                                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file`, `format` | The fixture and its format: `csv`, `tsv`, `xlsx` or `geojson`.                                                                                                                                                                                              |
+| `file`, `format` | The fixture and its format: `csv`, `tsv`, `xlsx`, `geojson`, `json` or `parquet`.                                                                                                                                                                           |
 | `detections`     | Dataset-level detections. CSV/TSV: `encoding`, `delimiter`, `decimalSeparator`, `skipLines`, `headerRows`, and `crs` when the file has latitude/longitude columns. XLSX: `sheet`, `date1904`, `skipLines`, `headerRows`. GeoJSON: `encoding`, `crs`.        |
 | `confidence`     | The confidence of each listed detection (`high`, `medium`, `low`). A detection is assumed when it is not `high` or is a default.                                                                                                                            |
 | `rowCount`       | Data rows imported.                                                                                                                                                                                                                                         |
@@ -195,6 +195,9 @@ All are UTF-8 FeatureCollections written with two-space indentation and a final 
 | `geojson_invalid_geometries.geojson`          | 12   | Features 2, 4, 6, 7, 8, 10 and 12 (1-based) are invalid: ring not closed, ring of three positions, bow-tie ring, line with one position, `null` longitude, MultiPolygon without coordinates, unknown type `Circle`. Feature 11 has a null geometry. The rest are valid; every feature is still imported. The `note` property says what is wrong. |
 | `geojson_swapped_lonlat.geojson`              | 10   | Points off Western Australia (longitudes near 115.7); WA-03, WA-06 and WA-09 are written latitude first, which puts their latitude beyond 90.                                                                                                                                                                                                    |
 | `geojson_mixed_geometry_nested_props.geojson` | 8    | Every geometry type, a GeometryCollection included; nested properties (`operator` objects, `tags` arrays, one empty) kept as JSON text; `Capacity (MMscf/d)` numeric except `"pending"`; `commissioned` absent from MX-07; boolean `active`.                                                                                                     |
+| `json_api_wrapper_nested.json`                | 6    | An API response: the rows sit under `data`, beside paging members (`status`, `count`, `next`). `Water cut (%)` is absent from NS-B04 and null in NS-B03; `comment` first appears in NS-B05; `choke` holds objects (kept as JSON text); NS-B06 has a water cut of 140 %.                                                                       |
+| `jsonl_well_tests_crlf.jsonl`                 | 7    | JSON Lines with CRLF line endings and a blank fourth line; WT-04 has `-999.25` as a number, which occurs once and so is read as data (`TW-DQ-005`: below the physical limit); `notes` first appears in WT-06. Rows are located by line.                                                                                                     |
+| `parquet_well_daily_typed.parquet`            | 8    | Typed Parquet columns: text, DATE, TIMESTAMP_MICROS (UTC), DOUBLE with a unit in its name and one null, INT64 and BOOLEAN; `remark` is null except on the shut-in day.                                                                                                                                                                          |
 
 ## Large generated CSV
 

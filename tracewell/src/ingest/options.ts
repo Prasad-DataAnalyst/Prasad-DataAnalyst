@@ -12,6 +12,9 @@ export function detectOptionsFor(options: FormatOptions): DetectOptions {
       return { decimalSeparator: '.', thousandsSeparator: '' };
     case 'geojson':
       return { decimalSeparator: '.', thousandsSeparator: '', geometryColumn: true };
+    case 'json':
+    case 'parquet':
+      return { decimalSeparator: '.', thousandsSeparator: '' };
   }
 }
 

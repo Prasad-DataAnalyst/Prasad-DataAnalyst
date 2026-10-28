@@ -1,0 +1,18 @@
+{
+  "file": "parquet_well_daily_typed.parquet",
+  "format": "parquet",
+  "detections": {},
+  "confidence": {},
+  "rowCount": 8,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "day", "type": "date", "unit": null, "role": "time"},
+    {"name": "recorded_at", "type": "datetime", "unit": null, "role": "time"},
+    {"name": "Oil rate", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "choke_64ths", "type": "integer", "unit": null, "role": "measure"},
+    {"name": "shut_in", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "remark", "type": "string", "unit": null, "role": "text"}
+  ],
+  "issues": {"TW-DQ-001": 8, "TW-UNIT-001": 1},
+  "notes": []
+}

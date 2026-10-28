@@ -33,6 +33,9 @@ export const ALL_FIXTURES = Object.freeze([
   'geojson_invalid_geometries.geojson',
   'geojson_swapped_lonlat.geojson',
   'geojson_mixed_geometry_nested_props.geojson',
+  'json_api_wrapper_nested.json',
+  'jsonl_well_tests_crlf.jsonl',
+  'parquet_well_daily_typed.parquet',
 ]);
 
 /**

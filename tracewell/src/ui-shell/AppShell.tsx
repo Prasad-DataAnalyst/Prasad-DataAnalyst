@@ -281,7 +281,7 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
                     </div>
                   ) : (
                     <div className="tw-empty">
-                      Import a CSV, Excel or GeoJSON file to begin (File › Import file…, Ctrl+I).
+                      Import a CSV, Excel, GeoJSON, JSON or Parquet file to begin (File › Import file…, Ctrl+I).
                     </div>
                   )}
                 </Panel>

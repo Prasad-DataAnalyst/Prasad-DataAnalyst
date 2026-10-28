@@ -1,0 +1,8 @@
+{"well_id":"WT-01","start":"2026-02-01T06:00:00Z","Gas rate (MMscf/d)":12.4,"Separator pressure (psig)":850}
+{"well_id":"WT-02","start":"2026-02-01T18:00:00Z","Gas rate (MMscf/d)":11.95,"Separator pressure (psig)":842}
+{"well_id":"WT-03","start":"2026-02-02T06:00:00Z","Gas rate (MMscf/d)":13.1,"Separator pressure (psig)":861}
+
+{"well_id":"WT-04","start":"2026-02-02T18:00:00Z","Gas rate (MMscf/d)":-999.25,"Separator pressure (psig)":838}
+{"well_id":"WT-05","start":"2026-02-03T06:00:00Z","Gas rate (MMscf/d)":12.75,"Separator pressure (psig)":855}
+{"well_id":"WT-06","start":"2026-02-03T18:00:00Z","Gas rate (MMscf/d)":12.2,"Separator pressure (psig)":849,"notes":"choke changed to 40/64"}
+{"well_id":"WT-07","start":"2026-02-04T06:00:00Z","Gas rate (MMscf/d)":12.6,"Separator pressure (psig)":851}

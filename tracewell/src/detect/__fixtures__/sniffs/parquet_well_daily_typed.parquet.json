@@ -1,0 +1,123 @@
+{
+  "fixture": "parquet_well_daily_typed.parquet",
+  "format": "parquet",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": ""
+  },
+  "header": [["well_id", "day", "recorded_at", "Oil rate (bbl/d)", "choke_64ths", "shut_in", "remark"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": [
+        "NS-C01",
+        {
+          "date": "2026-03-01"
+        },
+        "2026-03-01T06:00:00.000Z",
+        900,
+        28,
+        false,
+        null
+      ]
+    },
+    {
+      "srcLoc": 1,
+      "fields": [
+        "NS-C02",
+        {
+          "date": "2026-03-01"
+        },
+        "2026-03-01T06:01:00.000Z",
+        912.5,
+        32,
+        false,
+        null
+      ]
+    },
+    {
+      "srcLoc": 2,
+      "fields": [
+        "NS-C01",
+        {
+          "date": "2026-03-02"
+        },
+        "2026-03-02T06:00:00.000Z",
+        925,
+        36,
+        false,
+        null
+      ]
+    },
+    {
+      "srcLoc": 3,
+      "fields": [
+        "NS-C02",
+        {
+          "date": "2026-03-02"
+        },
+        "2026-03-02T06:01:00.000Z",
+        937.5,
+        28,
+        false,
+        null
+      ]
+    },
+    {
+      "srcLoc": 4,
+      "fields": [
+        "NS-C01",
+        {
+          "date": "2026-03-03"
+        },
+        "2026-03-03T06:00:00.000Z",
+        950,
+        32,
+        false,
+        null
+      ]
+    },
+    {
+      "srcLoc": 5,
+      "fields": [
+        "NS-C02",
+        {
+          "date": "2026-03-03"
+        },
+        "2026-03-03T06:01:00.000Z",
+        null,
+        36,
+        false,
+        null
+      ]
+    },
+    {
+      "srcLoc": 6,
+      "fields": [
+        "NS-C01",
+        {
+          "date": "2026-03-04"
+        },
+        "2026-03-04T06:00:00.000Z",
+        975,
+        28,
+        true,
+        "shut in for survey"
+      ]
+    },
+    {
+      "srcLoc": 7,
+      "fields": [
+        "NS-C02",
+        {
+          "date": "2026-03-04"
+        },
+        "2026-03-04T06:01:00.000Z",
+        987.5,
+        32,
+        false,
+        null
+      ]
+    }
+  ]
+}

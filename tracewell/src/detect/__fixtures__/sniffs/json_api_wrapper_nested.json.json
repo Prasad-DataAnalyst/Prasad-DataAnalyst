@@ -1,0 +1,35 @@
+{
+  "fixture": "json_api_wrapper_nested.json",
+  "format": "json",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": ""
+  },
+  "header": [["well_id", "test_date", "Oil rate (bbl/d)", "Water cut (%)", "choke", "flowing", "comment"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": ["NS-B01", "2026-03-02", 1250.5, 12.5, "{\"size\":32,\"unit\":\"64ths\"}", true]
+    },
+    {
+      "srcLoc": 1,
+      "fields": ["NS-B02", "2026-03-02", 980, 30.25, "{\"size\":28,\"unit\":\"64ths\"}", true]
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["NS-B03", "2026-03-03", 0, null, null, false]
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["NS-B04", "2026-03-03", 1105.75, null, "{\"size\":30,\"unit\":\"64ths\"}", true]
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["NS-B05", "2026-03-04", 1430, 8, "{\"size\":36,\"unit\":\"64ths\"}", true, "after workover"]
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["NS-B06", "2026-03-05", 1010.5, 140, "{\"size\":30,\"unit\":\"64ths\"}", true, null]
+    }
+  ]
+}

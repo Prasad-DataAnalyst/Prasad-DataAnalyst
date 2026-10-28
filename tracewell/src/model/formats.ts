@@ -38,13 +38,37 @@ export interface GeoJsonOptions {
   nested: 'json-text';
 }
 
+/**
+ * How a JSON file holds its records: 'array', an array of objects; 'lines', one object per line
+ * (JSON Lines, NDJSON); 'member', an object whose member `member` is an array of objects.
+ */
+export type JsonLayout = 'array' | 'lines' | 'member';
+
+export interface JsonOptions {
+  layout: JsonLayout;
+  /** The top-level member holding the records when the layout is 'member'; '' otherwise. */
+  member: string;
+  /** Nested objects and arrays become JSON text columns. */
+  nested: 'json-text';
+}
+
+export interface ParquetOptions {
+  /** Lists, maps and structs become JSON text columns. */
+  nested: 'json-text';
+}
+
 export type FormatOptions =
   | { format: 'csv' | 'tsv'; csv: CsvOptions }
   | { format: 'xlsx'; xlsx: XlsxOptions }
-  | { format: 'geojson'; geojson: GeoJsonOptions };
+  | { format: 'geojson'; geojson: GeoJsonOptions }
+  | { format: 'json'; json: JsonOptions }
+  | { format: 'parquet'; parquet: ParquetOptions };
 
 export interface RawRow {
-  /** CSV physical line (1-based) | sheet row (1-based) | feature index (0-based). */
+  /**
+   * CSV physical line (1-based) | sheet row (1-based) | feature index (0-based) | JSON record
+   * index (0-based) or, for JSON Lines, line (1-based) | Parquet row index (0-based).
+   */
   srcLoc: number;
   fields: RawField[];
   geometry?: Geometry | null;

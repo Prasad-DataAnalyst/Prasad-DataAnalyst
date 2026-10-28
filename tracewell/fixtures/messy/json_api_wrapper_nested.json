@@ -1,0 +1,70 @@
+{
+  "status": "ok",
+  "count": 6,
+  "data": [
+    {
+      "well_id": "NS-B01",
+      "test_date": "2026-03-02",
+      "Oil rate (bbl/d)": 1250.5,
+      "Water cut (%)": 12.5,
+      "choke": {
+        "size": 32,
+        "unit": "64ths"
+      },
+      "flowing": true
+    },
+    {
+      "well_id": "NS-B02",
+      "test_date": "2026-03-02",
+      "Oil rate (bbl/d)": 980,
+      "Water cut (%)": 30.25,
+      "choke": {
+        "size": 28,
+        "unit": "64ths"
+      },
+      "flowing": true
+    },
+    {
+      "well_id": "NS-B03",
+      "test_date": "2026-03-03",
+      "Oil rate (bbl/d)": 0,
+      "Water cut (%)": null,
+      "choke": null,
+      "flowing": false
+    },
+    {
+      "well_id": "NS-B04",
+      "test_date": "2026-03-03",
+      "Oil rate (bbl/d)": 1105.75,
+      "choke": {
+        "size": 30,
+        "unit": "64ths"
+      },
+      "flowing": true
+    },
+    {
+      "well_id": "NS-B05",
+      "test_date": "2026-03-04",
+      "Oil rate (bbl/d)": 1430,
+      "Water cut (%)": 8,
+      "choke": {
+        "size": 36,
+        "unit": "64ths"
+      },
+      "flowing": true,
+      "comment": "after workover"
+    },
+    {
+      "well_id": "NS-B06",
+      "test_date": "2026-03-05",
+      "Oil rate (bbl/d)": 1010.5,
+      "Water cut (%)": 140,
+      "choke": {
+        "size": 30,
+        "unit": "64ths"
+      },
+      "flowing": true
+    }
+  ],
+  "next": null
+}

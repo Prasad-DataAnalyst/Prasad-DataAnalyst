@@ -1,8 +1,9 @@
 // @ts-check
 /**
- * Writes the text fixtures of the messy-file library (CSV, TSV and GeoJSON) with exact bytes:
+ * Writes the text fixtures of the messy-file library (CSV, TSV, GeoJSON and JSON) with exact bytes:
  * encodings, byte-order marks and line endings are chosen per file, never left to the platform.
- * Then writes SHA256SUMS over every fixture, the XLSX files included.
+ * The Parquet fixture is written here too, by hyparquet-writer, whose output depends only on the
+ * values given. Then writes SHA256SUMS over every fixture, the XLSX files included.
  *
  * Usage: node fixtures/generators/gen-text-fixtures.mjs [--out <dir>] [--no-sums]
  *   --out <dir>  write into <dir> instead of fixtures/messy
@@ -16,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parquetWriteBuffer } from 'hyparquet-writer';
 import { ALL_FIXTURES, hampelFlags, isEntryScript, longestRun, mulberry32, noise } from './shared.mjs';
 
 const DEFAULT_OUT = fileURLToPath(new URL('../messy/', import.meta.url));
@@ -1207,6 +1209,110 @@ function mixedGeometryNested() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// JSON and Parquet
+
+/**
+ * A reporting system's API response saved to disk: the well tests sit under "data", next to
+ * paging members that are not rows. One record lacks the water cut key, one holds it as null, a
+ * key first appears in the fifth record, the choke settings are nested objects, and one water cut
+ * is over 100 %.
+ */
+function jsonApiWrapper() {
+  const choke = (/** @type {number} */ size) => ({ size, unit: '64ths' });
+  const data = [
+    { well_id: 'NS-B01', test_date: '2026-03-02', 'Oil rate (bbl/d)': 1250.5, 'Water cut (%)': 12.5, choke: choke(32), flowing: true },
+    { well_id: 'NS-B02', test_date: '2026-03-02', 'Oil rate (bbl/d)': 980, 'Water cut (%)': 30.25, choke: choke(28), flowing: true },
+    { well_id: 'NS-B03', test_date: '2026-03-03', 'Oil rate (bbl/d)': 0, 'Water cut (%)': null, choke: null, flowing: false },
+    { well_id: 'NS-B04', test_date: '2026-03-03', 'Oil rate (bbl/d)': 1105.75, choke: choke(30), flowing: true },
+    {
+      well_id: 'NS-B05',
+      test_date: '2026-03-04',
+      'Oil rate (bbl/d)': 1430,
+      'Water cut (%)': 8,
+      choke: choke(36),
+      flowing: true,
+      comment: 'after workover',
+    },
+    { well_id: 'NS-B06', test_date: '2026-03-05', 'Oil rate (bbl/d)': 1010.5, 'Water cut (%)': 140, choke: choke(30), flowing: true },
+  ];
+  const doc = { status: 'ok', count: data.length, data, next: null };
+  return { name: 'json_api_wrapper_nested.json', bytes: utf8(`${JSON.stringify(doc, null, 2)}\n`) };
+}
+
+/**
+ * Well tests exported as JSON Lines with CRLF line endings: a blank line between two records, the
+ * -999.25 null marker as a number, and a "notes" key that first appears in the sixth record.
+ */
+function jsonLinesWellTests() {
+  const records = [
+    { well_id: 'WT-01', start: '2026-02-01T06:00:00Z', 'Gas rate (MMscf/d)': 12.4, 'Separator pressure (psig)': 850 },
+    { well_id: 'WT-02', start: '2026-02-01T18:00:00Z', 'Gas rate (MMscf/d)': 11.95, 'Separator pressure (psig)': 842 },
+    { well_id: 'WT-03', start: '2026-02-02T06:00:00Z', 'Gas rate (MMscf/d)': 13.1, 'Separator pressure (psig)': 861 },
+    null,
+    { well_id: 'WT-04', start: '2026-02-02T18:00:00Z', 'Gas rate (MMscf/d)': -999.25, 'Separator pressure (psig)': 838 },
+    { well_id: 'WT-05', start: '2026-02-03T06:00:00Z', 'Gas rate (MMscf/d)': 12.75, 'Separator pressure (psig)': 855 },
+    {
+      well_id: 'WT-06',
+      start: '2026-02-03T18:00:00Z',
+      'Gas rate (MMscf/d)': 12.2,
+      'Separator pressure (psig)': 849,
+      notes: 'choke changed to 40/64',
+    },
+    { well_id: 'WT-07', start: '2026-02-04T06:00:00Z', 'Gas rate (MMscf/d)': 12.6, 'Separator pressure (psig)': 851 },
+  ];
+  const text = records.map((r) => (r === null ? '' : JSON.stringify(r))).join('\r\n');
+  return { name: 'jsonl_well_tests_crlf.jsonl', bytes: utf8(`${text}\r\n`) };
+}
+
+/**
+ * Daily well data as a data platform writes Parquet: typed columns (text, DATE, TIMESTAMP in
+ * microseconds marked UTC, DOUBLE, INT64, BOOLEAN), nulls, and units in the column names.
+ */
+function parquetWellDaily() {
+  const days = range(8);
+  const wells = ['NS-C01', 'NS-C02'];
+  const rows = days.map((i) => ({
+    well: /** @type {string} */ (wells[i % 2]),
+    day: 20_513 + Math.floor(i / 2),
+    at: BigInt(Date.parse('2026-03-01T06:00:00Z') + Math.floor(i / 2) * 86_400_000 + (i % 2) * 60_000) * 1000n,
+    rate: i === 5 ? null : 900 + i * 12.5,
+    choke: BigInt(28 + (i % 3) * 4),
+    shutIn: i === 6,
+    remark: i === 6 ? 'shut in for survey' : null,
+  }));
+  /** @param {string} name @param {string} type @param {string | undefined} converted */
+  const column = (name, type, converted) => ({
+    name,
+    type,
+    repetition_type: 'OPTIONAL',
+    ...(converted === undefined ? {} : { converted_type: converted }),
+  });
+  const schema = [
+    { name: 'root', num_children: 7 },
+    column('well_id', 'BYTE_ARRAY', 'UTF8'),
+    column('day', 'INT32', 'DATE'),
+    column('recorded_at', 'INT64', 'TIMESTAMP_MICROS'),
+    column('Oil rate (bbl/d)', 'DOUBLE', undefined),
+    column('choke_64ths', 'INT64', undefined),
+    column('shut_in', 'BOOLEAN', undefined),
+    column('remark', 'BYTE_ARRAY', 'UTF8'),
+  ];
+  const buffer = parquetWriteBuffer({
+    columnData: [
+      { name: 'well_id', data: rows.map((r) => r.well) },
+      { name: 'day', data: rows.map((r) => r.day) },
+      { name: 'recorded_at', data: rows.map((r) => r.at) },
+      { name: 'Oil rate (bbl/d)', data: rows.map((r) => r.rate) },
+      { name: 'choke_64ths', data: rows.map((r) => r.choke) },
+      { name: 'shut_in', data: rows.map((r) => r.shutIn) },
+      { name: 'remark', data: rows.map((r) => r.remark) },
+    ],
+    schema: /** @type {never} */ (schema),
+  });
+  return { name: 'parquet_well_daily_typed.parquet', bytes: new Uint8Array(buffer) };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Output
 
 /** @returns {FixtureFile[]} */
@@ -1232,6 +1338,9 @@ export function buildTextFixtures() {
     invalidGeometries(),
     swappedLonLat(),
     mixedGeometryNested(),
+    jsonApiWrapper(),
+    jsonLinesWellTests(),
+    parquetWellDaily(),
   ];
 }
 

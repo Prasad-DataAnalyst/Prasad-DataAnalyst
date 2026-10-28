@@ -1,0 +1,17 @@
+{
+  "file": "jsonl_well_tests_crlf.jsonl",
+  "format": "json",
+  "detections": {"encoding": "utf-8"},
+  "confidence": {"encoding": "high"},
+  "rowCount": 7,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "start", "type": "datetime", "unit": null, "role": "time"},
+    {"name": "Gas rate", "type": "number", "unit": "MMscf/d", "role": "measure"},
+    {"name": "Separator pressure", "type": "integer", "unit": "psig", "role": "measure"},
+    {"name": "notes", "type": "string", "unit": null, "role": "text"}
+  ],
+  "issues": {"TW-DQ-001": 6, "TW-DQ-005": 1},
+  "notes": [],
+  "locators": {"rows": [1, 2, 3, 5, 6, 7, 8]}
+}
