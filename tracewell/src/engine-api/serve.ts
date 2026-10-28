@@ -8,6 +8,7 @@ import {
   unknownMethodError,
   unsendableResultError,
 } from './messages';
+import { framedPort, type ByteChannel } from './framing';
 import type { EngineApi, EngineImpl, MessagePortLike, RpcEvent, RpcRequest, RpcResponse } from './protocol';
 
 /**
@@ -61,4 +62,9 @@ function reply(port: MessagePortLike, response: RpcResponse): void {
   } catch (e) {
     reportAsync(e);
   }
+}
+
+/** Serves an implementation over a byte channel (JSON lines plus binary frames), as an engine process does. */
+export function serveStdio(impl: EngineImpl, ch: ByteChannel): () => void {
+  return serve(impl, framedPort(ch));
 }

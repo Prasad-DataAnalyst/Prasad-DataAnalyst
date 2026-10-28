@@ -16,6 +16,7 @@ import {
   workerError,
   type CallOutcome,
 } from './messages';
+import { framedPort, type ByteChannel } from './framing';
 import type { EngineApi, EngineEvent, EngineImpl, MessagePortLike, RpcRequest, Transport } from './protocol';
 
 interface Pending {
@@ -90,6 +91,26 @@ class PortConnection implements Transport {
 /** Talks to an engine bound with serve() at the other end of a MessagePort. */
 export function portTransport(port: MessagePortLike): Transport {
   return new PortConnection(port);
+}
+
+/**
+ * Talks to an engine in another process over a byte channel, such as the native engine's stdin and
+ * stdout: JSON lines plus binary frames (framing.ts). When the stream ends, calls still waiting are
+ * rejected with the reason, because no answer can come any more.
+ */
+export function stdioTransport(ch: ByteChannel): Transport {
+  const port = framedPort(ch);
+  const connection = new PortConnection(port);
+  port.onClose((reason) =>
+    connection.failPending(
+      new EngineError(
+        'INTERNAL',
+        `The engine process stopped: ${reason}.`,
+        'Restart Tracewell to start the engine again, then check the Jobs panel before repeating the operation.',
+      ),
+    ),
+  );
+  return connection;
 }
 
 /**

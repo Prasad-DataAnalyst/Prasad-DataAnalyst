@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect } from 'vitest';
 import type { EngineClient } from '@tw/engine-api';
 import type { Issue, ProjectOpenReport, SaveResult } from '@tw/model';
-import { ENGINE_FACTORIES, defineConformance, importFixture, newProject, runChecks } from './harness';
+import { defineConformance, importFixture, newProject, runChecks } from './harness';
 
 async function snapshot(engine: EngineClient, datasetId: string) {
   return {
@@ -17,7 +17,7 @@ async function snapshot(engine: EngineClient, datasetId: string) {
   };
 }
 
-defineConformance('project-roundtrip: save to a file and open it in a new engine', async (engine) => {
+defineConformance('project-roundtrip: save to a file and open it in a new engine', async (engine, fresh) => {
   const dir = mkdtempSync(join(tmpdir(), 'tw-conformance-'));
   try {
     await newProject(engine);
@@ -35,14 +35,14 @@ defineConformance('project-roundtrip: save to a file and open it in a new engine
     expect(saved.bytes).toBeUndefined();
     const before = await snapshot(engine, ds.id);
 
-    const fresh = await (Object.values(ENGINE_FACTORIES)[0] as () => Promise<EngineClient>)();
+    const other = await fresh();
     try {
-      const report = await fresh.awaitJob<ProjectOpenReport>(await fresh.openProject({ kind: 'path', path }));
+      const report = await other.awaitJob<ProjectOpenReport>(await other.openProject({ kind: 'path', path }));
       expect(report.readOnly).toBe(false);
       expect(report.checks.every((c) => c.ok)).toBe(true);
-      expect(await snapshot(fresh, ds.id)).toEqual(before);
+      expect(await snapshot(other, ds.id)).toEqual(before);
     } finally {
-      fresh.close();
+      other.close();
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

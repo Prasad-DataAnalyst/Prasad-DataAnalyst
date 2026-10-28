@@ -7,7 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'vitest';
-import { EngineClient, inProcessTransport } from '@tw/engine-api';
+import { EngineClient, inProcessTransport, serveStdio, stdioTransport, type ByteChannel } from '@tw/engine-api';
 import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { fixturePath, type FixtureName } from '@tw/fixtures';
 import { nodeFs } from '@tw/io/node';
@@ -17,27 +17,47 @@ export type EngineFactory = () => Promise<EngineClient>;
 
 export const START = '2026-10-19T08:00:00.000Z';
 
+function localEngine(): LocalEngine {
+  return new LocalEngine({
+    appVersion: '0.1.0',
+    owner: 'Prasad',
+    clock: fixedClock(START),
+    ids: seededIds(1),
+    fs: nodeFs(),
+  });
+}
+
+/** The engine side and the client side of two pipes, as a child process's stdin and stdout would be. */
+function pipes(): { client: ByteChannel; engine: ByteChannel } {
+  const toEngine = new TransformStream<Uint8Array, Uint8Array>();
+  const toClient = new TransformStream<Uint8Array, Uint8Array>();
+  const clientWriter = toEngine.writable.getWriter();
+  const engineWriter = toClient.writable.getWriter();
+  return {
+    client: { readable: toClient.readable, write: (b) => clientWriter.write(b) },
+    engine: { readable: toEngine.readable, write: (b) => engineWriter.write(b) },
+  };
+}
+
 export const ENGINE_FACTORIES: Record<string, EngineFactory> = {
-  'tracewell-ts': async () =>
-    new EngineClient(
-      inProcessTransport(
-        new LocalEngine({
-          appVersion: '0.1.0',
-          owner: 'Prasad',
-          clock: fixedClock(START),
-          ids: seededIds(1),
-          fs: nodeFs(),
-        }),
-      ),
-    ),
+  'tracewell-ts': async () => new EngineClient(inProcessTransport(localEngine())),
+  // The same engine behind the process framing (JSON lines plus binary frames) a native engine speaks.
+  'tracewell-ts over stdio': async () => {
+    const p = pipes();
+    serveStdio(localEngine(), p.engine);
+    return new EngineClient(stdioTransport(p.client));
+  },
 };
 
 export const PROFILE = { id: 'u_prasad', name: 'Prasad', role: 'Analyst' } as const;
 
-/** Registers the scenario once per engine. */
+/**
+ * Registers the scenario once per engine. `fresh` starts another engine of the same kind, for
+ * scenarios that hand a project from one engine to another.
+ */
 export function defineConformance(
   name: string,
-  scenario: (engine: EngineClient) => Promise<void>,
+  scenario: (engine: EngineClient, fresh: EngineFactory) => Promise<void>,
   timeout = 60_000,
 ): void {
   for (const [engineName, factory] of Object.entries(ENGINE_FACTORIES)) {
@@ -47,7 +67,7 @@ export function defineConformance(
         async () => {
           const engine = await factory();
           try {
-            await scenario(engine);
+            await scenario(engine, factory);
           } finally {
             engine.close();
           }

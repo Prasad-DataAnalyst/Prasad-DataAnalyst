@@ -13,7 +13,9 @@ export type {
   Transport,
 } from './protocol';
 export { PROTOCOL_VERSION } from './protocol';
-export { inProcessTransport, portTransport, workerTransport } from './transport';
-export { serve } from './serve';
+export type { ByteChannel } from './framing';
+export { FrameDecoder, encodeFrame } from './framing';
+export { inProcessTransport, portTransport, stdioTransport, workerTransport } from './transport';
+export { serve, serveStdio } from './serve';
 export { EngineClient } from './client';
 export { createStubEngine } from './stub';

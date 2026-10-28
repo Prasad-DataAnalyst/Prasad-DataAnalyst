@@ -2,7 +2,7 @@
 import { expect } from 'vitest';
 import type { EngineClient } from '@tw/engine-api';
 import type { ExportResult, SaveResult } from '@tw/model';
-import { ENGINE_FACTORIES, defineConformance, importFixture, newProject, runChecks } from './harness';
+import { defineConformance, importFixture, newProject, runChecks } from './harness';
 
 async function session(engine: EngineClient): Promise<string[]> {
   await newProject(engine, 'Determinism');
@@ -18,9 +18,9 @@ async function session(engine: EngineClient): Promise<string[]> {
   return digests;
 }
 
-defineConformance('determinism: two fresh engines produce identical bytes', async (engine) => {
+defineConformance('determinism: two fresh engines produce identical bytes', async (engine, fresh) => {
   const first = await session(engine);
-  const other = await (Object.values(ENGINE_FACTORIES)[0] as () => Promise<EngineClient>)();
+  const other = await fresh();
   try {
     expect(await session(other)).toEqual(first);
   } finally {
