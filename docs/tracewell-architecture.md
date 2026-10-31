@@ -756,6 +756,15 @@ A recipe carries the steps from Check to Export to the next period's file. It is
 - **Running.** A `recipe.apply` entry records the recipe and the mapping with the user's reason; each step is an ordinary `step.apply` entry ("Recipe "Monthly well report" v1: reason") and the checks an ordinary `check.run`. The project therefore replays without the recipe file.
 - **Only new or changed issues (FR-RCP-02).** After a run, each issue of the dataset is compared with the baseline by rule ID and column names: new, changed (another count, with the previous count shown) or unchanged. The dataset's issues register shows only new and changed issues by default, with every issue a choice away, and the run reports baseline issues no longer found.
 
+### 11.2 Recovery journal (FR-PRJ-03, slice 2, protocol 0.6)
+
+Nothing is lost when the page or the app closes unexpectedly. The engine's state is a replay of the audit log over the original files, so those two are all a recovery needs. After every change the engine writes its session's journal: the audit log as it stands and each original file it has not written yet. In the browser the journal is a folder per session in the origin-private file system; `journal.json`, which names the project and its originals, is written last, so a journal is only read once it names everything it needs.
+
+- **One journal per session.** Each engine session holds a Web Lock named after its session for as long as it runs. A journal is offered for recovery only when its lock is free, so a second tab never takes over the first one's work. Without the Web Locks API nothing is journalled.
+- **What counts as unsaved.** The journal's audit entries after its last `project.save`, other than the project's creation. A journal with none is deleted without asking.
+- **Recovering.** On start, before a new project is created, the app shows the unsaved work (project, number of changes, time of the last one) with two choices: recover it or discard it. Recovery opens the journal as a project file is opened (each original against its SHA-256, the audit chain, a full replay) and any failure opens it read-only with the matching `TW-PRJ` issue. The recovered project becomes this session's own, journalled again before the old journal is deleted.
+- **Desktop.** The native engine will keep the same journal on disk next to its working files (section 4.3, phase D).
+
 ---
 
 ## 12. Security and offline design

@@ -36,6 +36,7 @@ import type {
   PageRequest,
   ProjectSummary,
   RecipePlan,
+  RecoveryInfo,
   QuantityKind,
   RowId,
   RowWindow,
@@ -53,7 +54,7 @@ import type {
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.5.0';
+export const PROTOCOL_VERSION = '0.6.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -137,6 +138,15 @@ export interface EngineApi {
   planRecipe(datasetId: DatasetId, file: FileInput): Promise<RecipePlan>;
   /** Result: RecipeRun. Applies the recipe's steps, runs its checks and compares the issues with its baseline. */
   applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle>;
+  /**
+   * Unsaved work an earlier session left behind (FR-PRJ-03, protocol 0.6), or null. Engines that
+   * keep no recovery journal always answer null.
+   */
+  recoveryInfo(): Promise<RecoveryInfo | null>;
+  /** Result: ProjectOpenReport. Rebuilds that work as this session's project. */
+  recoverProject(): Promise<JobHandle>;
+  /** Deletes that work for good. */
+  discardRecovery(): Promise<void>;
 }
 
 /** What the engine tells the UI without being asked. */
@@ -214,6 +224,9 @@ export const ENGINE_METHODS = [
   'saveRecipe',
   'planRecipe',
   'applyRecipe',
+  'recoveryInfo',
+  'recoverProject',
+  'discardRecovery',
 ] as const satisfies readonly (keyof EngineApi)[];
 
 type MissingMethod = Exclude<keyof EngineApi, (typeof ENGINE_METHODS)[number]>;

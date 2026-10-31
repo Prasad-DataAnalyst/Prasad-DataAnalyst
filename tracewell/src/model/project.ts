@@ -85,3 +85,17 @@ export interface SaveResult {
   sha256: Sha256Hex;
   bytes?: Uint8Array;
 }
+
+/**
+ * Work an earlier session left unsaved (FR-PRJ-03): the session's journal holds its original files
+ * and audit log, so the project can be rebuilt as it was when that session ended.
+ */
+export interface RecoveryInfo {
+  projectId: ProjectId;
+  name: string;
+  /** When the journal was last written: the last change the session recorded. */
+  updatedAt: IsoUtc;
+  /** Audit entries in the journal, and how many came after the project was last saved. */
+  entries: number;
+  unsaved: number;
+}

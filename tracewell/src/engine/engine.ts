@@ -4,6 +4,7 @@
  * project, so the audit log is the single source of truth. Changes run one at a time, in the order
  * they were asked for; reads answer at once from the current state.
  */
+import { AuditLog } from '@tw/audit';
 import { PROTOCOL_VERSION, type EngineEvent, type EngineImpl, type EngineInfo } from '@tw/engine-api';
 import { buildExport, EXPORT_PROFILES, planExport, profileStatuses, type ExportInput } from '@tw/export';
 import { applyTemplate, creditTemplate, importSource, matchTemplate, previewSource, templateColumns } from '@tw/ingest';
@@ -59,6 +60,7 @@ import {
   type QuantityKind,
   type RecipePlan,
   type RecipeRun,
+  type RecoveryInfo,
   type RowId,
   type RowWindow,
   type RowWindowRequest,
@@ -97,9 +99,10 @@ import {
   recipeFileName,
   resolvedSince,
 } from './recipes';
+import type { JournalStore } from './journal-store';
 import { memoryTemplateStore, type TemplateStore } from './template-store';
 import { explainCell } from './lineage';
-import { datasetDigests, openProjectBytes, projectBytes } from './project-io';
+import { datasetDigests, openJournal, openProjectBytes, projectBytes } from './project-io';
 import { datasetHealth, listIssues, listOccurrences, listUnits } from './queries';
 import { applyEntry, checkDrafts, overrideOutcome, type Prepared } from './reducer';
 import { emptyProject, type DatasetState, type ProjectState } from './state';
@@ -152,6 +155,8 @@ export interface LocalEngineOptions {
   fs?: FileSystem;
   /** Where the user's mapping templates are kept; memory for this session when left out. */
   templates?: TemplateStore;
+  /** Where this session's recovery journal is kept (FR-PRJ-03); nothing is journalled without one. */
+  journal?: JournalStore;
 }
 
 function roundTrip<T>(value: T): T {
@@ -233,6 +238,9 @@ export class LocalEngine implements EngineImpl {
   private readonly jobs: JobManager;
   private readonly memoryBudgetBytes: number;
   private readonly templates: TemplateStore;
+  /** Journal writes, one after another, so the last one written is the latest state. */
+  private journalWrites: Promise<void> = Promise.resolve();
+  private journalFailed = false;
   private state: ProjectState | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -502,6 +510,82 @@ export class LocalEngine implements EngineImpl {
         return this.datasetSummary(ds);
       }),
     );
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Crash recovery (FR-PRJ-03)
+
+  /**
+   * Work an earlier session left unsaved: the latest journal of a session that has ended, when it
+   * holds audit entries after the project's last save. Journals with nothing unsaved are deleted.
+   */
+  async recoveryInfo(): Promise<RecoveryInfo | null> {
+    const store = this.o.journal;
+    if (store === undefined) return null;
+    for (;;) {
+      const found = await store.findOrphan();
+      if (found === null) return null;
+      const entries = AuditLog.fromJsonl(found.projectId, found.auditJsonl).log.entries();
+      const lastSave = entries.map((e) => e.action).lastIndexOf('project.save');
+      // A project that was only created holds nothing worth recovering.
+      const unsaved = entries.slice(lastSave + 1).filter((e) => e.action !== 'project.create').length;
+      if (unsaved > 0) {
+        return {
+          projectId: found.projectId,
+          name: found.name,
+          updatedAt: found.updatedAt,
+          entries: entries.length,
+          unsaved,
+        };
+      }
+      await store.dropOrphan();
+    }
+  }
+
+  /** Result: ProjectOpenReport. Rebuilds the unsaved project and makes it this session's project. */
+  async recoverProject(): Promise<JobHandle> {
+    return this.jobs.start('open', (ctx) =>
+      this.exclusive(async () => {
+        const store = this.o.journal;
+        const found = store === undefined ? null : await store.findOrphan();
+        if (store === undefined || found === null) {
+          throw new EngineError(
+            'NOT_FOUND',
+            'There is no unsaved work to recover.',
+            'Start a new project or open one.',
+          );
+        }
+        ctx.progress({ phase: `Recovering ${found.name}`, done: 0, unit: 'items' });
+        const opened = await openJournal(found, {
+          memoryBudgetBytes: this.memoryBudgetBytes,
+          signal: ctx.signal,
+          onProgress: (done, total) => ctx.progress({ phase: `Rebuilding ${found.name}`, done, total, unit: 'items' }),
+        });
+        ctx.checkCancelled();
+        this.state = opened.state;
+        // Journalled again by this session before the old journal goes.
+        this.changed(EVERYTHING);
+        await this.journalWrites;
+        await store.dropOrphan();
+        this.log(
+          opened.readOnly ? 'warn' : 'info',
+          `Recovered ${found.name} as it was at ${found.updatedAt}${opened.readOnly ? ', read-only' : ''}.`,
+        );
+        const report: ProjectOpenReport = {
+          project: this.summary(opened.state),
+          readOnly: opened.readOnly,
+          checks: opened.checks,
+        };
+        return report;
+      }),
+    );
+  }
+
+  /** Deletes the unsaved work recoveryInfo found; it cannot be recovered afterwards. */
+  async discardRecovery(): Promise<void> {
+    const store = this.o.journal;
+    if (store === undefined) return;
+    if ((await store.findOrphan()) !== null) await store.dropOrphan();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1222,6 +1306,43 @@ export class LocalEngine implements EngineImpl {
     this.emit(
       datasetId === undefined ? { type: 'project.changed', what } : { type: 'project.changed', what, datasetId },
     );
+    this.journal();
+  }
+
+  /**
+   * Writes the recovery journal after a change: the audit log as it now stands and the originals.
+   * A read-only project records nothing new, so it has nothing to journal.
+   */
+  private journal(): void {
+    const store = this.o.journal;
+    const state = this.state;
+    if (store === undefined || state === null || state.readOnly) return;
+    const record = {
+      projectId: state.id,
+      name: state.name,
+      updatedAt: this.o.clock.now().toISOString(),
+      auditJsonl: state.log.toJsonl(),
+      originals: [...state.originals.values()].map((o) => ({ info: { ...o.info }, bytes: o.bytes })),
+    };
+    this.journalWrites = this.journalWrites
+      .then(() => store.write(record))
+      .then(
+        () => {
+          this.journalFailed = false;
+        },
+        (e: unknown) => {
+          // Said once, not after every change, until a write succeeds again.
+          if (!this.journalFailed) {
+            this.log('warn', `Unsaved work could not be journalled for recovery: ${EngineError.from(e).message}`);
+          }
+          this.journalFailed = true;
+        },
+      );
+  }
+
+  /** Resolves once every journal write so far has finished (for tests and an orderly close). */
+  journalIdle(): Promise<void> {
+    return this.journalWrites;
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {

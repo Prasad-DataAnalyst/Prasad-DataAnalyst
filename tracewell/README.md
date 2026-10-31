@@ -92,6 +92,8 @@ or changed since the recipe was saved.
 
 Save the project (Ctrl+S) as a `.twp` file. Opening it (Ctrl+O) verifies every checksum and the audit
 chain and rebuilds the data from the original files; if anything fails, the project opens read-only.
+Work is also journalled in the browser after every change: if the page closes before you save, the
+next start offers to recover it exactly as it was.
 
 ## Measured performance (slice 1)
 

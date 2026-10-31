@@ -3,14 +3,19 @@
  * dataset's working and output views in the audit log and the manifest. Opening never trusts the
  * file: it checks every checksum, verifies the audit chain, rebuilds every dataset by replaying the
  * log over the originals, and compares the result with the saved digests. Any failure opens the
- * project read-only with the matching TW-PRJ issue; nothing is repaired silently.
+ * project read-only with the matching TW-PRJ issue; nothing is repaired silently. A recovery
+ * journal (FR-PRJ-03) is opened the same way, without saved digests to compare with.
  */
 import { AuditLog } from '@tw/audit';
+import { sha256Hex } from '@tw/io';
 import {
   EngineError,
+  type AuditEntry,
   type IntegrityCheck,
   type IssueDraft,
   type JsonValue,
+  type OriginalFileInfo,
+  type ProjectId,
   type ProjectManifest,
   type RulePackRef,
 } from '@tw/model';
@@ -142,23 +147,88 @@ export async function openProjectBytes(bytes: Uint8Array, fileName: string, ctx:
 
   const state = emptyProject(manifest.projectId, log);
   for (const [fileId, o] of contents.originals) state.originals.set(fileId, { info: { ...o.info }, bytes: o.bytes });
-  const entries = log.entries();
-  let stopped: { seq: number; message: string } | null = null;
+  const stopped = await replay(state, log.entries(), ctx);
+  if (state.name === '') state.name = manifest.name;
+  if (state.createdAt === '') state.createdAt = manifest.createdAt;
+  checks.push(...replayChecks(state, manifest, stopped));
+  return finish(state, checks);
+}
+
+/** Applies the entries in order; the first that cannot be applied stops the replay. */
+async function replay(
+  state: ProjectState,
+  entries: readonly AuditEntry[],
+  ctx: OpenContext,
+): Promise<{ seq: number; message: string } | null> {
   for (let i = 0; i < entries.length; i++) {
     if (ctx.signal.aborted) throw cancelledError('project opening');
-    const e = entries[i] as (typeof entries)[number];
+    const e = entries[i] as AuditEntry;
     try {
       await applyEntry(state, e, { memoryBudgetBytes: ctx.memoryBudgetBytes, signal: ctx.signal });
     } catch (err) {
       if (ctx.signal.aborted) throw cancelledError('project opening');
-      stopped = { seq: e.seq, message: EngineError.from(err).message };
-      break;
+      return { seq: e.seq, message: EngineError.from(err).message };
     }
     ctx.onProgress(i + 1, entries.length);
   }
-  if (state.name === '') state.name = manifest.name;
-  if (state.createdAt === '') state.createdAt = manifest.createdAt;
-  checks.push(...replayChecks(state, manifest, stopped));
+  return null;
+}
+
+/** What a session's recovery journal holds: its audit log and the original files it imported. */
+export interface JournalContents {
+  projectId: ProjectId;
+  name: string;
+  auditJsonl: string;
+  originals: { info: OriginalFileInfo; bytes: Uint8Array }[];
+}
+
+/**
+ * A project rebuilt from a recovery journal (FR-PRJ-03): each original must match its SHA-256,
+ * the audit chain must verify and every entry must replay; otherwise it opens read-only.
+ */
+export async function openJournal(j: JournalContents, ctx: OpenContext): Promise<Opened> {
+  const checks: IntegrityCheck[] = [];
+  for (const o of j.originals) {
+    if (sha256Hex(o.bytes) !== o.info.fileId) {
+      checks.push(
+        fail(
+          'original-checksum',
+          `The recovered copy of ${o.info.name} does not match its SHA-256.`,
+          'TW-PRJ-001',
+          o.info.fileId,
+        ),
+      );
+    }
+  }
+  if (checks.length === 0) {
+    checks.push(pass('original-checksum', `All ${j.originals.length} original files match their SHA-256.`));
+  }
+  const { log, report } = AuditLog.fromJsonl(j.projectId, j.auditJsonl);
+  checks.push(
+    report.ok
+      ? pass('audit-chain', `All ${report.entries} recovered audit entries verify, each linked to the one before.`)
+      : fail(
+          'audit-chain',
+          `The recovered audit chain is broken${report.brokenAt === undefined ? '' : ` at entry ${report.brokenAt}`}: ${report.reason ?? 'an entry does not verify'}.`,
+          'TW-PRJ-002',
+        ),
+  );
+  const state = emptyProject(j.projectId, log);
+  for (const o of j.originals) state.originals.set(o.info.fileId, { info: { ...o.info }, bytes: o.bytes });
+  const stopped = await replay(state, log.entries(), ctx);
+  checks.push(
+    stopped === null
+      ? pass(
+          'replay-digest',
+          `All ${state.datasets.size} datasets were rebuilt from the original files and the recovered audit log.`,
+        )
+      : fail(
+          'replay-digest',
+          `Rebuilding the project stopped at audit entry ${stopped.seq}: ${stopped.message}`,
+          'TW-PRJ-003',
+        ),
+  );
+  if (state.name === '') state.name = j.name;
   return finish(state, checks);
 }
 

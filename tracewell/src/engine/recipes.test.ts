@@ -136,7 +136,11 @@ describe('recipes', () => {
     const pressure = await columnId(engine, ds.id, 'Pressure');
     await awaitJob(
       engine,
-      await engine.applyStep(ds.id, { kind: 'convert_unit', columnId: pressure, toUnit: 'kPa', mode: 'replace' }, 'kPa'),
+      await engine.applyStep(
+        ds.id,
+        { kind: 'convert_unit', columnId: pressure, toUnit: 'kPa', mode: 'replace' },
+        'kPa',
+      ),
     );
     const { recipe, bytes, fileName } = await engine.saveRecipe({ datasetId: ds.id, name: 'In place', export: null });
     expect(recipe.columns).toEqual([{ key: 'c4', name: 'Pressure', type: 'number', unit: 'psia' }]);

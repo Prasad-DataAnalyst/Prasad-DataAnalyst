@@ -43,6 +43,7 @@ import {
   type Recipe,
   type RecipePlan,
   type RecipeRun,
+  type RecoveryInfo,
   type RowId,
   type RowWindow,
   type RowWindowRequest,
@@ -516,6 +517,17 @@ class StubEngine implements EngineImpl {
       }),
     });
   }
+
+  /** The stub keeps no recovery journal, so there is never unsaved work to recover. */
+  async recoveryInfo(): Promise<RecoveryInfo | null> {
+    return null;
+  }
+
+  async recoverProject(): Promise<JobHandle> {
+    throw new EngineError('NOT_FOUND', 'There is no unsaved work to recover.', 'Start a new project or open one.');
+  }
+
+  async discardRecovery(): Promise<void> {}
 
   async deleteMappingTemplate(id: TemplateId): Promise<void> {
     if (!this.templates.some((t) => t.id === id)) {

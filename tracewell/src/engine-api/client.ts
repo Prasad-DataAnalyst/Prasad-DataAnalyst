@@ -32,6 +32,7 @@ import {
   type ProjectSummary,
   type QuantityKind,
   type RecipePlan,
+  type RecoveryInfo,
   type RowId,
   type RowWindow,
   type RowWindowRequest,
@@ -210,6 +211,18 @@ export class EngineClient implements EngineApi {
 
   applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle> {
     return this.invoke('applyRecipe', datasetId, file, reason);
+  }
+
+  recoveryInfo(): Promise<RecoveryInfo | null> {
+    return this.invoke('recoveryInfo');
+  }
+
+  recoverProject(): Promise<JobHandle> {
+    return this.invoke('recoverProject');
+  }
+
+  discardRecovery(): Promise<void> {
+    return this.invoke('discardRecovery');
   }
 
   /**

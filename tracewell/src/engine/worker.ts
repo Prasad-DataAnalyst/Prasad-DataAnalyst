@@ -5,6 +5,7 @@
 import { serve, type MessagePortLike } from '@tw/engine-api';
 import type { Clock, IdSource } from '@tw/model';
 import { LocalEngine } from './engine';
+import { opfsJournalStore } from './journal-store';
 import { opfsTemplateStore } from './template-store';
 
 const systemClock: Clock = { now: () => new Date() };
@@ -33,6 +34,8 @@ serve(
     ids: randomIds,
     // Mapping templates outlive the page: they are kept in the browser's private file storage.
     templates: opfsTemplateStore(),
+    // Each tab's unsaved work is journalled under its own session, recoverable once the tab is gone.
+    journal: opfsJournalStore(randomHex(16)),
     ...(budget === undefined ? {} : { memoryBudgetBytes: Number(budget) }),
   }),
   // The worker's global scope is the port: calls arrive on it and answers and events leave by it.

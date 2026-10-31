@@ -322,6 +322,16 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
     const run = await c.awaitJob(await c.applyRecipe(ds, file, 'March data, same checks'));
     expect(run).toMatchObject({ datasetId: ds, name: 'Monthly', steps: [], delta: null });
   },
+  recoveryInfo: async (c) => {
+    expect(await c.recoveryInfo()).toBeNull();
+  },
+  recoverProject: async (c) => {
+    expect((await rejection(c.recoverProject())).code).toBe('NOT_FOUND');
+  },
+  discardRecovery: async (c) => {
+    await c.discardRecovery();
+    expect(await c.recoveryInfo()).toBeNull();
+  },
   jobOutcome: async (c) => {
     expect((await rejection(c.jobOutcome('j99'))).code).toBe('NOT_FOUND');
     const handle = await c.runChecks('d1');

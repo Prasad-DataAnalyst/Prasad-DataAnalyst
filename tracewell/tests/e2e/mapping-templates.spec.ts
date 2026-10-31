@@ -21,8 +21,9 @@ test('a mapping template saved from csv_well_daily_golden.csv is applied to the 
 
   // Templates outlive the page: a new session after a reload still has it.
   await page.reload();
-  // The profile is remembered, so the app starts without asking for it.
-  await app.open({ profile: false });
+  // The import was never saved, so the new session offers to recover it; this test starts afresh.
+  await page.getByTestId('tw-recovery-discard').click();
+  await page.waitForFunction(() => window.__tracewellReady === true);
   await app.importFixture('csv_well_daily_golden.csv', { acceptPreview: false });
   const note = page.getByTestId('tw-import-template');
   await expect(note).toContainText('Daily wells');
