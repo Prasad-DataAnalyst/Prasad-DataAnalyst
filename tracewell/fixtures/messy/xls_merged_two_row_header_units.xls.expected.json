@@ -1,0 +1,19 @@
+{
+  "file": "xls_merged_two_row_header_units.xls",
+  "format": "xlsx",
+  "detections": {"sheet": "Report", "date1904": false, "skipLines": 1, "headerRows": 3},
+  "confidence": {"sheet": "high", "date1904": "high", "skipLines": "high", "headerRows": "high"},
+  "rowCount": 12,
+  "columns": [
+    {"name": "Well ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "Date", "type": "date", "unit": null, "role": "time"},
+    {"name": "Pressure / Max", "type": "number", "unit": "psia", "role": "measure"},
+    {"name": "Pressure / Min", "type": "number", "unit": "psia", "role": "measure"},
+    {"name": "Temperature / Max", "type": "number", "unit": "degF", "role": "measure"},
+    {"name": "Temperature / Min", "type": "number", "unit": "degF", "role": "measure"},
+    {"name": "Oil rate", "type": "number", "unit": "bbl/d", "role": "measure"},
+    {"name": "Gas rate", "type": "number", "unit": "Mscf/d", "role": "measure"}
+  ],
+  "issues": {"TW-IMP-003": 1},
+  "notes": ["TW-IMP-003"]
+}

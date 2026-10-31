@@ -117,8 +117,8 @@ function rawExpectation(name: FixtureName): unknown {
 // The library and its checksums
 
 describe('the messy-file library', () => {
-  it('lists 29 distinct fixtures', () => {
-    expect(new Set(FIXTURE_NAMES).size).toBe(29);
+  it('lists 31 distinct fixtures', () => {
+    expect(new Set(FIXTURE_NAMES).size).toBe(31);
     expect(DELIMITED).toHaveLength(15);
     expect(XLSX).toHaveLength(6);
     expect(GEOJSON).toHaveLength(5);
@@ -185,8 +185,9 @@ describe('expected files', () => {
 
   it.each(FIXTURE_NAMES)('%s: the format follows the file extension', (name) => {
     const extension = name.slice(name.lastIndexOf('.') + 1);
-    // JSON Lines files are JSON records in the 'lines' layout.
-    expect(fixtureExpectation(name).format).toBe(extension === 'jsonl' ? 'json' : extension);
+    // JSON Lines files are JSON records in the 'lines' layout; a legacy .xls is read as an Excel workbook.
+    const format = extension === 'jsonl' ? 'json' : extension === 'xls' ? 'xlsx' : extension;
+    expect(fixtureExpectation(name).format).toBe(format);
   });
 
   it.each(FIXTURE_NAMES)('%s: the expectation follows the README conventions', (name) => {

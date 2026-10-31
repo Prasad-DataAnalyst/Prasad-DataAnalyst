@@ -213,6 +213,14 @@ function optionChanges(
     .map((p) => ({ columnId: undefined, property: p, value: b[p] as JsonValue }));
 }
 
+/** The media type of an original: a workbook in an OLE compound file is a legacy .xls. */
+function mediaTypeOf(format: SourceFormat, bytes: Uint8Array): string {
+  if (format === 'xlsx' && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
+    return 'application/vnd.ms-excel';
+  }
+  return MEDIA_TYPES[format];
+}
+
 /** The rule packs this engine checks with. */
 function builtinPacks(): RulePackRef[] {
   return [
@@ -453,13 +461,14 @@ export class LocalEngine implements EngineImpl {
 
         const fileId = outcome.sha256;
         if (!state.originals.has(fileId)) {
-          const mediaType = MEDIA_TYPES[outcome.spec.options.format];
+          const mediaType = mediaTypeOf(outcome.spec.options.format, bytes);
           state.originals.set(fileId, {
             info: { fileId, name, size: bytes.byteLength, mediaType, addedSeq: 0 },
             bytes,
           });
         }
-        const mediaType = state.originals.get(fileId)?.info.mediaType ?? MEDIA_TYPES[outcome.spec.options.format];
+        const mediaType =
+          state.originals.get(fileId)?.info.mediaType ?? mediaTypeOf(outcome.spec.options.format, bytes);
         await this.commit(
           state,
           {

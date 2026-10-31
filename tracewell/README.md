@@ -72,8 +72,8 @@ crates/       tracewell-engine: the native engine (Rust, DuckDB, Parquet) behind
 Start it with `npm run build && npm run preview` and open `http://127.0.0.1:4173`. On first start it
 asks for your name, which is recorded with every change. Then follow the process toolbar:
 
-1. **Import** (File › Import file…, Ctrl+I): CSV, TSV, Excel, GeoJSON, JSON (arrays, JSON Lines or
-   a saved API response) and Parquet. The preview shows what was detected, how sure Tracewell is,
+1. **Import** (File › Import file…, Ctrl+I): CSV, TSV, Excel (.xlsx and Excel 97-2003 .xls),
+   GeoJSON, JSON (arrays, JSON Lines or a saved API response) and Parquet. The preview shows what was detected, how sure Tracewell is,
    and every assumption. Reading settings and column types, units and roles can be changed there;
    each change is logged with your reason. Save a dataset's columns as a mapping template
    (Data › Mapping templates…) and later files with the same columns are read the same way.

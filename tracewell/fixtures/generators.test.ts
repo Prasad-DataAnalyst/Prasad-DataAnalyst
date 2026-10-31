@@ -26,8 +26,8 @@ function sha256(data: string | Uint8Array): string {
 describe('gen-text-fixtures.mjs', () => {
   const built = buildTextFixtures();
 
-  it('builds every CSV, TSV and GeoJSON fixture', () => {
-    const text = FIXTURE_NAMES.filter((n) => !n.endsWith('.xlsx'));
+  it('builds every fixture but the workbooks, which make_xlsx_fixtures.py writes', () => {
+    const text = FIXTURE_NAMES.filter((n) => !n.endsWith('.xlsx') && !n.endsWith('.xls'));
     expect(built.map((f) => f.name).sort()).toEqual([...text].sort());
   });
 

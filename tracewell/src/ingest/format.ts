@@ -15,6 +15,8 @@ export const FORMAT_SNIFF_BYTES = 65_536;
 
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
 const PARQUET_MAGIC = [0x50, 0x41, 0x52, 0x31];
+/** An OLE compound file: the container of Excel 97-2003 workbooks (.xls). */
+const OLE_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 /** GeoJSON object types; one of them as the top-level "type" marks a JSON file as GeoJSON. */
 const GEOJSON_TYPES: ReadonlySet<string> = new Set([
   'FeatureCollection',
@@ -89,6 +91,15 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
       ext === 'xlsx' ? 'medium' : 'low',
       'zip-magic',
       'The file is a ZIP archive; it is read as an Excel workbook because no other ZIP-based format is supported.',
+    );
+  }
+
+  if (startsWith(head, OLE_MAGIC)) {
+    return detection(
+      'xlsx',
+      ext === 'xls' ? 'high' : 'medium',
+      'ole-workbook',
+      'The file is an OLE compound file, the container of Excel 97-2003 workbooks (.xls).',
     );
   }
 

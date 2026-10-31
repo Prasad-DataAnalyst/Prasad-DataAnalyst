@@ -28,6 +28,8 @@ export const ALL_FIXTURES = Object.freeze([
   'xlsx_date1904.xlsx',
   'xlsx_hidden_sheets_formulas.xlsx',
   'xlsx_numbers_as_text.xlsx',
+  'xls_merged_two_row_header_units.xls',
+  'xls_date1904.xls',
   'geojson_wells_points_wgs84.geojson',
   'geojson_legacy_crs_27700.geojson',
   'geojson_invalid_geometries.geojson',

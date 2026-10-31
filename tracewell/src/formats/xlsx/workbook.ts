@@ -1,9 +1,12 @@
 /**
  * Opening a workbook: the ZIP is read in memory under a decompressed-size guard (SAD section 12),
- * then the workbook part gives the sheets and the date system. The shared strings and styles are
+ * then the workbook part gives the sheets and the date system. A legacy .xls (an OLE compound file)
+ * is read by biff.ts into the same workbook model. The shared strings and styles are
  * parsed once, when the first sheet is read; each sheet is parsed when it is asked for.
  */
 import { readZip, type ZipReader } from '@tw/io';
+import { openLegacyWorkbook } from './biff';
+import { isCompoundFile } from './cfb';
 import { EngineError } from '@tw/model';
 import { damagedWorkbook, notAWorkbook } from './errors';
 import { isRelType, Package, type Relationship } from './package';
@@ -20,9 +23,6 @@ const SAVE_AS_XLSX_FIX =
   'Open the file in Excel or LibreOffice and save it as an Excel workbook (.xlsx) without a password, ' +
   'then import the new copy.';
 
-/** The signature of an OLE compound file: legacy .xls, and password-protected .xlsx. */
-const OLE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
-
 interface SheetEntry {
   name: string;
   state: SheetState;
@@ -34,17 +34,7 @@ interface WorkbookPart {
   date1904: boolean;
 }
 
-function isOleFile(bytes: Uint8Array): boolean {
-  return OLE_SIGNATURE.every((b, i) => bytes[i] === b);
-}
-
 function openZip(bytes: Uint8Array, maxInflatedBytes: number): ZipReader {
-  if (isOleFile(bytes)) {
-    throw notAWorkbook(
-      'The file is a legacy Excel workbook (.xls) or a password-protected workbook, which cannot be read.',
-      SAVE_AS_XLSX_FIX,
-    );
-  }
   try {
     return readZip(bytes, { maxInflatedBytes });
   } catch (e) {
@@ -160,12 +150,14 @@ class Workbook implements XlsxWorkbook {
 }
 
 /**
- * Opens an XLSX workbook held in memory. Throws EngineError('FORMAT_UNSUPPORTED') when the bytes
- * are not an XLSX workbook (another ZIP file, a legacy .xls, a password-protected file),
+ * Opens an Excel workbook held in memory: XLSX, or a legacy .xls (Excel 97-2003). Throws
+ * EngineError('FORMAT_UNSUPPORTED') when the bytes are not a workbook it reads (another ZIP file,
+ * an Excel 5.0/95 workbook, a password-protected file),
  * EngineError('PARSE_FAILED') when a part is missing or not well-formed, and the ZIP reader's
  * EngineError when the archive is damaged or would expand beyond `maxInflatedBytes` (512 MB).
  */
 export function openWorkbook(bytes: Uint8Array, o: { maxInflatedBytes?: number } = {}): XlsxWorkbook {
+  if (isCompoundFile(bytes)) return openLegacyWorkbook(bytes);
   const zip = openZip(bytes, o.maxInflatedBytes ?? DEFAULT_MAX_INFLATED_BYTES);
   const pkg = new Package(zip);
   return new Workbook(pkg, findWorkbookPart(pkg));

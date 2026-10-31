@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the XLSX fixtures of the messy-file library into fixtures/messy.
+"""Writes the XLSX and XLS fixtures of the messy-file library into fixtures/messy.
 
 Every workbook is first written with openpyxl. Four of them are then opened and saved again by
 LibreOffice (soffice --headless --convert-to xlsx): LibreOffice stores a cached value for every
@@ -9,6 +9,9 @@ fixtures/README.md lists the producer of each file and what each file breaks.
 
 Two things are changed after saving, and nothing else: every ZIP entry gets the same fixed time, and
 a sheet that LibreOffice 24.2 saved as hidden although it was very hidden gets that state back.
+
+Two finished workbooks are then saved by LibreOffice as Excel 97-2003 workbooks (.xls, BIFF8 in an
+OLE compound file), so the legacy reader is tested against files a real spreadsheet program wrote.
 
 Usage: python3 fixtures/generators/make_xlsx_fixtures.py [--out DIR]
 
@@ -245,6 +248,12 @@ WORKBOOKS = {
     "xlsx_numbers_as_text.xlsx": (numbers_as_text, True),
 }
 
+# Legacy .xls copies and the finished XLSX workbook each is saved from.
+LEGACY = {
+    "xls_merged_two_row_header_units.xls": "xlsx_merged_two_row_header_units.xlsx",
+    "xls_date1904.xls": "xlsx_date1904.xlsx",
+}
+
 # LibreOffice 24.2 saves a very hidden sheet as merely hidden; these sheets get their state back.
 VERY_HIDDEN = {"xlsx_hidden_sheets_formulas.xlsx": ["Notes"]}
 
@@ -298,6 +307,23 @@ def libreoffice_resave(source: Path, out_dir: Path, work: Path) -> Path:
     return result
 
 
+def libreoffice_xls(source: Path, target: Path, work: Path) -> None:
+    """Opens `source` in headless LibreOffice and saves it as an Excel 97-2003 workbook at `target`."""
+    soffice = shutil.which("soffice")
+    if soffice is None:
+        raise SystemExit("make_xlsx_fixtures: soffice (LibreOffice) is not on the PATH.")
+    out_dir = work / "xls"
+    out_dir.mkdir(exist_ok=True)
+    profile = (work / "lo-profile").as_uri()
+    command = [soffice, f"-env:UserInstallation={profile}", "--headless", "--convert-to", "xls:MS Excel 97",
+               "--outdir", str(out_dir), str(source)]
+    subprocess.run(command, check=True, capture_output=True, timeout=180)
+    result = out_dir / (source.stem + ".xls")
+    if not result.exists():
+        raise SystemExit(f"make_xlsx_fixtures: LibreOffice did not write {result.name}.")
+    shutil.move(result, target)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -313,6 +339,9 @@ def main() -> int:
             saved = libreoffice_resave(first, work / "libreoffice", work) if resave else first
             rewrite_zip(saved, out / name, VERY_HIDDEN.get(name, []))
             print(f"make_xlsx_fixtures: {name} ({'openpyxl, then LibreOffice' if resave else 'openpyxl'})")
+        for name, source in LEGACY.items():
+            libreoffice_xls(out / source, out / name, work)
+            print(f"make_xlsx_fixtures: {name} (LibreOffice, from {source})")
     return 0
 
 

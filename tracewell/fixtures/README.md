@@ -13,11 +13,11 @@ fixtures/
 ├── expectation.test.ts          the expected-file check on malformed documents
 ├── generators.test.ts           the generators reproduce the library; the large CSV is deterministic
 ├── messy/
-│   ├── <name>                   29 fixtures, byte-exact (.gitattributes marks them binary)
+│   ├── <name>                   31 fixtures, byte-exact (.gitattributes marks them binary)
 │   ├── <name>.expected.json     what importing and checking <name> must give
 │   └── SHA256SUMS               SHA-256 of every fixture, for `sha256sum -c SHA256SUMS`
 └── generators/
-    ├── make_xlsx_fixtures.py    the 6 XLSX files (openpyxl, 4 of them saved again by LibreOffice)
+    ├── make_xlsx_fixtures.py    the 6 XLSX files (openpyxl, 4 of them saved again by LibreOffice) and 2 XLS copies (LibreOffice)
     ├── gen-text-fixtures.mjs    the 22 CSV, TSV, GeoJSON and JSON files with exact bytes, the Parquet file, then SHA256SUMS
     ├── gen-large-csv.mjs        seeded large CSV for the @slow tests (never committed)
     └── shared.mjs               fixture list, seeded random numbers, the Hampel test used by the generators
@@ -190,6 +190,8 @@ All are UTF-8 FeatureCollections written with two-space indentation and a final 
 
 | File                                          | Rows | What it breaks                                                                                                                                                                                                                                                                                                                                   |
 | --------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `xls_merged_two_row_header_units.xls`         | 12   | `xlsx_merged_two_row_header_units.xlsx` saved by LibreOffice as an Excel 97-2003 workbook (BIFF8 in an OLE compound file): the legacy reader must give the same sheets, merged ranges and values.                                                                                                                                                |
+| `xls_date1904.xls`                            | 10   | `xlsx_date1904.xlsx` saved the same way: the 1904 date system as a DATEMODE record.                                                                                                                                                                                                                                                              |
 | `geojson_wells_points_wgs84.geojson`          | 10   | Clean RFC 7946 points in the North Sea with property keys holding units (`TD (m)`) and non-ASCII names. Raises nothing.                                                                                                                                                                                                                          |
 | `geojson_legacy_crs_27700.geojson`            | 6    | A legacy top-level `crs` member (`urn:ogc:def:crs:EPSG::27700`, before `features`) and British National Grid coordinates in metres, which are not longitudes and latitudes.                                                                                                                                                                      |
 | `geojson_invalid_geometries.geojson`          | 12   | Features 2, 4, 6, 7, 8, 10 and 12 (1-based) are invalid: ring not closed, ring of three positions, bow-tie ring, line with one position, `null` longitude, MultiPolygon without coordinates, unknown type `Circle`. Feature 11 has a null geometry. The rest are valid; every feature is still imported. The `note` property says what is wrong. |
