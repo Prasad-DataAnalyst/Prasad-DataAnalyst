@@ -61,9 +61,18 @@ pub fn merge_check_run(issues: &mut Vec<IssueState>, drafts: Vec<Draft>, seq: u6
 }
 
 /// An issue as a project file's issues cache keeps it (decision D-13): everything needed to give it
-/// back exactly as the check runs left it, so a reopened project need not run them again.
+/// back exactly as the check runs left it, so a reopened project need not run them again. A row set
+/// equal to the current rows, as the flagged rows and the draft's rows usually are, is written as
+/// `{ sameAs: "current" }` rather than a second time.
 pub fn to_cache(st: &IssueState) -> Value {
     let d = &st.draft;
+    let same = |set: &RowSet| {
+        if *set == st.current {
+            json!({ "sameAs": "current" })
+        } else {
+            set.to_cache()
+        }
+    };
     json!({
         "id": st.id,
         "ruleId": d.rule_id,
@@ -76,10 +85,10 @@ pub fn to_cache(st: &IssueState) -> Value {
         "scope": d.scope,
         "message": d.message,
         "detail": d.detail,
-        "rows": d.rows.to_cache(),
-        "flagged": st.flagged.to_cache(),
+        "rows": same(&d.rows),
+        "flagged": same(&st.flagged),
         "current": st.current.to_cache(),
-        "accepted": st.accepted.to_cache(),
+        "accepted": same(&st.accepted),
         "present": st.present,
         "acceptedWhole": st.accepted_whole,
         "comments": st.comments,
@@ -92,6 +101,14 @@ pub fn to_cache(st: &IssueState) -> Value {
 /// ID is not the one its rule, dataset and columns give.
 pub fn from_cache(v: &Value, n: u64) -> Option<IssueState> {
     let text = |k: &str| v[k].as_str().map(String::from);
+    let current = RowSet::from_cache(&v["current"], n)?;
+    let set = |k: &str| {
+        if v[k]["sameAs"] == "current" {
+            Some(current.clone())
+        } else {
+            RowSet::from_cache(&v[k], n)
+        }
+    };
     let scope = match v["scope"].as_str()? {
         "rows" => "rows",
         "column" => "column",
@@ -111,7 +128,7 @@ pub fn from_cache(v: &Value, n: u64) -> Option<IssueState> {
             .map(|c| c.as_str().map(String::from))
             .collect::<Option<Vec<_>>>()?,
         scope,
-        rows: RowSet::from_cache(&v["rows"], n)?,
+        rows: set("rows")?,
         message: text("message")?,
         detail: Some(v["detail"].clone()).filter(|d| !d.is_null()),
     };
@@ -122,9 +139,9 @@ pub fn from_cache(v: &Value, n: u64) -> Option<IssueState> {
     Some(IssueState {
         id,
         draft,
-        flagged: RowSet::from_cache(&v["flagged"], n)?,
-        current: RowSet::from_cache(&v["current"], n)?,
-        accepted: RowSet::from_cache(&v["accepted"], n)?,
+        flagged: set("flagged")?,
+        accepted: set("accepted")?,
+        current,
         present: v["present"].as_bool()?,
         accepted_whole: v["acceptedWhole"].as_bool()?,
         comments: v["comments"].as_array()?.clone(),
@@ -308,4 +325,74 @@ pub fn sort(list: &mut [Listed], sort: &Value) -> Result<()> {
             .then_with(|| text(a, "id").cmp(&text(b, "id")))
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn draft(rows: RowSet) -> Draft {
+        Draft {
+            rule_id: "TW-TIME-007".into(),
+            rule_version: "1.0.0".into(),
+            pack_id: "tracewell.generic-dq".into(),
+            severity: "warning".into(),
+            category: "time".into(),
+            dataset_id: "d1".into(),
+            columns: vec!["c4".into()],
+            scope: "rows",
+            rows,
+            message: "3 spikes".into(),
+            detail: Some(json!({ "examples": [1, 2] })),
+        }
+    }
+
+    fn rows(n: u64, rows: &[u64]) -> RowSet {
+        let mut set = RowSet::new(n);
+        for &r in rows {
+            set.insert(r);
+        }
+        set
+    }
+
+    #[test]
+    fn issues_survive_the_cache_with_shared_row_sets_written_once() {
+        let n = 100;
+        let mut issues = Vec::new();
+        merge_check_run(&mut issues, vec![draft(rows(n, &[3, 4, 50]))], 5, n);
+        merge_check_run(&mut issues, vec![draft(rows(n, &[4, 60]))], 9, n);
+        let st = &issues[0];
+        let cached = to_cache(st);
+        assert_eq!(cached["rows"], json!({ "sameAs": "current" }));
+        assert_eq!(
+            cached["flagged"],
+            json!({ "ranges": [[3, 4], [50, 50], [60, 60]] })
+        );
+        assert_eq!(cached["accepted"], json!({ "ranges": [] }));
+        let back = from_cache(&cached, n).expect("reads back");
+        assert_eq!(to_cache(&back), cached);
+        assert_eq!(to_issue(&back), to_issue(st));
+        assert_eq!((back.first_seen_seq, back.last_checked_seq), (5, 9));
+
+        // Not raised by a later run: no current rows, so the draft's rows are written out.
+        merge_check_run(&mut issues, vec![], 12, n);
+        let cached = to_cache(&issues[0]);
+        assert_eq!(cached["rows"], json!({ "ranges": [[4, 4], [60, 60]] }));
+        assert_eq!(cached["accepted"], json!({ "sameAs": "current" }));
+        assert_eq!(
+            to_issue(&from_cache(&cached, n).expect("reads back")),
+            to_issue(&issues[0])
+        );
+
+        let mut wrong = cached.clone();
+        wrong["columns"] = json!(["c5"]);
+        assert!(
+            from_cache(&wrong, n).is_none(),
+            "the ID no longer matches its rule, dataset and columns"
+        );
+        assert!(
+            from_cache(&cached, 50).is_none(),
+            "a row beyond the dataset"
+        );
+    }
 }
