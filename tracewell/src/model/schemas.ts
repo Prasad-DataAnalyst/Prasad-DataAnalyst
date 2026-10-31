@@ -17,6 +17,7 @@ import type { ProjectManifest } from './project';
 import type { CheckSpec, RuleCategory, RulePack, Severity } from './rules';
 import type { ColumnRole, DateFormat, QuantityKind, SourceFormat, TimezoneMode } from './schema';
 import type { Predicate, StepInput } from './steps';
+import type { Recipe } from './recipes';
 import type { MappingTemplate } from './templates';
 import type { UnitConvention, UnitDef } from './units';
 import { isDateText, isDateTimeText, type Geometry, type LogicalType } from './values';
@@ -134,6 +135,7 @@ const AUDIT_ACTIONS = members<AuditAction>()([
   'project.area',
   'export.create',
   'project.save',
+  'recipe.apply',
 ]);
 const OVERRIDABLE_PROPERTIES = members<OverridableProperty>()([
   'name',
@@ -636,6 +638,39 @@ const mappingTemplate = z.strictObject({
 });
 
 // ---------------------------------------------------------------------------------------------
+// Recipes (FR-RCP-01..03): read from files other people send, so every part is checked
+
+const recipeColumn = z.strictObject({
+  key: columnId,
+  name: nonEmpty,
+  type: z.enum(LOGICAL_TYPES),
+  unit: nonEmpty.nullable(),
+});
+
+const recipeBaselineIssue = z.strictObject({
+  ruleId: nonEmpty,
+  columns: z.array(nonEmpty),
+  severity: z.enum(SEVERITIES),
+  flagged: count,
+});
+
+const recipe = z.strictObject({
+  format: z.literal('tracewell-recipe'),
+  formatVersion: z.literal(1),
+  id: z.string().regex(/^rcp_[0-9a-f]{12}$/, "Expected a recipe ID: 'rcp_' and 12 lowercase hex characters."),
+  name: nonEmpty,
+  version: z.int().min(1),
+  savedAt: isoUtc,
+  savedBy: nonEmpty,
+  appVersion: semver,
+  columns: z.array(recipeColumn),
+  check: z.strictObject({ packs: z.array(rulePackRef).min(1) }).nullable(),
+  steps: z.array(stepInput),
+  export: z.strictObject({ profile: z.enum(EXPORT_PROFILE_IDS), neutralizeFormulas: z.boolean() }).nullable(),
+  baseline: z.strictObject({ rows: count, issues: z.array(recipeBaselineIssue) }).nullable(),
+});
+
+// ---------------------------------------------------------------------------------------------
 // Compile-time proof that each schema accepts exactly the shape of its model type
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -650,6 +685,7 @@ type _SchemaProofs = [
   Proof<Same<z.output<typeof exportManifest>, ExportManifest>>,
   Proof<Same<z.output<typeof unitRegistry>, { version: string; units: UnitDef[] }>>,
   Proof<Same<z.output<typeof mappingTemplate>, MappingTemplate>>,
+  Proof<Same<z.output<typeof recipe>, Recipe>>,
 ];
 
 /**
@@ -675,6 +711,7 @@ export const schemas: {
   exportManifest: z.ZodType<ExportManifest>;
   unitRegistry: z.ZodType<{ version: string; units: UnitDef[] }>;
   mappingTemplate: z.ZodType<MappingTemplate>;
+  recipe: z.ZodType<Recipe>;
 } = Object.freeze({
   auditEntry: bounded(auditEntry),
   rulePack: bounded(rulePack),
@@ -684,4 +721,5 @@ export const schemas: {
   exportManifest: bounded(exportManifest),
   unitRegistry: bounded(unitRegistry),
   mappingTemplate: bounded(mappingTemplate),
+  recipe: bounded(recipe),
 });

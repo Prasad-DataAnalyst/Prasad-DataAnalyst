@@ -67,6 +67,7 @@ import type {
   IsoUtc,
   Issue,
   IssueComment,
+  IssueDelta,
   IssueDraft,
   IssueId,
   IssueOccurrence,
@@ -97,6 +98,12 @@ import type {
   RawField,
   RawRow,
   ReadContext,
+  Recipe,
+  RecipeBaselineIssue,
+  RecipeColumn,
+  RecipeId,
+  RecipePlan,
+  RecipeRun,
   RowId,
   RowRanges,
   RowWindow,
@@ -106,6 +113,7 @@ import type {
   RuleDef,
   RulePack,
   RulePackRef,
+  SavedRecipe,
   SaveResult,
   Severity,
   Sha256Hex,
@@ -200,6 +208,7 @@ type _PublicTypes = [
   IsoUtc,
   Issue,
   IssueComment,
+  IssueDelta,
   IssueDraft,
   IssueId,
   IssueOccurrence,
@@ -230,6 +239,12 @@ type _PublicTypes = [
   RawField,
   RawRow,
   ReadContext,
+  Recipe,
+  RecipeBaselineIssue,
+  RecipeColumn,
+  RecipeId,
+  RecipePlan,
+  RecipeRun,
   RowId,
   RowRanges,
   RowWindow,
@@ -239,6 +254,7 @@ type _PublicTypes = [
   RuleDef,
   RulePack,
   RulePackRef,
+  SavedRecipe,
   SaveResult,
   Severity,
   Sha256Hex,
@@ -344,6 +360,7 @@ describe('model public API', () => {
       exportManifest: z.ZodType<ExportManifest>;
       unitRegistry: z.ZodType<{ version: string; units: UnitDef[] }>;
       mappingTemplate: z.ZodType<MappingTemplate>;
+      recipe: z.ZodType<Recipe>;
     }>();
   });
 });

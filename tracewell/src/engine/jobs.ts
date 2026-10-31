@@ -114,4 +114,5 @@ const WHAT: Record<JobHandle['kind'], string> = {
   export: 'export',
   save: 'save',
   open: 'project opening',
+  recipe: 'recipe run',
 };

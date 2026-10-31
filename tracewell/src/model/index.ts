@@ -15,6 +15,7 @@ export type * from './export';
 export type * from './project';
 export type * from './dto';
 export type * from './templates';
+export type * from './recipes';
 
 export type {
   CellValue,

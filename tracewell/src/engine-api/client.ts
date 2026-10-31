@@ -10,6 +10,7 @@ import {
   type DatasetHealth,
   type DatasetId,
   type Decision,
+  type ExportProfileId,
   type ExportProfileStatus,
   type ExportRequest,
   type FileInput,
@@ -30,10 +31,12 @@ import {
   type PageRequest,
   type ProjectSummary,
   type QuantityKind,
+  type RecipePlan,
   type RowId,
   type RowWindow,
   type RowWindowRequest,
   type RulePack,
+  type SavedRecipe,
   type StepId,
   type StepInput,
   type StepPreview,
@@ -191,6 +194,22 @@ export class EngineClient implements EngineApi {
 
   deleteMappingTemplate(id: TemplateId): Promise<void> {
     return this.invoke('deleteMappingTemplate', id);
+  }
+
+  saveRecipe(o: {
+    datasetId: DatasetId;
+    name: string;
+    export: { profile: ExportProfileId; neutralizeFormulas: boolean } | null;
+  }): Promise<SavedRecipe> {
+    return this.invoke('saveRecipe', o);
+  }
+
+  planRecipe(datasetId: DatasetId, file: FileInput): Promise<RecipePlan> {
+    return this.invoke('planRecipe', datasetId, file);
+  }
+
+  applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle> {
+    return this.invoke('applyRecipe', datasetId, file, reason);
   }
 
   /**

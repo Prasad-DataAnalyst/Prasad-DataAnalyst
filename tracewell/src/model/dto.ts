@@ -166,7 +166,7 @@ export interface StepResult {
 
 export interface JobHandle {
   jobId: JobId;
-  kind: 'import' | 'check' | 'step' | 'export' | 'save' | 'open';
+  kind: 'import' | 'check' | 'step' | 'export' | 'save' | 'open' | 'recipe';
 }
 
 export interface JobProgress {

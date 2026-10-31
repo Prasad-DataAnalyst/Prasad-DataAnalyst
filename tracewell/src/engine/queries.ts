@@ -20,6 +20,7 @@ import { allUnits, compatibleUnits, getUnit, unitInfo } from '@tw/units';
 import { datasetOf } from './decisions';
 import { issueCounts, occurrenceState, severityRank, toIssue } from './issues-state';
 import { CHECK_PACKS } from './reducer';
+import { deltaOf } from './recipes';
 import type { DatasetState, IssueState, ProjectState } from './state';
 import { workingView } from './views';
 import { invalid, requireCount, rootColumn } from './windows';
@@ -102,6 +103,13 @@ function matches(issue: Issue, q: IssueQuery, names: string, root: (c: ColumnId)
   if (q.severity !== undefined && q.severity.length > 0 && !q.severity.includes(issue.severity)) return false;
   if (q.status !== undefined && q.status.length > 0 && !q.status.includes(issue.status)) return false;
   if (q.ruleId !== undefined && issue.ruleId !== q.ruleId) return false;
+  if (
+    q.delta !== undefined &&
+    q.delta.length > 0 &&
+    (issue.delta === undefined || !q.delta.includes(issue.delta.state))
+  ) {
+    return false;
+  }
   if (q.columnId !== undefined) {
     const wanted = root(q.columnId);
     if (!issue.columns.some((c) => c === q.columnId || root(c) === wanted)) return false;
@@ -134,9 +142,13 @@ export function listIssues(state: ProjectState, q: IssueQuery): Page<Issue> {
     );
   }
   const rows: Row[] = [];
-  const add = (issue: Issue, ds: DatasetState | undefined): void => {
+  const add = (found: Issue, ds: DatasetState | undefined): void => {
     const name = columnNames(ds);
-    const names = issue.columns.map(name).join(', ');
+    const columns = found.columns.map(name);
+    // After a recipe run, each issue says whether it is new or changed since the recipe's baseline.
+    const baseline = ds?.recipe?.baseline ?? null;
+    const issue = baseline === null ? found : { ...found, delta: deltaOf(found, columns, baseline.issues) };
+    const names = columns.join(', ');
     if (matches(issue, q, names, rootOf(ds))) rows.push({ issue, names });
   };
   for (const ds of state.datasets.values()) {

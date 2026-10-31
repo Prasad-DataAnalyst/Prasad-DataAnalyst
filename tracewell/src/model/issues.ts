@@ -3,6 +3,7 @@
  * set, so a million missing values is one issue with drill-down.
  */
 import type { AuditSeq, ColumnId, DatasetId, IsoUtc, IssueId, JsonValue, RowId } from './ids';
+import type { IssueDelta } from './recipes';
 import type { RuleCategory, Severity } from './rules';
 import type { CellValue } from './values';
 
@@ -57,6 +58,11 @@ export interface Issue {
   comments: IssueComment[];
   firstSeenSeq: AuditSeq;
   lastCheckedSeq: AuditSeq;
+  /**
+   * Against the baseline of the recipe last run on the dataset (FR-RCP-02): the issue is new, its
+   * count changed (`previous` is the baseline count), or it is unchanged. Absent without a recipe.
+   */
+  delta?: { state: IssueDelta; previous: number | null };
 }
 
 /** One flagged cell or row of an issue, for drill-down. */
@@ -79,6 +85,8 @@ export interface IssueQuery {
   ruleId?: string;
   columnId?: ColumnId;
   text?: string;
+  /** Only issues with these comparisons against the recipe's baseline (FR-RCP-02). */
+  delta?: IssueDelta[];
   sort?: 'severity' | 'rule' | 'count' | 'column';
   offset?: number;
   limit?: number;

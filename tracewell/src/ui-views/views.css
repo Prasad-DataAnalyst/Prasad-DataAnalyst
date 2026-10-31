@@ -233,6 +233,19 @@
   flex: none;
   white-space: nowrap;
 }
+.tw-recipe-plan {
+  margin: 8px 0;
+}
+.tw-recipe-problem {
+  color: var(--tw-error);
+}
+.tw-recipe-steps {
+  margin: 6px 0 10px 18px;
+  list-style: decimal;
+}
+.tw-delta {
+  white-space: nowrap;
+}
 .tw-template-form {
   display: flex;
   flex-wrap: wrap;

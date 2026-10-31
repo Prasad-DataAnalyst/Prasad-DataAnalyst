@@ -295,6 +295,33 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
     expect(await c.listMappingTemplates()).toEqual([]);
     expect((await rejection(c.deleteMappingTemplate(t.id))).code).toBe('NOT_FOUND');
   },
+  saveRecipe: async (c) => {
+    const ds = (await c.getProject()).datasets[0]?.id as string;
+    const saved = await c.saveRecipe({
+      datasetId: ds,
+      name: 'Monthly',
+      export: { profile: 'csv', neutralizeFormulas: false },
+    });
+    expect(saved.fileName).toBe('Monthly v1.twr');
+    expect(saved.recipe).toMatchObject({ format: 'tracewell-recipe', name: 'Monthly', version: 1 });
+    expect(JSON.parse(new TextDecoder().decode(saved.bytes))).toEqual(saved.recipe);
+  },
+  planRecipe: async (c) => {
+    const ds = (await c.getProject()).datasets[0]?.id as string;
+    const saved = await c.saveRecipe({ datasetId: ds, name: 'Monthly', export: null });
+    const plan = await c.planRecipe(ds, { kind: 'bytes', bytes: saved.bytes, name: saved.fileName });
+    expect(plan).toMatchObject({ datasetId: ds, fits: true, problems: [] });
+    const junk = { kind: 'bytes' as const, bytes: new TextEncoder().encode('{}'), name: 'x.twr' };
+    expect((await rejection(c.planRecipe(ds, junk))).code).toBe('FORMAT_UNSUPPORTED');
+  },
+  applyRecipe: async (c) => {
+    const ds = (await c.getProject()).datasets[0]?.id as string;
+    const saved = await c.saveRecipe({ datasetId: ds, name: 'Monthly', export: null });
+    const file = { kind: 'bytes' as const, bytes: saved.bytes, name: saved.fileName };
+    expect((await rejection(c.applyRecipe(ds, file, ''))).code).toBe('REASON_REQUIRED');
+    const run = await c.awaitJob(await c.applyRecipe(ds, file, 'March data, same checks'));
+    expect(run).toMatchObject({ datasetId: ds, name: 'Monthly', steps: [], delta: null });
+  },
   jobOutcome: async (c) => {
     expect((await rejection(c.jobOutcome('j99'))).code).toBe('NOT_FOUND');
     const handle = await c.runChecks('d1');

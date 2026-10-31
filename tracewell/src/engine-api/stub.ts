@@ -17,6 +17,7 @@ import {
   type DatasetId,
   type DatasetSummary,
   type Decision,
+  type ExportProfileId,
   type ExportProfileStatus,
   type ExportRequest,
   type FileInput,
@@ -39,10 +40,14 @@ import {
   type ProjectOpenReport,
   type ProjectSummary,
   type QuantityKind,
+  type Recipe,
+  type RecipePlan,
+  type RecipeRun,
   type RowId,
   type RowWindow,
   type RowWindowRequest,
   type RulePack,
+  type SavedRecipe,
   type StepId,
   type StepInput,
   type StepPreview,
@@ -91,6 +96,19 @@ function invalid(message: string, fix: string): EngineError {
 }
 
 /** The name of a file passed by reference; the stub never reads the file itself. */
+/** The recipe in a file of bytes; the stub reads no other kind of file. */
+function stubRecipe(file: FileInput): Recipe {
+  const fix = 'Choose a .twr file saved by Tracewell.';
+  if (file?.kind !== 'bytes') throw invalid('The stub reads recipes from bytes only.', fix);
+  try {
+    const doc = JSON.parse(new TextDecoder().decode(file.bytes)) as Recipe;
+    if (doc.format === 'tracewell-recipe') return doc;
+  } catch {
+    // Reported below.
+  }
+  throw new EngineError('FORMAT_UNSUPPORTED', `${fileName(file)} is not a Tracewell recipe.`, fix);
+}
+
 function fileName(file: FileInput): string {
   const name: unknown =
     file.kind === 'path'
@@ -440,9 +458,72 @@ class StubEngine implements EngineImpl {
     return structuredClone(template);
   }
 
+  /**
+   * The stub saves a recipe without steps or checks, plans every recipe as fitting and runs it
+   * without changing anything: enough for the recipe screens to be built against.
+   */
+  async saveRecipe(o: {
+    datasetId: DatasetId;
+    name: string;
+    export: { profile: ExportProfileId; neutralizeFormulas: boolean } | null;
+  }): Promise<SavedRecipe> {
+    this.project.dataset(o?.datasetId);
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (name === '') throw new EngineError('INVALID_INPUT', 'A recipe needs a name.', 'Type a name for it.');
+    const recipe: Recipe = {
+      format: 'tracewell-recipe',
+      formatVersion: 1,
+      id: `rcp_${stubHex(`recipe:${name}`, 12)}`,
+      name,
+      version: 1,
+      savedAt: this.clock.now(),
+      savedBy: this.project.profile.name,
+      appVersion: '0.1.0',
+      columns: [],
+      check: null,
+      steps: [],
+      export: o.export,
+      baseline: null,
+    };
+    const bytes = new TextEncoder().encode(`${JSON.stringify(recipe, null, 2)}\n`);
+    return { recipe, fileName: `${name} v1.twr`, bytes };
+  }
+
+  async planRecipe(datasetId: DatasetId, file: FileInput): Promise<RecipePlan> {
+    this.project.dataset(datasetId);
+    const recipe = stubRecipe(file);
+    return { recipe, datasetId, columns: [], steps: [], problems: [], fits: true };
+  }
+
+  async applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle> {
+    requireReason(reason, 'run a recipe');
+    this.project.dataset(datasetId);
+    const recipe = stubRecipe(file);
+    return this.jobs.start({
+      kind: 'recipe',
+      phase: 'Running the recipe',
+      unit: 'items',
+      total: 1,
+      run: (): RecipeRun => ({
+        datasetId,
+        recipeId: recipe.id,
+        name: recipe.name,
+        version: recipe.version,
+        steps: [],
+        checked: false,
+        delta: null,
+        export: recipe.export,
+      }),
+    });
+  }
+
   async deleteMappingTemplate(id: TemplateId): Promise<void> {
     if (!this.templates.some((t) => t.id === id)) {
-      throw new EngineError('NOT_FOUND', `There is no mapping template ${String(id)}.`, 'Choose a template from the list.');
+      throw new EngineError(
+        'NOT_FOUND',
+        `There is no mapping template ${String(id)}.`,
+        'Choose a template from the list.',
+      );
     }
     this.templates = this.templates.filter((t) => t.id !== id);
   }

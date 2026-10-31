@@ -1,0 +1,57 @@
+[
+  {
+    "format": "tracewell-recipe",
+    "formatVersion": 1,
+    "id": "rcp_5d2f0a9e1b7c",
+    "name": "Monthly well report",
+    "version": 2,
+    "savedAt": "2026-10-28T09:15:00.000Z",
+    "savedBy": "Prasad",
+    "appVersion": "0.1.0",
+    "columns": [
+      { "key": "c4", "name": "Pressure", "type": "number", "unit": "psia" },
+      { "key": "c1", "name": "date", "type": "datetime", "unit": null }
+    ],
+    "check": {
+      "packs": [
+        {
+          "id": "tracewell.generic-dq",
+          "version": "0.1.0",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "steps": [
+      { "kind": "convert_unit", "columnId": "c4", "toUnit": "kPa", "mode": "add_column" },
+      {
+        "kind": "filter",
+        "predicate": { "column": "c4~kPa", "op": "gt", "value": 0 },
+        "label": "Positive pressure"
+      },
+      { "kind": "select_columns", "columnIds": ["c1", "c4~kPa"] }
+    ],
+    "export": { "profile": "csv", "neutralizeFormulas": true },
+    "baseline": {
+      "rows": 271,
+      "issues": [
+        { "ruleId": "TW-TIME-004", "columns": ["date"], "severity": "note", "flagged": 1 },
+        { "ruleId": "TW-IMP-005", "columns": [], "severity": "note", "flagged": 1 }
+      ]
+    }
+  },
+  {
+    "format": "tracewell-recipe",
+    "formatVersion": 1,
+    "id": "rcp_000000000000",
+    "name": "Checks only",
+    "version": 1,
+    "savedAt": "2026-10-28T09:15:00.000Z",
+    "savedBy": "Prasad",
+    "appVersion": "0.1.0",
+    "columns": [],
+    "check": null,
+    "steps": [],
+    "export": null,
+    "baseline": null
+  }
+]

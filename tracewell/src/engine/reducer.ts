@@ -26,6 +26,7 @@ import {
   type IssueDraft,
   type JsonValue,
   type OverridableProperty,
+  type Recipe,
   type RulePackRef,
   type StepInput,
   type UserProfile,
@@ -345,6 +346,17 @@ export async function applyEntry(state: ProjectState, e: AuditEntry, env: Reduce
     case 'project.save': {
       state.lastSavedAt = e.at;
       state.lastSavedSeq = e.seq;
+      return;
+    }
+    case 'recipe.apply': {
+      const { recipe } = payload<{ recipe: Recipe }>(e);
+      dataset(state, e.target.datasetId).recipe = {
+        id: recipe.id,
+        name: recipe.name,
+        version: recipe.version,
+        baseline: recipe.baseline,
+        export: recipe.export,
+      };
       return;
     }
   }

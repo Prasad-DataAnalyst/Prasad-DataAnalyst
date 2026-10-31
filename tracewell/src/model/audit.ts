@@ -31,7 +31,8 @@ export type AuditAction =
   | 'entry.revert'
   | 'project.area'
   | 'export.create'
-  | 'project.save';
+  | 'project.save'
+  | 'recipe.apply';
 
 export type Actor =
   | { kind: 'user'; profileId: string; name: string; role: 'Analyst' }

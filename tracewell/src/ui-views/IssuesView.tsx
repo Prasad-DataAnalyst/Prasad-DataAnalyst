@@ -5,7 +5,7 @@
  */
 import { useMemo, useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
-import type { DatasetId, Issue, IssueOccurrence, IssueQuery, RowId, Severity } from '@tw/model';
+import type { DatasetId, Issue, IssueDelta, IssueOccurrence, IssueQuery, RowId, Severity } from '@tw/model';
 import { formatCell, formatCount, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
 import { ErrorNote, SeverityBadge, display, useReasonPrompt } from './common';
 import { attempt, datasetFor, useEngineQuery, useProject } from './hooks';
@@ -35,6 +35,8 @@ interface Filters {
   ruleId: string;
   text: string;
   sort: NonNullable<IssueQuery['sort']>;
+  /** Against the baseline of the recipe last run: 'auto' shows only new or changed issues in a dataset's register. */
+  delta: 'auto' | 'all' | 'new_or_changed';
 }
 
 function IssuesRegister(p: {
@@ -51,8 +53,18 @@ function IssuesRegister(p: {
     ruleId: '',
     text: '',
     sort: 'severity',
+    delta: 'auto',
   });
   const [selected, setSelected] = useState<string | null>(null);
+  const all = useEngineQuery(
+    engine,
+    project === null ? null : `rules:${project.id}:${p.datasetId ?? ''}`,
+    () => engine.listIssues({ ...(p.datasetId === null ? {} : { datasetId: p.datasetId }), limit: 1000 }),
+    ['issues'],
+  );
+  const hasDelta = (all.data?.items ?? []).some((i) => i.delta !== undefined);
+  const delta =
+    filters.delta === 'auto' ? (p.variant === 'view' && hasDelta ? 'new_or_changed' : 'all') : filters.delta;
   const query: IssueQuery = {
     ...(p.datasetId === null ? {} : { datasetId: p.datasetId }),
     ...(filters.severity.length === 0 ? {} : { severity: filters.severity }),
@@ -63,17 +75,12 @@ function IssuesRegister(p: {
         : { status: [filters.status] }),
     ...(filters.ruleId === '' ? {} : { ruleId: filters.ruleId }),
     ...(filters.text.trim() === '' ? {} : { text: filters.text }),
+    ...(delta === 'new_or_changed' ? { delta: ['new', 'changed'] as IssueDelta[] } : {}),
     sort: filters.sort,
     limit: 1000,
   };
   const key = project === null ? null : JSON.stringify({ q: query, p: project.id });
   const issues = useEngineQuery(engine, key, () => engine.listIssues(query), ['issues', 'datasets', 'project']);
-  const all = useEngineQuery(
-    engine,
-    project === null ? null : `rules:${project.id}:${p.datasetId ?? ''}`,
-    () => engine.listIssues({ ...(p.datasetId === null ? {} : { datasetId: p.datasetId }), limit: 1000 }),
-    ['issues'],
-  );
   const rules = useMemo(() => [...new Set((all.data?.items ?? []).map((i) => i.ruleId))].sort(), [all.data]);
   const items = issues.data?.items ?? [];
   const current = items.find((i) => i.id === selected) ?? null;
@@ -140,6 +147,19 @@ function IssuesRegister(p: {
             ))}
           </select>
         </label>
+        {hasDelta && (
+          <label className="tw-inline-field">
+            Since recipe
+            <select
+              value={delta}
+              data-testid={TID.issueFilter('delta')}
+              onChange={(e) => setFilters({ ...filters, delta: e.target.value as Filters['delta'] })}
+            >
+              <option value="new_or_changed">New or changed</option>
+              <option value="all">All issues</option>
+            </select>
+          </label>
+        )}
         <label className="tw-inline-field">
           Sort
           <select
@@ -193,6 +213,7 @@ function IssuesRegister(p: {
                     Fixed
                   </th>
                   <th scope="col">Status</th>
+                  {hasDelta && <th scope="col">Since recipe</th>}
                 </tr>
               </thead>
               <tbody>
@@ -232,6 +253,17 @@ function IssuesRegister(p: {
                     <td>
                       <span className={`tw-status tw-status-${i.status}`}>{STATUS_TEXT[i.status]}</span>
                     </td>
+                    {hasDelta && (
+                      <td className="tw-delta" data-testid={TID.issueDelta} data-delta={i.delta?.state ?? ''}>
+                        {i.delta === undefined
+                          ? ''
+                          : i.delta.state === 'new'
+                            ? 'New'
+                            : i.delta.state === 'changed'
+                              ? `Changed (was ${formatCount(i.delta.previous ?? 0)})`
+                              : 'Unchanged'}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

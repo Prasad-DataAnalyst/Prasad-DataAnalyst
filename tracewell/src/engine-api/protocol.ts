@@ -35,11 +35,13 @@ import type {
   Page,
   PageRequest,
   ProjectSummary,
+  RecipePlan,
   QuantityKind,
   RowId,
   RowWindow,
   RowWindowRequest,
   RulePack,
+  SavedRecipe,
   SourceFormat,
   StepId,
   StepInput,
@@ -51,7 +53,7 @@ import type {
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.4.0';
+export const PROTOCOL_VERSION = '0.5.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -121,6 +123,20 @@ export interface EngineApi {
    */
   saveMappingTemplate(o: { datasetId: DatasetId; name: string }): Promise<MappingTemplate>;
   deleteMappingTemplate(id: TemplateId): Promise<void>;
+  /**
+   * Saves a dataset's checks, steps and export as a recipe (FR-RCP-01..03, protocol 0.5): no data,
+   * only column names, types and units, steps, rule packs, the export profile, and the issues as
+   * rule IDs, column names and counts.
+   */
+  saveRecipe(o: {
+    datasetId: DatasetId;
+    name: string;
+    export: { profile: ExportProfileId; neutralizeFormulas: boolean } | null;
+  }): Promise<SavedRecipe>;
+  /** Reads a .twr file and says how it would run on a dataset, changing nothing. */
+  planRecipe(datasetId: DatasetId, file: FileInput): Promise<RecipePlan>;
+  /** Result: RecipeRun. Applies the recipe's steps, runs its checks and compares the issues with its baseline. */
+  applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle>;
 }
 
 /** What the engine tells the UI without being asked. */
@@ -195,6 +211,9 @@ export const ENGINE_METHODS = [
   'listMappingTemplates',
   'saveMappingTemplate',
   'deleteMappingTemplate',
+  'saveRecipe',
+  'planRecipe',
+  'applyRecipe',
 ] as const satisfies readonly (keyof EngineApi)[];
 
 type MissingMethod = Exclude<keyof EngineApi, (typeof ENGINE_METHODS)[number]>;

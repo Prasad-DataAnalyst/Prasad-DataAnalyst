@@ -14,6 +14,7 @@ import type {
   IssueId,
   OriginalFileInfo,
   ProjectId,
+  Recipe,
   RulePackRef,
   Step,
   UserProfile,
@@ -52,6 +53,8 @@ export interface DatasetState {
   checked: boolean;
   checkPacks: RulePackRef[];
   issues: Map<IssueId, IssueState>;
+  /** The recipe last run on the dataset (FR-RCP-02): issues are compared with its baseline. */
+  recipe: Pick<Recipe, 'id' | 'name' | 'version' | 'baseline' | 'export'> | null;
 }
 
 export interface ProjectState {
@@ -121,5 +124,6 @@ export function newDatasetState(
     checked: false,
     checkPacks: [],
     issues: new Map(),
+    recipe: null,
   };
 }

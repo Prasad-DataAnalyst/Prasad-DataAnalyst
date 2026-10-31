@@ -737,6 +737,25 @@ Working data is **not** stored in slice 1; it is rebuilt by replay. Slice 2 adds
 
 Any failure opens the project **read-only**, with the reasons shown in an Open report. It is never blocked from opening and never silently repaired. Each save appends a `project.save` entry recording the state digest.
 
+### 11.1 Recipe file (`.twr`, format 1; FR-RCP-01..03, slice 2, protocol 0.5)
+
+A recipe carries the steps from Check to Export to the next period's file. It is one UTF-8 JSON document, checked against a strict schema when read, because recipes are shared between people (FR-RCP-03):
+
+| Member                                   | Content                                                                                                                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `format`, `formatVersion`                | `tracewell-recipe`, 1                                                                                                                                                    |
+| `id`, `name`, `version`                  | `rcp_` + 12 hex of SHA-256(name), so the ID cannot be edited apart from the name; version 1, then one more each time it is saved again from a dataset it was run on       |
+| `savedAt`, `savedBy`, `appVersion`       | When, by whom and with which version it was saved                                                                                                                       |
+| `columns`                                | The columns the steps use, as imported (before any step converts or hides them): key (the column ID where it was saved), name, type and unit                           |
+| `check`                                  | The rule packs (ID, version, SHA-256) it checks with, or null                                                                                                            |
+| `steps`                                  | The processing and extraction steps in order, their column IDs being keys of `columns` (with a unit suffix for converted columns, `c4~kPa`)                             |
+| `export`                                 | The export profile and its options, or null                                                                                                                              |
+| `baseline`                               | The issues of the run it was saved from: rule ID, column names, severity and count per issue, and the row count. Never a value, a message or a row                       |
+
+- **Planning.** On another dataset each recipe column is found by name among the imported columns and must have the same type and unit, because a threshold or a conversion written for psia means something else in bar. Each step is then validated against the dataset as the earlier steps leave it, and the rule packs must be the ones this engine has. The plan lists the mapping, the steps as they will be applied and every problem; a recipe that does not fit is refused before anything is recorded.
+- **Running.** A `recipe.apply` entry records the recipe and the mapping with the user's reason; each step is an ordinary `step.apply` entry ("Recipe "Monthly well report" v1: reason") and the checks an ordinary `check.run`. The project therefore replays without the recipe file.
+- **Only new or changed issues (FR-RCP-02).** After a run, each issue of the dataset is compared with the baseline by rule ID and column names: new, changed (another count, with the previous count shown) or unchanged. The dataset's issues register shows only new and changed issues by default, with every issue a choice away, and the run reports baseline issues no longer found.
+
 ---
 
 ## 12. Security and offline design

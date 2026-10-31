@@ -1,0 +1,50 @@
+[
+  {
+    "why": "another format",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/format", "value": "tracewell-project" }]
+  },
+  { "why": "a later format version", "base": 0, "patch": [{ "op": "replace", "path": "/formatVersion", "value": 2 }] },
+  {
+    "why": "ID without the rcp_ prefix",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/id", "value": "5d2f0a9e1b7c" }]
+  },
+  { "why": "version 0", "base": 0, "patch": [{ "op": "replace", "path": "/version", "value": 0 }] },
+  {
+    "why": "app version that is not semantic",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/appVersion", "value": "v1" }]
+  },
+  {
+    "why": "column key that is not a column ID",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/columns/0/key", "value": "Pressure" }]
+  },
+  {
+    "why": "unknown step kind",
+    "base": 0,
+    "patch": [{ "op": "add", "path": "/steps/-", "value": { "kind": "delete_rows" } }]
+  },
+  { "why": "check without packs", "base": 0, "patch": [{ "op": "replace", "path": "/check/packs", "value": [] }] },
+  {
+    "why": "unknown export profile",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/export/profile", "value": "pdf" }]
+  },
+  {
+    "why": "negative baseline count",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/baseline/issues/0/flagged", "value": -1 }]
+  },
+  {
+    "why": "data values smuggled in an unknown key",
+    "base": 0,
+    "patch": [{ "op": "add", "path": "/rows", "value": [["W-01", 1860]] }]
+  },
+  {
+    "why": "unknown key in the baseline",
+    "base": 0,
+    "patch": [{ "op": "add", "path": "/baseline/issues/0/message", "value": "W-01 is missing" }]
+  }
+]

@@ -86,6 +86,10 @@ asks for your name, which is recorded with every change. Then follow the process
 5. **Export** (Ctrl+E): Excel, CSV, Parquet or GeoJSON packages, each read back and verified before
    it is offered.
 
+Data › Recipes… saves a dataset's checks, steps and export profile as a `.twr` recipe, which holds no
+data and can be shared. Run it on next month's file and the issues register shows only what is new
+or changed since the recipe was saved.
+
 Save the project (Ctrl+S) as a `.twp` file. Opening it (Ctrl+O) verifies every checksum and the audit
 chain and rebuilds the data from the original files; if anything fails, the project opens read-only.
 

@@ -6,14 +6,7 @@
  */
 import { PROTOCOL_VERSION, type EngineEvent, type EngineImpl, type EngineInfo } from '@tw/engine-api';
 import { buildExport, EXPORT_PROFILES, planExport, profileStatuses, type ExportInput } from '@tw/export';
-import {
-  applyTemplate,
-  creditTemplate,
-  importSource,
-  matchTemplate,
-  previewSource,
-  templateColumns,
-} from '@tw/ingest';
+import { applyTemplate, creditTemplate, importSource, matchTemplate, previewSource, templateColumns } from '@tw/ingest';
 import { blobSource, bytesSource, sha256Hex } from '@tw/io';
 import {
   EngineError,
@@ -31,10 +24,12 @@ import {
   type ColumnOverride,
   type ColumnPlan,
   type ColumnStats,
+  type ConversionMethod,
   type DatasetHealth,
   type DatasetId,
   type DatasetSummary,
   type Decision,
+  type ExportProfileId,
   type ExportProfileStatus,
   type ExportRecord,
   type ExportRequest,
@@ -46,12 +41,14 @@ import {
   type ImportPreview,
   type ImportRequestOptions,
   type Issue,
+  type IssueDraft,
   type IssueId,
   type IssueOccurrence,
   type IssueQuery,
   type JobHandle,
   type JobId,
   type JobOutcome,
+  type JobProgress,
   type JsonValue,
   type MappingTemplate,
   type OverridableProperty,
@@ -60,13 +57,18 @@ import {
   type ProjectOpenReport,
   type ProjectSummary,
   type QuantityKind,
+  type RecipePlan,
+  type RecipeRun,
   type RowId,
   type RowWindow,
   type RowWindowRequest,
   type RulePack,
+  type RulePackRef,
+  type SavedRecipe,
   type SaveResult,
   type Severity,
   type SourceFormat,
+  type Step,
   type StepId,
   type StepInput,
   type StepPreview,
@@ -84,6 +86,17 @@ import { REGISTRY_JSON, REGISTRY_VERSION } from '@tw/units';
 import { checkOverrideValue, datasetOf, decisionDraft, requireReason, requireStepsBuild } from './decisions';
 import { toIssue } from './issues-state';
 import { JobManager } from './jobs';
+import {
+  baselineOf,
+  buildRecipe,
+  columnNamer,
+  deltaOf,
+  parseRecipe,
+  planRecipe,
+  recipeBytes,
+  recipeFileName,
+  resolvedSince,
+} from './recipes';
 import { memoryTemplateStore, type TemplateStore } from './template-store';
 import { explainCell } from './lineage';
 import { datasetDigests, openProjectBytes, projectBytes } from './project-io';
@@ -193,6 +206,14 @@ function optionChanges(
   return properties
     .filter((p) => a[p] !== b[p])
     .map((p) => ({ columnId: undefined, property: p, value: b[p] as JsonValue }));
+}
+
+/** The rule packs this engine checks with. */
+function builtinPacks(): RulePackRef[] {
+  return [
+    rulePackRef(GENERIC_DQ, BUILTIN_PACK_JSON['tracewell.generic-dq']),
+    rulePackRef(SYSTEM_RULES, BUILTIN_PACK_JSON['tracewell.system']),
+  ];
 }
 
 function overrideList(
@@ -346,7 +367,10 @@ export class LocalEngine implements EngineImpl {
    * The mapping template for a file's detected columns: the chosen one (refused when it does not
    * fit), none when `choice` is null, or the one that fits when it is left out.
    */
-  private async templateFor(plans: ColumnPlan[], choice: TemplateId | null | undefined): Promise<TemplateApplied | null> {
+  private async templateFor(
+    plans: ColumnPlan[],
+    choice: TemplateId | null | undefined,
+  ): Promise<TemplateApplied | null> {
     if (choice === null) return null;
     const templates = await this.templates.load();
     if (choice === undefined) {
@@ -529,10 +553,145 @@ export class LocalEngine implements EngineImpl {
     const templates = await this.templates.load();
     const gone = templates.find((t) => t.id === id);
     if (gone === undefined) {
-      throw new EngineError('NOT_FOUND', `There is no mapping template ${String(id)}.`, 'Choose a template from the list.');
+      throw new EngineError(
+        'NOT_FOUND',
+        `There is no mapping template ${String(id)}.`,
+        'Choose a template from the list.',
+      );
     }
     await this.templates.save(templates.filter((t) => t !== gone));
     this.log('info', `Deleted the mapping template "${gone.name}".`);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Recipes (FR-RCP-01..03)
+
+  async saveRecipe(o: {
+    datasetId: DatasetId;
+    name: string;
+    export: { profile: ExportProfileId; neutralizeFormulas: boolean } | null;
+  }): Promise<SavedRecipe> {
+    const state = this.project();
+    const ds = datasetOf(state, o?.datasetId);
+    const name = typeof o.name === 'string' ? o.name.normalize('NFC').trim() : '';
+    if (name === '' || name.length > 200) {
+      throw invalid('A recipe name must be text of 1 to 200 characters.', 'Type a name for the recipe.');
+    }
+    const exported = o.export ?? null;
+    if (
+      exported !== null &&
+      (!EXPORT_PROFILES.some((p) => p.id === exported.profile) || typeof exported.neutralizeFormulas !== 'boolean')
+    ) {
+      throw invalid(
+        `The export profile ${String(exported.profile)} does not exist.`,
+        'Choose a listed export profile, or none.',
+      );
+    }
+    if (!ds.checked && ds.steps.length === 0 && exported === null) {
+      throw invalid(
+        `${ds.dataset.schema.name} has not been checked and has no steps, so a recipe of it would do nothing.`,
+        'Run checks or apply a step first, then save the recipe.',
+      );
+    }
+    const issues = [...ds.issues].map(([id, st]) => toIssue(id, st, ds));
+    const recipe = buildRecipe(ds, issues, {
+      name,
+      version: ds.recipe?.name === name ? ds.recipe.version + 1 : 1,
+      savedAt: this.o.clock.now().toISOString(),
+      savedBy: state.profile.name,
+      appVersion: this.o.appVersion,
+      export: exported === null ? null : { profile: exported.profile, neutralizeFormulas: exported.neutralizeFormulas },
+    });
+    const checked = schemas.recipe.safeParse(recipe);
+    if (!checked.success) {
+      throw new EngineError(
+        'INTERNAL',
+        `The recipe "${name}" could not be saved: ${checked.error.issues[0]?.message ?? 'it is not valid'}.`,
+        'Report this problem; no recipe was saved.',
+      );
+    }
+    this.log('info', `Saved the recipe "${name}" version ${recipe.version} from ${ds.dataset.schema.name}.`);
+    return { recipe, fileName: recipeFileName(recipe), bytes: recipeBytes(recipe) };
+  }
+
+  async planRecipe(datasetId: DatasetId, file: FileInput): Promise<RecipePlan> {
+    const ds = this.dataset(datasetId);
+    const recipe = parseRecipe(await this.readAll(file), this.fileName(file));
+    return planRecipe(recipe, ds, builtinPacks()).plan;
+  }
+
+  /**
+   * Records the recipe, applies its steps and runs its checks, each as its own audit entry with
+   * the user's reason, then compares the issues with the recipe's baseline. A recipe that does not
+   * fit the dataset is refused before anything is recorded.
+   */
+  async applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle> {
+    const text = requireReason(reason);
+    datasetOf(this.writable(), datasetId);
+    return this.jobs.start('recipe', (ctx) =>
+      this.exclusive(async () => {
+        const state = this.writable();
+        const ds = datasetOf(state, datasetId);
+        const recipe = parseRecipe(await this.readAll(file), this.fileName(file));
+        const { plan, steps } = planRecipe(recipe, ds, builtinPacks());
+        if (!plan.fits) {
+          throw new EngineError(
+            'INVALID_INPUT',
+            `The recipe "${recipe.name}" does not fit ${ds.dataset.schema.name}: ${plan.problems[0] ?? ''}`,
+            'Set the dataset up as the recipe expects (column names, types and units), or choose another recipe.',
+            { problems: plan.problems },
+          );
+        }
+        await this.commit(state, {
+          action: 'recipe.apply',
+          target: { datasetId },
+          reason: text,
+          payload: asJson({ recipe, columns: plan.columns }),
+        });
+        const stepIds: StepId[] = [];
+        for (const [i, input] of steps.entries()) {
+          ctx.checkCancelled();
+          ctx.progress({
+            phase: `Applying step ${i + 1} of ${steps.length}`,
+            done: i,
+            total: steps.length,
+            unit: 'items',
+          });
+          const { step } = await this.commitStep(
+            state,
+            ds,
+            input,
+            `Recipe "${recipe.name}" v${recipe.version}: ${text}`,
+          );
+          stepIds.push(step.id);
+        }
+        if (recipe.check !== null) await this.checkNow(state, ds, ctx);
+        const result: RecipeRun = {
+          datasetId,
+          recipeId: recipe.id,
+          name: recipe.name,
+          version: recipe.version,
+          steps: stepIds,
+          checked: recipe.check !== null,
+          delta: null,
+          export: recipe.export,
+        };
+        if (recipe.baseline !== null && recipe.check !== null) {
+          const name = columnNamer(ds);
+          const issues = [...ds.issues].map(([id, st]) => toIssue(id, st, ds));
+          const states = issues.map((i) => deltaOf(i, i.columns.map(name), recipe.baseline?.issues ?? []).state);
+          result.delta = {
+            new: states.filter((s) => s === 'new').length,
+            changed: states.filter((s) => s === 'changed').length,
+            unchanged: states.filter((s) => s === 'unchanged').length,
+            resolved: resolvedSince(baselineOf(ds, issues), recipe.baseline.issues),
+          };
+        }
+        this.changed(['project', 'steps', 'schema', 'datasets', 'issues', 'audit'], datasetId);
+        this.log('info', `Ran the recipe "${recipe.name}" version ${recipe.version} on ${ds.dataset.schema.name}.`);
+        return result;
+      }),
+    );
   }
 
   // -------------------------------------------------------------------------------------------
@@ -565,19 +724,7 @@ export class LocalEngine implements EngineImpl {
         const state = this.writable();
         const ds = datasetOf(state, datasetId);
         const started = this.o.clock.now().getTime();
-        const drafts = await checkDrafts(state, ds, ctx.signal, (done, total) =>
-          ctx.progress({ phase: 'Running checks', done, total, unit: 'items' }),
-        );
-        ctx.checkCancelled();
-        const packs = [
-          rulePackRef(GENERIC_DQ, BUILTIN_PACK_JSON['tracewell.generic-dq']),
-          rulePackRef(SYSTEM_RULES, BUILTIN_PACK_JSON['tracewell.system']),
-        ];
-        await this.commit(
-          state,
-          { action: 'check.run', target: { datasetId }, payload: asJson({ packs }) },
-          { datasetId, drafts },
-        );
+        const { drafts, packs } = await this.checkNow(state, ds, ctx);
         const bySeverity: Record<Severity, number> = { error: 0, warning: 0, note: 0 };
         const byRule: Record<string, number> = {};
         for (const d of drafts) {
@@ -596,6 +743,25 @@ export class LocalEngine implements EngineImpl {
         return summary;
       }),
     );
+  }
+
+  /** Runs the built-in rule packs on a dataset and records the run. */
+  private async checkNow(
+    state: ProjectState,
+    ds: DatasetState,
+    ctx: { signal: AbortSignal; progress(p: JobProgress): void; checkCancelled(): void },
+  ): Promise<{ drafts: IssueDraft[]; packs: RulePackRef[] }> {
+    const drafts = await checkDrafts(state, ds, ctx.signal, (done, total) =>
+      ctx.progress({ phase: 'Running checks', done, total, unit: 'items' }),
+    );
+    ctx.checkCancelled();
+    const packs = builtinPacks();
+    await this.commit(
+      state,
+      { action: 'check.run', target: { datasetId: ds.id }, payload: asJson({ packs }) },
+      { datasetId: ds.id, drafts },
+    );
+    return { drafts, packs };
   }
 
   async listIssues(q: IssueQuery): Promise<Page<Issue>> {
@@ -646,22 +812,8 @@ export class LocalEngine implements EngineImpl {
       this.exclusive(async () => {
         const state = this.writable();
         const ds = datasetOf(state, datasetId);
-        const { input, schema } = this.validStep(ds, s);
         ctx.checkCancelled();
-        const stepId = `s${state.nextStep}`;
-        const method = input.kind === 'convert_unit' ? conversionFor(input, schema) : undefined;
-        const description = describeStep(input, schema);
-        const entry = await this.commit(state, {
-          action: 'step.apply',
-          target: { datasetId, stepId, ...(input.kind === 'convert_unit' ? { columnId: input.columnId } : {}) },
-          new: asJson(input),
-          reason: text,
-          ...(method === undefined ? {} : { method }),
-          payload: { description },
-        });
-        const step = ds.steps.find((x) => x.id === stepId);
-        if (step === undefined)
-          throw new EngineError('INTERNAL', `Step ${stepId} was not applied.`, 'Apply the step again.');
+        const { input, step, entry, description, method } = await this.commitStep(state, ds, s, text);
         const result: StepResult = {
           step: structuredClone(step),
           audit: structuredClone(entry),
@@ -683,6 +835,37 @@ export class LocalEngine implements EngineImpl {
         return result;
       }),
     );
+  }
+
+  /** Validates a step against the dataset as it stands and records it. */
+  private async commitStep(
+    state: ProjectState,
+    ds: DatasetState,
+    s: StepInput,
+    reason: string,
+  ): Promise<{
+    input: StepInput;
+    step: Step;
+    entry: AuditEntry;
+    description: string;
+    method: ConversionMethod | undefined;
+  }> {
+    const { input, schema } = this.validStep(ds, s);
+    const stepId = `s${state.nextStep}`;
+    const method = input.kind === 'convert_unit' ? conversionFor(input, schema) : undefined;
+    const description = describeStep(input, schema);
+    const entry = await this.commit(state, {
+      action: 'step.apply',
+      target: { datasetId: ds.id, stepId, ...(input.kind === 'convert_unit' ? { columnId: input.columnId } : {}) },
+      new: asJson(input),
+      reason,
+      ...(method === undefined ? {} : { method }),
+      payload: { description },
+    });
+    const step = ds.steps.find((x) => x.id === stepId);
+    if (step === undefined)
+      throw new EngineError('INTERNAL', `Step ${stepId} was not applied.`, 'Apply the step again.');
+    return { input, step, entry, description, method };
   }
 
   async removeStep(datasetId: DatasetId, stepId: StepId, reason: string): Promise<AuditEntry> {

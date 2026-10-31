@@ -250,6 +250,23 @@ export function defaultCommands(): Command[] {
       },
     },
     {
+      id: 'data.recipes',
+      label: 'Recipes…',
+      menu: 'data',
+      stage: 'export',
+      enabled: anyData,
+      run: (ctx) => {
+        const id = activeDataset(ctx.store);
+        if (id === null) return;
+        ctx.store.openTab({
+          id: `recipes-${id}`,
+          kind: 'recipes',
+          title: `Recipes ${datasetName(ctx.store, id)}`,
+          datasetId: id,
+        });
+      },
+    },
+    {
       id: 'data.convert',
       label: 'Convert units…',
       menu: 'data',

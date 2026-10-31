@@ -25,6 +25,7 @@ const ACTION_TEXT: Record<AuditAction, string> = {
   'project.area': 'Project area set',
   'export.create': 'Exported',
   'project.save': 'Project saved',
+  'recipe.apply': 'Recipe run',
 };
 
 function short(v: JsonValue | undefined): string {
