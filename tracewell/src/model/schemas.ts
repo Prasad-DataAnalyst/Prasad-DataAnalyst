@@ -15,8 +15,9 @@ import { isJsonValue, MAX_JSON_DEPTH, withinDepth } from './json';
 import { members } from './literals';
 import type { ProjectManifest } from './project';
 import type { CheckSpec, RuleCategory, RulePack, Severity } from './rules';
-import type { ColumnRole, QuantityKind } from './schema';
+import type { ColumnRole, DateFormat, QuantityKind, SourceFormat, TimezoneMode } from './schema';
 import type { Predicate, StepInput } from './steps';
+import type { MappingTemplate } from './templates';
 import type { UnitConvention, UnitDef } from './units';
 import { isDateText, isDateTimeText, type Geometry, type LogicalType } from './values';
 
@@ -44,6 +45,9 @@ const COLUMN_ROLES = members<ColumnRole>()([
   'unit',
   'text',
 ]);
+const DATE_FORMATS = members<DateFormat>()(['iso', 'dmy', 'mdy', 'ymd-slash', 'excel-serial']);
+const TIMEZONE_MODES = members<TimezoneMode>()(['utc', 'offset', 'naive-assumed-utc']);
+const SOURCE_FORMATS = members<SourceFormat>()(['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet']);
 const QUANTITY_KINDS = members<QuantityKind>()([
   'length',
   'area',
@@ -609,6 +613,29 @@ const unitRegistry = z
   .superRefine((r, ctx) => unitNamesUnique(r.units, ctx));
 
 // ---------------------------------------------------------------------------------------------
+// Mapping templates (FR-IMP-06)
+
+const templateColumn = z.strictObject({
+  sourceHeader: z.array(z.string()).min(1),
+  name: nonEmpty,
+  type: z.enum(LOGICAL_TYPES),
+  unit: nonEmpty.nullable(),
+  role: z.enum(COLUMN_ROLES),
+  nullMarkers: z.array(z.string()),
+  dateFormat: z.enum(DATE_FORMATS).exactOptional(),
+  timezone: z.enum(TIMEZONE_MODES).exactOptional(),
+});
+
+const mappingTemplate = z.strictObject({
+  id: z.string().regex(/^mt_[0-9a-f]{12}$/, "Expected a template ID: 'mt_' and 12 lowercase hex characters."),
+  name: nonEmpty,
+  savedFrom: z.strictObject({ fileName: nonEmpty, format: z.enum(SOURCE_FORMATS) }),
+  columns: z.array(templateColumn).min(1),
+  savedAt: isoUtc,
+  savedBy: nonEmpty,
+});
+
+// ---------------------------------------------------------------------------------------------
 // Compile-time proof that each schema accepts exactly the shape of its model type
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -622,6 +649,7 @@ type _SchemaProofs = [
   Proof<Same<z.output<typeof projectManifest>, ProjectManifest>>,
   Proof<Same<z.output<typeof exportManifest>, ExportManifest>>,
   Proof<Same<z.output<typeof unitRegistry>, { version: string; units: UnitDef[] }>>,
+  Proof<Same<z.output<typeof mappingTemplate>, MappingTemplate>>,
 ];
 
 /**
@@ -646,6 +674,7 @@ export const schemas: {
   projectManifest: z.ZodType<ProjectManifest>;
   exportManifest: z.ZodType<ExportManifest>;
   unitRegistry: z.ZodType<{ version: string; units: UnitDef[] }>;
+  mappingTemplate: z.ZodType<MappingTemplate>;
 } = Object.freeze({
   auditEntry: bounded(auditEntry),
   rulePack: bounded(rulePack),
@@ -654,4 +683,5 @@ export const schemas: {
   projectManifest: bounded(projectManifest),
   exportManifest: bounded(exportManifest),
   unitRegistry: bounded(unitRegistry),
+  mappingTemplate: bounded(mappingTemplate),
 });

@@ -3,7 +3,7 @@ import type { ColumnId, DatasetId, FileId, IssueId, RowId, StepId } from '@tw/mo
 
 export type Stage = 'import' | 'check' | 'review' | 'process' | 'extract' | 'export';
 export type StageState = 'idle' | 'active' | 'done' | 'attention';
-export type CentreTabKind = 'data' | 'import' | 'issues' | 'export';
+export type CentreTabKind = 'data' | 'import' | 'issues' | 'export' | 'templates';
 
 export interface CentreTab {
   id: string;

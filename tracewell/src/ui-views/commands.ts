@@ -234,6 +234,22 @@ export function defaultCommands(): Command[] {
       },
     },
     {
+      id: 'data.templates',
+      label: 'Mapping templates…',
+      menu: 'data',
+      stage: 'import',
+      enabled: () => true,
+      run: (ctx) => {
+        const id = activeDataset(ctx.store);
+        ctx.store.openTab({
+          id: 'templates',
+          kind: 'templates',
+          title: 'Mapping templates',
+          ...(id === null ? {} : { datasetId: id }),
+        });
+      },
+    },
+    {
       id: 'data.convert',
       label: 'Convert units…',
       menu: 'data',

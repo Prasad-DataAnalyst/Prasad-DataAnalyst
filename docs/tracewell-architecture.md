@@ -76,7 +76,7 @@ Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 
 **Decision.** Planning stays in TypeScript, the reference implementation. The native engine **executes** a reviewed plan rather than re-deriving one.
 
-- Protocol 0.2 adds an optional `preview` field to `importFile`: the `ImportPreview` the user reviewed. The TypeScript engine plans again (same input, same result); the native engine imports exactly that plan. (Protocol 0.3 adds `getHealth`, section 7.7.)
+- Protocol 0.2 adds an optional `preview` field to `importFile`: the `ImportPreview` the user reviewed. The TypeScript engine plans again (same input, same result); the native engine imports exactly that plan. (Protocol 0.3 adds `getHealth`, section 7.7; protocol 0.4 adds mapping templates, section 7.3.)
 - A file given by path is previewed through a source that reads only the ranges asked for (`FileSystem.open`), so planning never loads a large file.
 - Sniffing reads at most 1 MiB, so planning in TypeScript costs the same for a 10 GB file as for a small one. In the desktop edition the planner answers `sniff` and the native engine answers everything that touches the full file.
 - What _is_ ported to Rust is what executes a plan: the CSV reader (line skipping, the RFC 4180 tokenizer with its tolerances, header assembly and ragged-row shaping, so rows, physical-line locators and import notes come out the same) and the cell parser (numbers with locale separators, null markers, the date families, booleans). Both are checked against the TypeScript code by the conformance suite over the whole messy-file library.
@@ -372,6 +372,12 @@ interface Detection<T> {
 - An override is a `detection.override` decision with a reason.
   - Interpretation-only overrides (name, type, unit, role, null markers, date format, timezone, CRS) re-parse that column in place.
   - Structural overrides (encoding, delimiter, header row, sheet, table block) are accepted only before the first edit on that dataset. After that they create a new dataset from the same original, and the reason states this.
+
+**Mapping templates (FR-IMP-06, slice 2, protocol 0.4).** A recurring file from the same source system should not need the same corrections every time. The user saves a dataset's columns as a named template: for each column read from the source, its header cells and how it is read (name, type, unit, role, null markers, date format, time zone). A template holds no values and belongs to the user, not the project. The browser edition keeps templates in one file in the origin-private file system, so they survive reloads; a stored entry that fails its schema is left out. Saving under an existing name replaces that template; its ID is `mt_` and the first 12 hex characters of the SHA-256 of the name.
+
+- **Matching.** The preview applies the template every one of whose columns is found in the file by exact header text (repeated headers matched in source order). With several, it picks the one covering most columns, then the most recently saved. Format does not matter, so a template saved from a CSV export also fits the same system's Excel export.
+- **Applying.** A template overrides only what detection got differently. The preview shows those columns with a "template" badge and the evidence "From the mapping template …", and the user can decline the template or apply it again. Assumptions the template settles are no longer assumed.
+- **Recording.** On import, each change the template makes is its own `detection.override` decision whose reason names the template and its ID, recorded before the user's own changes. A project therefore replays without the template store, and the audit log shows what was detected, what the template set and what the user chose.
 
 ### 7.4 Schemas
 

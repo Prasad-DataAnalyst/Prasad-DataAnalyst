@@ -5,6 +5,7 @@
 import { serve, type MessagePortLike } from '@tw/engine-api';
 import type { Clock, IdSource } from '@tw/model';
 import { LocalEngine } from './engine';
+import { opfsTemplateStore } from './template-store';
 
 const systemClock: Clock = { now: () => new Date() };
 
@@ -30,6 +31,8 @@ serve(
     owner: env['VITE_OWNER'] ?? '',
     clock: systemClock,
     ids: randomIds,
+    // Mapping templates outlive the page: they are kept in the browser's private file storage.
+    templates: opfsTemplateStore(),
     ...(budget === undefined ? {} : { memoryBudgetBytes: Number(budget) }),
   }),
   // The worker's global scope is the port: calls arrive on it and answers and events leave by it.

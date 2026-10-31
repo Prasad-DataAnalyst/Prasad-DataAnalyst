@@ -10,6 +10,7 @@ import type { AuditSeq, ColumnId, DatasetId, FileId, IsoUtc, JobId, JsonValue, R
 import type { RulePackRef, Severity } from './rules';
 import type { ColumnPlan, ColumnRole, CrsRef, DateFormat, TimezoneMode } from './schema';
 import type { Step } from './steps';
+import type { TemplateApplied, TemplateId } from './templates';
 import type { ConversionMethod } from './units';
 import type { CellValue, LogicalType } from './values';
 
@@ -109,6 +110,11 @@ export interface ImportPreview {
   assumptions: Assumption[];
   estimatedRows: number | null;
   exceedsBudget: boolean;
+  /**
+   * The mapping template applied to `columns` (protocol 0.4), or null when none was. Its
+   * overrides are already in `columns`; importing records them in the template's name.
+   */
+  template?: TemplateApplied | null;
 }
 
 export interface ImportRequestOptions {
@@ -122,6 +128,12 @@ export interface ImportRequestOptions {
    * native engine) imports exactly this plan, so detection is written once (decision D-12).
    */
   preview?: ImportPreview;
+  /**
+   * The mapping template to apply (protocol 0.4): its ID, or null for none. Left out, the engine
+   * applies the template that matches the file, as the preview did. `columnOverrides` are the
+   * user's own changes on top of it.
+   */
+  template?: TemplateId | null;
 }
 
 export interface CheckSummary {

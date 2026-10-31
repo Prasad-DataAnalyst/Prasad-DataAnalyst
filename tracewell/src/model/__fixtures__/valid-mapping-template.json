@@ -1,0 +1,63 @@
+[
+  {
+    "id": "mt_3f9a0c1d2e4b",
+    "name": "Daily well report (operator A)",
+    "savedFrom": { "fileName": "well_daily_2026-03.csv", "format": "csv" },
+    "columns": [
+      {
+        "sourceHeader": ["Well"],
+        "name": "well_id",
+        "type": "string",
+        "unit": null,
+        "role": "id",
+        "nullMarkers": [""]
+      },
+      {
+        "sourceHeader": ["Date"],
+        "name": "Date",
+        "type": "date",
+        "unit": null,
+        "role": "time",
+        "nullMarkers": [],
+        "dateFormat": "dmy"
+      },
+      {
+        "sourceHeader": ["THP", "psig"],
+        "name": "Tubing head pressure",
+        "type": "number",
+        "unit": "psig",
+        "role": "measure",
+        "nullMarkers": ["-999.25"]
+      },
+      {
+        "sourceHeader": ["Read at"],
+        "name": "Read at",
+        "type": "datetime",
+        "unit": null,
+        "role": "time",
+        "nullMarkers": [],
+        "dateFormat": "iso",
+        "timezone": "utc"
+      }
+    ],
+    "savedAt": "2026-10-28T09:15:00.000Z",
+    "savedBy": "Prasad"
+  },
+  {
+    "id": "mt_000000000000",
+    "name": "Parquet export",
+    "savedFrom": { "fileName": "daily.parquet", "format": "parquet" },
+    "columns": [
+      {
+        "sourceHeader": [""],
+        "name": "unnamed",
+        "type": "integer",
+        "unit": "m",
+        "role": "measure",
+        "nullMarkers": []
+      }
+    ],
+    "savedAt": "2026-10-28T09:15:00.000Z",
+    "savedBy": "Prasad"
+  }
+]

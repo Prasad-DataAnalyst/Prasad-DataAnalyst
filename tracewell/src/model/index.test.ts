@@ -79,6 +79,7 @@ import type {
   JsonOptions,
   JsonValue,
   LogicalType,
+  MappingTemplate,
   OriginalFileInfo,
   OverridableProperty,
   Page,
@@ -118,6 +119,9 @@ import type {
   StepResult,
   Substitution,
   TableSchema,
+  TemplateApplied,
+  TemplateColumn,
+  TemplateId,
   TextEncodingName,
   TimezoneMode,
   UnitConvention,
@@ -208,6 +212,7 @@ type _PublicTypes = [
   JsonOptions,
   JsonValue,
   LogicalType,
+  MappingTemplate,
   OriginalFileInfo,
   OverridableProperty,
   ParquetOptions,
@@ -247,6 +252,9 @@ type _PublicTypes = [
   StepResult,
   Substitution,
   TableSchema,
+  TemplateApplied,
+  TemplateColumn,
+  TemplateId,
   TextEncodingName,
   TimezoneMode,
   UnitConvention,
@@ -335,6 +343,7 @@ describe('model public API', () => {
       projectManifest: z.ZodType<ProjectManifest>;
       exportManifest: z.ZodType<ExportManifest>;
       unitRegistry: z.ZodType<{ version: string; units: UnitDef[] }>;
+      mappingTemplate: z.ZodType<MappingTemplate>;
     }>();
   });
 });

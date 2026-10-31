@@ -25,6 +25,7 @@ import {
   type JobId,
   type JobOutcome,
   type JobProgress,
+  type MappingTemplate,
   type Page,
   type PageRequest,
   type ProjectSummary,
@@ -37,6 +38,7 @@ import {
   type StepInput,
   type StepPreview,
   type TableSchema,
+  type TemplateId,
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
@@ -91,7 +93,7 @@ export class EngineClient implements EngineApi {
     return this.invoke('saveProject', target);
   }
 
-  sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview> {
+  sniff(file: FileInput, o?: { options?: FormatOptions; template?: TemplateId | null }): Promise<ImportPreview> {
     return o === undefined ? this.invoke('sniff', file) : this.invoke('sniff', file, o);
   }
 
@@ -177,6 +179,18 @@ export class EngineClient implements EngineApi {
 
   jobOutcome(jobId: JobId): Promise<JobOutcome<unknown>> {
     return this.invoke('jobOutcome', jobId);
+  }
+
+  listMappingTemplates(): Promise<MappingTemplate[]> {
+    return this.invoke('listMappingTemplates');
+  }
+
+  saveMappingTemplate(o: { datasetId: DatasetId; name: string }): Promise<MappingTemplate> {
+    return this.invoke('saveMappingTemplate', o);
+  }
+
+  deleteMappingTemplate(id: TemplateId): Promise<void> {
+    return this.invoke('deleteMappingTemplate', id);
   }
 
   /**

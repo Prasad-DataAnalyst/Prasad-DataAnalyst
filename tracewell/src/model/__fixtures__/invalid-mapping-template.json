@@ -1,0 +1,48 @@
+[
+  {
+    "why": "ID without the mt_ prefix",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/id", "value": "3f9a0c1d2e4b" }]
+  },
+  { "why": "empty name", "base": 0, "patch": [{ "op": "replace", "path": "/name", "value": "" }] },
+  { "why": "no columns", "base": 0, "patch": [{ "op": "replace", "path": "/columns", "value": [] }] },
+  {
+    "why": "column without header cells",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/columns/0/sourceHeader", "value": [] }]
+  },
+  {
+    "why": "unknown logical type",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/columns/0/type", "value": "text" }]
+  },
+  { "why": "unknown role", "base": 0, "patch": [{ "op": "replace", "path": "/columns/0/role", "value": "label" }] },
+  { "why": "empty unit code", "base": 0, "patch": [{ "op": "replace", "path": "/columns/2/unit", "value": "" }] },
+  {
+    "why": "unknown date format",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/columns/1/dateFormat", "value": "dd/mm/yyyy" }]
+  },
+  {
+    "why": "unknown time zone mode",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/columns/3/timezone", "value": "local" }]
+  },
+  {
+    "why": "unknown source format",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/savedFrom/format", "value": "xls" }]
+  },
+  {
+    "why": "save time that is not a UTC instant",
+    "base": 0,
+    "patch": [{ "op": "replace", "path": "/savedAt", "value": "2026-10-28 09:15" }]
+  },
+  { "why": "unknown key", "base": 0, "patch": [{ "op": "add", "path": "/rows", "value": [] }] },
+  { "why": "unknown column key", "base": 0, "patch": [{ "op": "add", "path": "/columns/0/sample", "value": "W-01" }] },
+  {
+    "why": "undefined optional written as null",
+    "base": 0,
+    "patch": [{ "op": "add", "path": "/columns/0/dateFormat", "value": null }]
+  }
+]

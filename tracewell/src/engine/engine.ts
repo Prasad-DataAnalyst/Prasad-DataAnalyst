@@ -6,10 +6,18 @@
  */
 import { PROTOCOL_VERSION, type EngineEvent, type EngineImpl, type EngineInfo } from '@tw/engine-api';
 import { buildExport, EXPORT_PROFILES, planExport, profileStatuses, type ExportInput } from '@tw/export';
-import { importSource, previewSource } from '@tw/ingest';
+import {
+  applyTemplate,
+  creditTemplate,
+  importSource,
+  matchTemplate,
+  previewSource,
+  templateColumns,
+} from '@tw/ingest';
 import { blobSource, bytesSource, sha256Hex } from '@tw/io';
 import {
   EngineError,
+  schemas,
   type Actor,
   type AuditDraft,
   type AuditEntry,
@@ -21,6 +29,7 @@ import {
   type Clock,
   type ColumnId,
   type ColumnOverride,
+  type ColumnPlan,
   type ColumnStats,
   type DatasetHealth,
   type DatasetId,
@@ -44,6 +53,7 @@ import {
   type JobId,
   type JobOutcome,
   type JsonValue,
+  type MappingTemplate,
   type OverridableProperty,
   type Page,
   type PageRequest,
@@ -62,6 +72,8 @@ import {
   type StepPreview,
   type StepResult,
   type TableSchema,
+  type TemplateApplied,
+  type TemplateId,
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
@@ -72,6 +84,7 @@ import { REGISTRY_JSON, REGISTRY_VERSION } from '@tw/units';
 import { checkOverrideValue, datasetOf, decisionDraft, requireReason, requireStepsBuild } from './decisions';
 import { toIssue } from './issues-state';
 import { JobManager } from './jobs';
+import { memoryTemplateStore, type TemplateStore } from './template-store';
 import { explainCell } from './lineage';
 import { datasetDigests, openProjectBytes, projectBytes } from './project-io';
 import { datasetHealth, listIssues, listOccurrences, listUnits } from './queries';
@@ -124,6 +137,8 @@ export interface LocalEngineOptions {
   progressIntervalMs?: number;
   /** Enables file inputs and targets of kind 'path' (desktop and Node). */
   fs?: FileSystem;
+  /** Where the user's mapping templates are kept; memory for this session when left out. */
+  templates?: TemplateStore;
 }
 
 function roundTrip<T>(value: T): T {
@@ -196,11 +211,13 @@ export class LocalEngine implements EngineImpl {
   private readonly listeners = new Set<{ cb: (e: EngineEvent) => void }>();
   private readonly jobs: JobManager;
   private readonly memoryBudgetBytes: number;
+  private readonly templates: TemplateStore;
   private state: ProjectState | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly o: LocalEngineOptions) {
     this.memoryBudgetBytes = o.memoryBudgetBytes ?? DEFAULT_MEMORY_BUDGET;
+    this.templates = o.templates ?? memoryTemplateStore();
     this.jobs = new JobManager(o.clock, o.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS, (e) => this.emit(e));
   }
 
@@ -308,18 +325,58 @@ export class LocalEngine implements EngineImpl {
   // -------------------------------------------------------------------------------------------
   // Import
 
-  async sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview> {
-    const preview = await previewSource(await this.source(file), {
+  async sniff(file: FileInput, o?: { options?: FormatOptions; template?: TemplateId | null }): Promise<ImportPreview> {
+    const src = await this.source(file);
+    const settings = {
       ...(o?.options === undefined ? {} : { options: o.options }),
       memoryBudgetBytes: this.memoryBudgetBytes,
-    });
+    };
+    const detected = await previewSource(src, settings);
+    const applied = await this.templateFor(detected.columns, o?.template);
+    const preview =
+      applied === null || applied.overrides.length === 0
+        ? detected
+        : await previewSource(src, { ...settings, columnOverrides: applied.overrides });
     const { spec: _spec, ...rest } = preview;
-    return rest;
+    if (applied === null) return { ...rest, template: null };
+    return { ...rest, columns: creditTemplate(rest.columns, applied), template: applied };
   }
 
   /**
-   * Imports with the detected settings, then records each setting and column the user changed as
-   * its own `detection.override` entry, so the audit log shows what was detected and what was chosen.
+   * The mapping template for a file's detected columns: the chosen one (refused when it does not
+   * fit), none when `choice` is null, or the one that fits when it is left out.
+   */
+  private async templateFor(plans: ColumnPlan[], choice: TemplateId | null | undefined): Promise<TemplateApplied | null> {
+    if (choice === null) return null;
+    const templates = await this.templates.load();
+    if (choice === undefined) {
+      const fitting = matchTemplate(templates, plans);
+      return fitting === null ? null : applyTemplate(fitting, plans);
+    }
+    const chosen = templates.find((t) => t.id === choice);
+    if (chosen === undefined) {
+      throw new EngineError(
+        'NOT_FOUND',
+        `There is no mapping template ${String(choice)}.`,
+        'Choose a template from the list, or import without one.',
+      );
+    }
+    const applied = applyTemplate(chosen, plans);
+    if (applied === null) {
+      throw new EngineError(
+        'INVALID_INPUT',
+        `The mapping template "${chosen.name}" does not fit this file: some of its columns are not in it.`,
+        'Import without the template, or choose one saved from a file with the same columns.',
+        { templateId: chosen.id },
+      );
+    }
+    return applied;
+  }
+
+  /**
+   * Imports with the detected settings, then records each setting and column changed by the
+   * mapping template and then by the user as its own `detection.override` entry, so the audit log
+   * shows what was detected, what the template set and what the user chose.
    */
   async importFile(file: FileInput, o?: ImportRequestOptions): Promise<JobHandle> {
     this.writable();
@@ -337,6 +394,8 @@ export class LocalEngine implements EngineImpl {
         const chosen =
           o?.options === undefined ? detected : await previewSource(src, { ...budget, options: o.options });
         const datasetId = `d${state.nextDataset}`;
+        const applied = await this.templateFor(chosen.spec.columns, o?.template);
+        const templateChanges = overrideList(applied?.overrides ?? []);
         const changes = [
           ...optionChanges(detected.spec.options, chosen.spec.options),
           ...overrides.map((x) => ({ ...x, columnId: x.columnId as ColumnId | undefined })),
@@ -391,6 +450,17 @@ export class LocalEngine implements EngineImpl {
             { kind: 'system', component: 'detector' },
           );
         }
+        for (const x of templateChanges) {
+          const d: Decision = {
+            kind: 'override_detection',
+            datasetId,
+            columnId: x.columnId,
+            property: x.property,
+            value: x.value,
+            reason: `Mapping template "${applied?.name ?? ''}" (${applied?.id ?? ''}).`,
+          };
+          await this.commitDraft(state, decisionDraft(state, d));
+        }
         for (const x of changes) {
           const d: Decision = {
             kind: 'override_detection',
@@ -408,6 +478,61 @@ export class LocalEngine implements EngineImpl {
         return this.datasetSummary(ds);
       }),
     );
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Mapping templates (FR-IMP-06)
+
+  async listMappingTemplates(): Promise<MappingTemplate[]> {
+    const templates = await this.templates.load();
+    return templates.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+
+  async saveMappingTemplate(o: { datasetId: DatasetId; name: string }): Promise<MappingTemplate> {
+    const state = this.project();
+    const ds = datasetOf(state, o?.datasetId);
+    const name = typeof o.name === 'string' ? o.name.normalize('NFC').trim() : '';
+    if (name === '' || name.length > 200) {
+      throw invalid('A mapping template name must be text of 1 to 200 characters.', 'Type a name for the template.');
+    }
+    const schema = viewFor(ds, 'working').schema;
+    const columns = templateColumns(schema);
+    if (columns.length === 0) {
+      throw invalid(
+        `${schema.name} has no columns read from its source file, so there is nothing to save.`,
+        'Save a template from a dataset imported from a file.',
+      );
+    }
+    const template: MappingTemplate = {
+      id: `mt_${sha256Hex(name).slice(0, 12)}`,
+      name,
+      savedFrom: { fileName: schema.source.fileName, format: schema.source.format },
+      columns,
+      savedAt: this.o.clock.now().toISOString(),
+      savedBy: state.profile.name,
+    };
+    const checked = schemas.mappingTemplate.safeParse(template);
+    if (!checked.success) {
+      throw new EngineError(
+        'INTERNAL',
+        `The mapping template "${name}" could not be saved: ${checked.error.issues[0]?.message ?? 'it is not valid'}.`,
+        'Report this problem; no template was saved.',
+      );
+    }
+    const kept = (await this.templates.load()).filter((t) => t.id !== template.id);
+    await this.templates.save([...kept, template]);
+    this.log('info', `Saved the mapping template "${name}" from ${schema.name} (${columns.length} columns).`);
+    return structuredClone(template);
+  }
+
+  async deleteMappingTemplate(id: TemplateId): Promise<void> {
+    const templates = await this.templates.load();
+    const gone = templates.find((t) => t.id === id);
+    if (gone === undefined) {
+      throw new EngineError('NOT_FOUND', `There is no mapping template ${String(id)}.`, 'Choose a template from the list.');
+    }
+    await this.templates.save(templates.filter((t) => t !== gone));
+    this.log('info', `Deleted the mapping template "${gone.name}".`);
   }
 
   // -------------------------------------------------------------------------------------------

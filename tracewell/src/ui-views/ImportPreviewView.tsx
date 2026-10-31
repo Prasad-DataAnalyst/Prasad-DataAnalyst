@@ -14,6 +14,8 @@ import type {
   FormatOptions,
   ImportPreview,
   LogicalType,
+  TemplateApplied,
+  TemplateId,
   UnitInfo,
 } from '@tw/model';
 import { formatCell, formatCount, toErrorData, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
@@ -76,6 +78,10 @@ function Preview(p: {
   const [edits, setEdits] = useState<ColumnEdits>({});
   const [name, setName] = useState(p.initial.fileName.replace(/\.[^.]+$/, ''));
   const [busy, setBusy] = useState<'preview' | 'import' | null>(null);
+  // The mapping template: undefined lets the engine apply the one that fits; null applies none.
+  const [templateChoice, setTemplateChoice] = useState<TemplateId | null | undefined>(undefined);
+  // A fitting template the user chose not to apply, so it can be applied again.
+  const [declined, setDeclined] = useState<TemplateApplied | null>(null);
   const [units, setUnits] = useState<UnitInfo[]>([]);
   const reason = useReasonPrompt();
   const readOnly = useWorkbench((s) => s.project?.readOnly === true);
@@ -94,15 +100,32 @@ function Preview(p: {
   const detected = p.initial.sniff.options;
   const optionsChanged = JSON.stringify(options) !== JSON.stringify(detected);
 
-  const changeOptions = async (next: FormatOptions) => {
-    setOptions(next);
+  const resniff = async (next: FormatOptions, template: TemplateId | null | undefined): Promise<ImportPreview | null> => {
     setBusy('preview');
-    const fresh = await attempt(() => engine.sniff({ kind: 'blob', blob: file, name: file.name }, { options: next }));
+    const fresh = await attempt(() =>
+      engine.sniff(
+        { kind: 'blob', blob: file, name: file.name },
+        { options: next, ...(template === undefined ? {} : { template }) },
+      ),
+    );
     setBusy(null);
     if (fresh !== null) {
       setPreview(fresh);
       setEdits({});
     }
+    return fresh;
+  };
+
+  const changeOptions = async (next: FormatOptions) => {
+    setOptions(next);
+    await resniff(next, templateChoice);
+  };
+
+  const chooseTemplate = async (choice: TemplateId | null) => {
+    const before = preview.template ?? null;
+    if ((await resniff(options, choice)) === null) return;
+    setTemplateChoice(choice);
+    setDeclined(choice === null ? before : null);
   };
 
   const overrides: ColumnOverride[] = useMemo(
@@ -131,6 +154,8 @@ function Preview(p: {
           ...(optionsChanged ? { options } : {}),
           ...(overrides.length > 0 ? { columnOverrides: overrides } : {}),
           ...(why === null ? {} : { overrideReason: why }),
+          // The template the preview shows, or none: the import applies exactly what was reviewed.
+          template: preview.template?.id ?? null,
           // The plan the user reviewed: engines that execute plans import exactly this.
           preview,
         },
@@ -183,6 +208,41 @@ function Preview(p: {
           {busy === 'import' ? 'Importing…' : 'Import'}
         </button>
       </div>
+      {preview.template !== undefined && preview.template !== null && (
+        <div className="tw-template-note" role="status" data-testid={TID.importTemplate}>
+          <span>
+            Mapping template <strong>{preview.template.name}</strong> applied:{' '}
+            {preview.template.overrides.length === 0
+              ? 'detection already reads every column as it says.'
+              : `it sets ${preview.template.overrides.length} ${preview.template.overrides.length === 1 ? 'column' : 'columns'} differently from detection. Each change is recorded in the audit log in the template's name.`}
+          </span>
+          <button
+            type="button"
+            className="tw-link"
+            data-testid={TID.importTemplateToggle}
+            disabled={busy !== null}
+            onClick={() => void chooseTemplate(null)}
+          >
+            Don't apply
+          </button>
+        </div>
+      )}
+      {(preview.template === undefined || preview.template === null) && declined !== null && (
+        <div className="tw-template-note" role="status" data-testid={TID.importTemplate}>
+          <span>
+            Mapping template <strong>{declined.name}</strong> fits this file but is not applied.
+          </span>
+          <button
+            type="button"
+            className="tw-link"
+            data-testid={TID.importTemplateToggle}
+            disabled={busy !== null}
+            onClick={() => void chooseTemplate(declined.id)}
+          >
+            Apply it
+          </button>
+        </div>
+      )}
       {preview.exceedsBudget && (
         <div className="tw-warning-note" role="status">
           This file is larger than this edition's memory budget; only the first part will be imported (TW-IMP-006). The
@@ -401,10 +461,17 @@ function Preview(p: {
 }
 
 function Flags(p: {
-  d: { assumed: boolean; confidence: string; evidence: string };
+  d: { assumed: boolean; confidence: string; evidence: string; method?: string };
   edited: boolean;
 }): React.JSX.Element | null {
   if (p.edited) return <span className="tw-badge tw-badge-user">changed</span>;
+  if (p.d.method === 'mapping-template') {
+    return (
+      <span className="tw-badge tw-badge-template" title={p.d.evidence}>
+        template
+      </span>
+    );
+  }
   if (!p.d.assumed) return null;
   return <AssumedBadge title={`${p.d.confidence} confidence: ${p.d.evidence}`} />;
 }

@@ -20,6 +20,7 @@ const FIXTURE_STEMS: Record<SchemaName, string> = {
   projectManifest: 'project-manifest',
   exportManifest: 'export-manifest',
   unitRegistry: 'unit-registry',
+  mappingTemplate: 'mapping-template',
 };
 
 type PatchOp = { op: 'add' | 'replace'; path: string; value: JsonValue } | { op: 'remove'; path: string };

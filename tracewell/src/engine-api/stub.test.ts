@@ -277,6 +277,24 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
     expect(await audit(c)).toHaveLength(before);
     expect(await c.jobOutcome(handle.jobId)).toEqual({ state: 'cancelled' });
   },
+  listMappingTemplates: async (c) => {
+    expect(await c.listMappingTemplates()).toEqual([]);
+  },
+  saveMappingTemplate: async (c) => {
+    const ds = (await c.getProject()).datasets[0]?.id as string;
+    const t = await c.saveMappingTemplate({ datasetId: ds, name: 'Well tests' });
+    expect(t).toMatchObject({ name: 'Well tests', savedBy: 'Prasad' });
+    expect(t.id).toMatch(/^mt_[0-9a-f]{12}$/);
+    expect(t.columns.length).toBeGreaterThan(0);
+    expect(await c.listMappingTemplates()).toEqual([t]);
+  },
+  deleteMappingTemplate: async (c) => {
+    const ds = (await c.getProject()).datasets[0]?.id as string;
+    const t = await c.saveMappingTemplate({ datasetId: ds, name: 'Well tests' });
+    await c.deleteMappingTemplate(t.id);
+    expect(await c.listMappingTemplates()).toEqual([]);
+    expect((await rejection(c.deleteMappingTemplate(t.id))).code).toBe('NOT_FOUND');
+  },
   jobOutcome: async (c) => {
     expect((await rejection(c.jobOutcome('j99'))).code).toBe('NOT_FOUND');
     const handle = await c.runChecks('d1');

@@ -131,6 +131,11 @@
 .tw-badge-derived {
   color: var(--tw-accent);
 }
+.tw-badge-template {
+  color: var(--tw-ok);
+  border-color: var(--tw-ok);
+  background: transparent;
+}
 .tw-conf-high {
   color: var(--tw-ok);
 }
@@ -214,6 +219,26 @@
 .tw-readonly-banner {
   border-left-color: var(--tw-error);
   background: var(--tw-error-bg);
+}
+.tw-template-note {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin: 6px var(--tw-pad);
+  padding: 6px 10px;
+  border-left: 3px solid var(--tw-ok);
+  background: var(--tw-surface-2);
+}
+.tw-template-note > button {
+  flex: none;
+  white-space: nowrap;
+}
+.tw-template-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin: 6px 0 12px;
 }
 .tw-hint {
   margin: 6px 0;

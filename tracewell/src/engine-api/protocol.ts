@@ -31,6 +31,7 @@ import type {
   JobId,
   JobOutcome,
   JobProgress,
+  MappingTemplate,
   Page,
   PageRequest,
   ProjectSummary,
@@ -44,12 +45,13 @@ import type {
   StepInput,
   StepPreview,
   TableSchema,
+  TemplateId,
   UnitInfo,
   UserProfile,
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.3.0';
+export const PROTOCOL_VERSION = '0.4.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -80,9 +82,11 @@ export interface EngineApi {
   saveProject(target?: FileTarget): Promise<JobHandle>;
   /**
    * Reads at most PREVIEW_MAX_BYTES. With `options`, the preview reads the file with those settings
-   * (a delimiter, encoding or header rows the user chose) instead of the detected ones.
+   * (a delimiter, encoding or header rows the user chose) instead of the detected ones. `template`
+   * chooses the mapping template (protocol 0.4): its ID, null for none, or left out for the one
+   * that fits the file.
    */
-  sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview>;
+  sniff(file: FileInput, o?: { options?: FormatOptions; template?: TemplateId | null }): Promise<ImportPreview>;
   /** Result: DatasetSummary. */
   importFile(file: FileInput, o?: ImportRequestOptions): Promise<JobHandle>;
   getSchema(datasetId: DatasetId, stage?: 'working' | 'output'): Promise<TableSchema>;
@@ -109,6 +113,14 @@ export interface EngineApi {
   exportData(req: ExportRequest): Promise<JobHandle>;
   cancelJob(jobId: JobId): Promise<void>;
   jobOutcome(jobId: JobId): Promise<JobOutcome<unknown>>;
+  /** The user's mapping templates, by name (FR-IMP-06). Protocol 0.4. */
+  listMappingTemplates(): Promise<MappingTemplate[]>;
+  /**
+   * Saves how a dataset's columns are read, as a template later files with the same columns use.
+   * A template of the same name is replaced.
+   */
+  saveMappingTemplate(o: { datasetId: DatasetId; name: string }): Promise<MappingTemplate>;
+  deleteMappingTemplate(id: TemplateId): Promise<void>;
 }
 
 /** What the engine tells the UI without being asked. */
@@ -180,6 +192,9 @@ export const ENGINE_METHODS = [
   'exportData',
   'cancelJob',
   'jobOutcome',
+  'listMappingTemplates',
+  'saveMappingTemplate',
+  'deleteMappingTemplate',
 ] as const satisfies readonly (keyof EngineApi)[];
 
 type MissingMethod = Exclude<keyof EngineApi, (typeof ENGINE_METHODS)[number]>;

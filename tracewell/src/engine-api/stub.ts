@@ -32,6 +32,7 @@ import {
   type JobId,
   type JobOutcome,
   type JsonValue,
+  type MappingTemplate,
   type OverridableProperty,
   type Page,
   type PageRequest,
@@ -46,6 +47,7 @@ import {
   type StepInput,
   type StepPreview,
   type TableSchema,
+  type TemplateId,
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
@@ -172,6 +174,7 @@ class StubEngine implements EngineImpl {
   private projectCount = 0;
   private previewCount = 0;
   private project: StubProject;
+  private templates: MappingTemplate[] = [];
 
   constructor() {
     this.project = this.cannedProject(CANNED_PROJECT);
@@ -244,7 +247,7 @@ class StubEngine implements EngineImpl {
     });
   }
 
-  async sniff(file: FileInput, o?: { options?: FormatOptions }): Promise<ImportPreview> {
+  async sniff(file: FileInput, o?: { options?: FormatOptions; template?: TemplateId | null }): Promise<ImportPreview> {
     // The stub has one canned reading of its file; other settings are refused, as on import.
     requireSourceOptions(o?.options);
     return importPreview(this.project, fileName(file), `pv${++this.previewCount}`);
@@ -405,6 +408,43 @@ class StubEngine implements EngineImpl {
 
   async jobOutcome(jobId: JobId): Promise<JobOutcome<unknown>> {
     return this.jobs.outcome(jobId);
+  }
+
+  async listMappingTemplates(): Promise<MappingTemplate[]> {
+    return structuredClone([...this.templates].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
+  }
+
+  /** The stub keeps templates for the session and never applies them to its canned preview. */
+  async saveMappingTemplate(o: { datasetId: DatasetId; name: string }): Promise<MappingTemplate> {
+    const schema = await this.getSchema(o?.datasetId);
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (name === '') throw new EngineError('INVALID_INPUT', 'A mapping template needs a name.', 'Type a name for it.');
+    const template: MappingTemplate = {
+      id: `mt_${stubHex(`template:${name}`, 12)}`,
+      name,
+      savedFrom: { fileName: schema.source.fileName, format: schema.source.format },
+      columns: schema.columns
+        .filter((c) => c.derivedFrom === undefined)
+        .map((c) => ({
+          sourceHeader: [...c.sourceHeader],
+          name: c.name,
+          type: c.type.value,
+          unit: c.unit.value,
+          role: c.role.value,
+          nullMarkers: [...c.nullMarkers.value],
+        })),
+      savedAt: this.clock.now(),
+      savedBy: this.project.profile.name,
+    };
+    this.templates = [...this.templates.filter((t) => t.id !== template.id), template];
+    return structuredClone(template);
+  }
+
+  async deleteMappingTemplate(id: TemplateId): Promise<void> {
+    if (!this.templates.some((t) => t.id === id)) {
+      throw new EngineError('NOT_FOUND', `There is no mapping template ${String(id)}.`, 'Choose a template from the list.');
+    }
+    this.templates = this.templates.filter((t) => t.id !== id);
   }
 
   private emptyProject(name: string, profile: UserProfile, unitSystem: 'SI' | 'Oilfield'): StubProject {
