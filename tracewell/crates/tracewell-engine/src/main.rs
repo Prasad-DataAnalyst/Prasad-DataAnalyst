@@ -160,6 +160,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     if method == "saveProject" {
         return engine::save_project(shared, param(params, 0));
     }
+    if method == "openProject" {
+        return engine::open_project(shared, msg, param(params, 0));
+    }
     let mut e = shared
         .engine
         .lock()

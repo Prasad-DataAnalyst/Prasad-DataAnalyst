@@ -100,8 +100,8 @@ pub struct SaveInput {
     /// unitSystem, projectArea, rulePacks, datasets and auditHead.
     pub manifest: Map<String, Value>,
     pub audit_jsonl: String,
-    /// Each original's manifest record (fileId, name, size, mediaType, addedSeq) and its file.
-    pub originals: Vec<(Value, PathBuf)>,
+    /// Each original's manifest record (fileId, name, size, mediaType, addedSeq) and its bytes.
+    pub originals: Vec<(Value, OriginalSource)>,
     /// Each cache's manifest record (datasetId, sourceSeq, kind) and its Parquet file.
     pub caches: Vec<(Value, PathBuf)>,
     /// Caches held in memory: each dataset's notes as JSON.
@@ -113,6 +113,7 @@ pub struct SaveInput {
 enum Source {
     Bytes(Vec<u8>),
     File(PathBuf),
+    Range(PathBuf, u64, u64),
 }
 
 struct Item {
@@ -280,7 +281,14 @@ pub fn write_twp(
             size: info["size"].as_u64().unwrap_or(0),
             // Checked as the file is copied: it must still be the file that was imported.
             sha256: file_id,
-            source: Source::File(source),
+            source: match source {
+                OriginalSource::File(path) => Source::File(path),
+                OriginalSource::Entry {
+                    archive,
+                    offset,
+                    size,
+                } => Source::Range(archive, offset, size),
+            },
         });
     }
     let mut caches = Vec::new();
@@ -374,20 +382,32 @@ pub fn write_twp(
     for item in rest {
         match item.source {
             Source::Bytes(data) => zip.add_bytes(&item.path, &data)?,
-            Source::File(src) => {
+            Source::File(_) | Source::Range(..) => {
                 let phase = if item.path.starts_with("originals/") {
                     "Copying the original files"
                 } else {
                     "Copying the working data"
                 };
                 let base = written;
-                let sha = zip.add_file(&item.path, &src, &mut |n| progress(phase, base + n))?;
+                let (sha, from) = match &item.source {
+                    Source::Range(archive, offset, size) => (
+                        zip.add_range(&item.path, archive, *offset, *size, &mut |n| {
+                            progress(phase, base + n)
+                        })?,
+                        archive.clone(),
+                    ),
+                    Source::File(src) => (
+                        zip.add_file(&item.path, src, &mut |n| progress(phase, base + n))?,
+                        src.clone(),
+                    ),
+                    Source::Bytes(_) => unreachable!(),
+                };
                 if sha != item.sha256 {
                     return Err(EngineError::new(
                         "INVALID_INPUT",
                         format!(
                             "{} has changed since it was imported, so it cannot be saved as the project's original.",
-                            src.display()
+                            from.display()
                         ),
                         "Put the original file back as it was, or import the changed file as a new source.",
                     ));
@@ -418,4 +438,435 @@ mod tests {
         assert_eq!(suggested_file_name("North Sea.twp"), "North Sea.twp");
         assert_eq!(suggested_file_name("a/b"), "a_b.twp");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reading
+
+/// Where an original's bytes are: a file on disk, or an entry stored in the project file it came from.
+#[derive(Clone, Debug)]
+pub enum OriginalSource {
+    File(PathBuf),
+    Entry {
+        archive: PathBuf,
+        offset: u64,
+        size: u64,
+    },
+}
+
+/// The SHA-256 of an original's bytes, read from wherever they are.
+pub fn hash_source(source: &OriginalSource) -> Result<String> {
+    match source {
+        OriginalSource::File(path) => hash_file(path).map(|(sha, _)| sha),
+        OriginalSource::Entry {
+            archive,
+            offset,
+            size,
+        } => {
+            use std::io::{Seek, SeekFrom};
+            let mut f = std::fs::File::open(archive)?;
+            f.seek(SeekFrom::Start(*offset))?;
+            let mut hash = Sha256::new();
+            let mut buf = vec![0u8; 1 << 20];
+            let mut left = *size;
+            while left > 0 {
+                let n = (left as usize).min(buf.len());
+                f.read_exact(&mut buf[..n])?;
+                hash.update(&buf[..n]);
+                left -= n as u64;
+            }
+            Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+        }
+    }
+}
+
+/// What reading a project file found: its entries, manifest and audit log, and one integrity
+/// check result per check, in the order and with the IDs the TypeScript reader uses.
+pub struct TwpRead {
+    pub entries: Vec<crate::zip::Entry>,
+    pub manifest: Option<Value>,
+    pub audit_jsonl: Option<String>,
+    pub checks: Vec<Value>,
+    /// The paths whose bytes matched the manifest.
+    pub verified: std::collections::HashSet<String>,
+}
+
+pub fn integrity(
+    id: &str,
+    ok: bool,
+    detail: String,
+    rule: Option<&str>,
+    target: Option<&str>,
+) -> Value {
+    let mut c = json!({ "id": id, "ok": ok, "detail": detail });
+    if !ok {
+        if let Some(r) = rule {
+            c["ruleId"] = json!(r);
+        }
+    }
+    if let Some(t) = target {
+        c["target"] = json!(t);
+    }
+    c
+}
+
+/// The bytes of a (small) entry.
+pub fn entry_bytes(archive: &Path, e: &crate::zip::Entry) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    crate::zip::read_entry(archive, e, &mut |b| {
+        out.extend_from_slice(b);
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+fn is_hex(s: &str, n: usize) -> bool {
+    s.len() == n
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The manifest's structure, as far as opening relies on it; an error says where it is wrong.
+fn manifest_problem(m: &Value) -> Option<String> {
+    let s = |k: &str| m[k].as_str().filter(|v| !v.is_empty());
+    if s("projectId")
+        .is_none_or(|id| !(id.len() == 18 && id.starts_with("p_") && is_hex(&id[2..], 16)))
+    {
+        return Some("projectId".into());
+    }
+    for k in ["name", "createdAt", "savedAt", "savedBy", "appVersion"] {
+        if s(k).is_none() {
+            return Some(k.into());
+        }
+    }
+    let entries_ok = m["entries"].as_array().is_some_and(|a| {
+        a.iter().all(|e| {
+            e["path"].is_string()
+                && e["size"].is_u64()
+                && e["sha256"].as_str().is_some_and(|h| is_hex(h, 64))
+        })
+    });
+    if !entries_ok {
+        return Some("entries".into());
+    }
+    let originals_ok = m["originals"].as_array().is_some_and(|a| {
+        a.iter().all(|o| {
+            o["fileId"].as_str().is_some_and(|h| is_hex(h, 64))
+                && o["name"].is_string()
+                && o["size"].is_u64()
+                && o["mediaType"].is_string()
+                && o["path"].is_string()
+                && o["addedSeq"].is_u64()
+        })
+    });
+    if !originals_ok {
+        return Some("originals".into());
+    }
+    if !m["datasets"].is_array()
+        || !m["auditHead"]["seq"].is_u64()
+        || !m["auditHead"]["hash"].is_string()
+    {
+        return Some("datasets or auditHead".into());
+    }
+    let caches_ok = m.get("caches").is_none_or(|c| {
+        c.as_array().is_some_and(|a| {
+            a.iter().all(|x| {
+                x["datasetId"].is_string()
+                    && x["sourceSeq"].is_u64()
+                    && matches!(x["kind"].as_str(), Some("rows" | "exceptions" | "notes"))
+                    && x["path"].is_string()
+            })
+        })
+    });
+    if !caches_ok {
+        return Some("caches".into());
+    }
+    None
+}
+
+/// Reads and checks a project file. It never fails on bad content: what cannot be read is a
+/// failed check, so a damaged project still opens read-only for inspection.
+pub fn read_twp(archive: &Path, progress: &mut dyn FnMut(&str, u64)) -> TwpRead {
+    let mut out = TwpRead {
+        entries: Vec::new(),
+        manifest: None,
+        audit_jsonl: None,
+        checks: Vec::new(),
+        verified: Default::default(),
+    };
+    let prj4 = Some("TW-PRJ-004");
+    match crate::zip::read_entries(archive) {
+        Ok(entries) => out.entries = entries,
+        Err(e) => {
+            out.checks.push(integrity(
+                "zip",
+                false,
+                format!("The file is not a readable ZIP archive: {}", e.message),
+                prj4,
+                None,
+            ));
+            return out;
+        }
+    }
+    out.checks.push(integrity(
+        "zip",
+        true,
+        "The file is a readable ZIP archive.".into(),
+        None,
+        None,
+    ));
+    let find = |name: &str| out.entries.iter().find(|e| e.name == name).cloned();
+    let first_ok = out
+        .entries
+        .first()
+        .is_some_and(|e| e.name == "mimetype" && e.method == 0)
+        && find("mimetype")
+            .and_then(|e| entry_bytes(archive, &e).ok())
+            .is_some_and(|b| b == MIMETYPE.as_bytes());
+    out.checks.push(if first_ok {
+        integrity(
+            "mimetype",
+            true,
+            "The first entry identifies a Tracewell project.".into(),
+            None,
+            None,
+        )
+    } else {
+        integrity(
+            "mimetype",
+            false,
+            format!("The first entry is not an uncompressed mimetype of \"{MIMETYPE}\"."),
+            prj4,
+            None,
+        )
+    });
+    let manifest: Option<Value> = find("manifest.json")
+        .and_then(|e| entry_bytes(archive, &e).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let version = manifest
+        .as_ref()
+        .map(|m| (m["format"].clone(), m["formatVersion"].clone()));
+    out.checks.push(match &version {
+        None => integrity(
+            "format-version",
+            false,
+            "The format version is unknown because manifest.json is missing or not JSON.".into(),
+            prj4,
+            None,
+        ),
+        Some((f, v)) if f == "tracewell-project" && (v == "0.1" || v == "0.2") => integrity(
+            "format-version",
+            true,
+            format!(
+                "Format tracewell-project {} is supported.",
+                v.as_str().unwrap_or("")
+            ),
+            None,
+            None,
+        ),
+        Some((_, v)) => integrity(
+            "format-version",
+            false,
+            format!(
+                "The project uses format version {v}; this version of Tracewell reads 0.1 and 0.2."
+            ),
+            prj4,
+            None,
+        ),
+    });
+    let manifest = match manifest {
+        None => {
+            out.checks.push(integrity(
+                "manifest-schema",
+                false,
+                "The manifest cannot be checked because it is missing or not JSON.".into(),
+                None,
+                None,
+            ));
+            return out;
+        }
+        Some(m) => match manifest_problem(&m) {
+            Some(at) => {
+                out.checks.push(integrity(
+                    "manifest-schema",
+                    false,
+                    format!("The manifest is not well formed at {at}."),
+                    None,
+                    None,
+                ));
+                return out;
+            }
+            None => {
+                out.checks.push(integrity(
+                    "manifest-schema",
+                    true,
+                    "The manifest is well formed.".into(),
+                    None,
+                    None,
+                ));
+                m
+            }
+        },
+    };
+
+    // Every listed entry present with its size and SHA-256, nothing else, and CHECKSUMS agreeing.
+    let mut failures = Vec::new();
+    let mut digests = std::collections::HashMap::new();
+    let listed: Vec<Value> = manifest["entries"].as_array().cloned().unwrap_or_default();
+    let mut done = 0u64;
+    for l in &listed {
+        let path = l["path"].as_str().unwrap_or("");
+        let Some(e) = find(path) else {
+            failures.push(integrity(
+                "entry-checksum",
+                false,
+                format!("{path} is listed in the manifest but missing."),
+                prj4,
+                Some(path),
+            ));
+            continue;
+        };
+        if Some(e.size) != l["size"].as_u64() {
+            failures.push(integrity(
+                "entry-checksum",
+                false,
+                format!(
+                    "{path} is {} bytes; the manifest says {}.",
+                    e.size, l["size"]
+                ),
+                prj4,
+                Some(path),
+            ));
+            continue;
+        }
+        let base = done;
+        let mut seen = 0u64;
+        let sha = crate::zip::read_entry(archive, &e, &mut |b| {
+            seen += b.len() as u64;
+            progress("Verifying the project file", base + seen);
+            Ok(())
+        });
+        done += e.size;
+        match sha {
+            Ok(sha) if Some(sha.as_str()) == l["sha256"].as_str() => {
+                digests.insert(path.to_string(), sha);
+                out.verified.insert(path.to_string());
+            }
+            Ok(_) => failures.push(integrity(
+                "entry-checksum",
+                false,
+                format!("{path} does not match its SHA-256 in the manifest."),
+                prj4,
+                Some(path),
+            )),
+            Err(err) => failures.push(integrity(
+                "entry-checksum",
+                false,
+                format!("{path} cannot be read: {}", err.message),
+                prj4,
+                Some(path),
+            )),
+        }
+    }
+    let known: std::collections::HashSet<&str> =
+        listed.iter().filter_map(|l| l["path"].as_str()).collect();
+    for e in &out.entries {
+        if !known.contains(e.name.as_str())
+            && !matches!(
+                e.name.as_str(),
+                "mimetype" | "manifest.json" | "CHECKSUMS.sha256"
+            )
+        {
+            failures.push(integrity(
+                "entry-checksum",
+                false,
+                format!("{} is in the archive but not in the manifest.", e.name),
+                prj4,
+                Some(&e.name),
+            ));
+        }
+    }
+    let sums = find("CHECKSUMS.sha256")
+        .and_then(|e| entry_bytes(archive, &e).ok())
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    match sums {
+        None => failures.push(integrity(
+            "entry-checksum",
+            false,
+            "CHECKSUMS.sha256 is missing.".into(),
+            prj4,
+            Some("CHECKSUMS.sha256"),
+        )),
+        Some(text) => {
+            for line in text.lines().filter(|l| !l.is_empty()) {
+                let (sha, path) = line.split_once("  ").unwrap_or(("", line));
+                let actual = match path {
+                    "mimetype" | "manifest.json" => find(path)
+                        .and_then(|e| entry_bytes(archive, &e).ok())
+                        .map(|b| sha256_hex(&b)),
+                    _ => digests.get(path).cloned(),
+                };
+                let covered = known.contains(path) || matches!(path, "mimetype" | "manifest.json");
+                if covered && actual.as_deref() != Some(sha) {
+                    failures.push(integrity(
+                        "entry-checksum",
+                        false,
+                        format!("CHECKSUMS.sha256 does not agree with {path}."),
+                        prj4,
+                        Some(path),
+                    ));
+                }
+            }
+        }
+    }
+    // One finding per entry, as the TypeScript reader reports them.
+    let mut seen = std::collections::HashSet::new();
+    failures.retain(|f| seen.insert(f["target"].as_str().unwrap_or("").to_string()));
+    if failures.is_empty() {
+        out.checks.push(integrity(
+            "entry-checksum",
+            true,
+            format!("All {} entries match their SHA-256.", listed.len()),
+            None,
+            None,
+        ));
+    } else {
+        out.checks.extend(failures);
+    }
+
+    // Each original stored at its content address.
+    let mut bad = Vec::new();
+    for o in manifest["originals"].as_array().into_iter().flatten() {
+        let (id, name, path) = (
+            o["fileId"].as_str().unwrap_or(""),
+            o["name"].as_str().unwrap_or(""),
+            o["path"].as_str().unwrap_or(""),
+        );
+        if path != original_path(id, name) || digests.get(path).map(String::as_str) != Some(id) {
+            bad.push(integrity(
+                "original-checksum",
+                false,
+                format!("The original {path} does not match its content address."),
+                Some("TW-PRJ-001"),
+                Some(path),
+            ));
+        }
+    }
+    if bad.is_empty() {
+        let n = manifest["originals"].as_array().map_or(0, Vec::len);
+        out.checks.push(integrity(
+            "original-checksum",
+            true,
+            format!("All {n} originals match their SHA-256."),
+            None,
+            None,
+        ));
+    } else {
+        out.checks.extend(bad);
+    }
+    out.audit_jsonl = find("audit.jsonl")
+        .and_then(|e| entry_bytes(archive, &e).ok())
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    out.manifest = Some(manifest);
+    out
 }

@@ -1,7 +1,9 @@
-//! Export packages as ZIP archives, written and re-read the way io/zip-write.ts and zip-read.ts
-//! do: a fixed 1980-01-01 timestamp, no host attributes, entries in path order. Entries are
-//! stored (the data files are large, and Parquet is compressed already), and an entry or offset
-//! of 4 GiB or more uses ZIP64 fields, so a package of any size opens in standard tools.
+//! Export packages and project files as ZIP archives, written and re-read the way io/zip-write.ts
+//! and zip-read.ts do: a fixed 1980-01-01 timestamp, no host attributes, entries in path order.
+//! Entries are written stored (the data files are large, and Parquet is compressed already), and
+//! an entry or offset of 4 GiB or more uses ZIP64 fields, so an archive of any size opens in
+//! standard tools. Reading also inflates deflated entries, as the TypeScript engine writes the
+//! small entries of a project file, up to a size guard.
 
 use crate::error::{EngineError, Result};
 use sha2::{Digest, Sha256};
@@ -22,6 +24,8 @@ const VERSION_ZIP64: u16 = 45;
 const VERSION_MADE_BY: u16 = 20;
 const MAX_U32: u64 = 0xffff_ffff;
 const COPY_BYTES: usize = 4 << 20;
+/** A deflated entry is inflated in memory, so it may expand to this much at most. */
+const MAX_INFLATED: u64 = 512 << 20;
 
 fn crc_tables() -> &'static [[u32; 256]; 8] {
     static TABLES: OnceLock<[[u32; 256]; 8]> = OnceLock::new();
@@ -191,6 +195,45 @@ impl ZipWriter {
         Ok(hex(&hash.finalize()))
     }
 
+    /// Adds an entry copied from `len` bytes of `src` at `offset` (an entry stored in another
+    /// archive), returning the SHA-256 of the bytes.
+    pub fn add_range(
+        &mut self,
+        name: &str,
+        src: &Path,
+        offset: u64,
+        len: u64,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<String> {
+        let start = self.pos;
+        self.local_header(name.as_bytes(), 0, len)?;
+        let mut input = File::open(src)?;
+        input.seek(SeekFrom::Start(offset))?;
+        let mut buf = vec![0u8; COPY_BYTES];
+        let (mut crc, mut hash, mut left) = (0u32, Sha256::new(), len);
+        while left > 0 {
+            let n = (left as usize).min(buf.len());
+            input.read_exact(&mut buf[..n])?;
+            crc = crc32_update(crc, &buf[..n]);
+            hash.update(&buf[..n]);
+            self.put(&buf[..n])?;
+            left -= n as u64;
+            progress(len - left);
+        }
+        self.out.flush()?;
+        let file = self.out.get_mut();
+        file.seek(SeekFrom::Start(start + 14))?;
+        file.write_all(&crc.to_le_bytes())?;
+        file.seek(SeekFrom::Start(self.pos))?;
+        self.entries.push(Central {
+            name: name.as_bytes().to_vec(),
+            crc,
+            size: len,
+            offset: start,
+        });
+        Ok(hex(&hash.finalize()))
+    }
+
     /// Writes the central directory and returns the archive's size.
     pub fn finish(mut self) -> Result<u64> {
         let start = self.pos;
@@ -288,6 +331,8 @@ pub struct Entry {
     pub method: u16,
     pub crc: u32,
     pub size: u64,
+    /// The bytes it takes in the archive: its size when stored.
+    pub compressed: u64,
     pub data_offset: u64,
 }
 
@@ -398,6 +443,7 @@ pub fn read_entries(path: &Path) -> Result<Vec<Entry>> {
             method,
             crc,
             size: usize_,
+            compressed: csize,
             data_offset,
         });
         i = extra_end + comment_len;
@@ -411,9 +457,12 @@ pub fn read_entry(
     e: &Entry,
     sink: &mut dyn FnMut(&[u8]) -> Result<()>,
 ) -> Result<String> {
+    if e.method == 8 {
+        return read_deflated(path, e, sink);
+    }
     if e.method != 0 {
         return Err(broken(&format!(
-            "{} is compressed, and packages store their entries",
+            "{} uses a compression method other than store or deflate",
             e.name
         )));
     }
@@ -434,6 +483,30 @@ pub fn read_entry(
         return Err(broken(&format!("{} does not match its CRC-32", e.name)));
     }
     Ok(hex(&hash.finalize()))
+}
+
+fn read_deflated(
+    path: &Path,
+    e: &Entry,
+    sink: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<String> {
+    if e.size > MAX_INFLATED || e.compressed > MAX_INFLATED {
+        return Err(broken(&format!(
+            "{} would expand beyond {} bytes",
+            e.name, MAX_INFLATED
+        )));
+    }
+    let mut f = File::open(path)?;
+    f.seek(SeekFrom::Start(e.data_offset))?;
+    let mut packed = vec![0u8; e.compressed as usize];
+    f.read_exact(&mut packed)?;
+    let data = miniz_oxide::inflate::decompress_to_vec_with_limit(&packed, e.size as usize)
+        .map_err(|_| broken(&format!("{} cannot be inflated", e.name)))?;
+    if data.len() as u64 != e.size || crc32_update(0, &data) != e.crc {
+        return Err(broken(&format!("{} does not match its CRC-32", e.name)));
+    }
+    sink(&data)?;
+    Ok(hex(&Sha256::digest(&data)))
 }
 
 #[cfg(test)]

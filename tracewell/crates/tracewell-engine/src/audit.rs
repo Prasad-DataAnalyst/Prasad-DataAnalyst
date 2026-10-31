@@ -44,6 +44,22 @@ impl AuditLog {
         entry
     }
 
+    /// A log read from audit.jsonl: the entries in order, as written. A line that is not JSON ends
+    /// the reading and is reported with its number; whether the chain holds is verify()'s question.
+    pub fn from_jsonl(project_id: &str, text: &str) -> (AuditLog, Option<(usize, String)>) {
+        let mut log = AuditLog::new(project_id);
+        for (i, line) in text.lines().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Value>(line) {
+                Ok(v) if v.is_object() => log.entries.push(v),
+                _ => return (log, Some((i + 1, "the line is not a JSON object".into()))),
+            }
+        }
+        (log, None)
+    }
+
     pub fn entries(&self) -> &[Value] {
         &self.entries
     }
@@ -74,7 +90,6 @@ impl AuditLog {
     }
 
     /// The JSON Lines text of the log, as audit.jsonl holds it.
-    #[allow(dead_code)] // Written into .twp files once the native engine saves projects.
     pub fn to_jsonl(&self) -> String {
         self.entries
             .iter()

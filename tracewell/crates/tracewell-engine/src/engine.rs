@@ -77,9 +77,11 @@ pub struct Project {
     pub next_dataset: u64,
     /// Records of the packages exported and verified.
     pub exports: Vec<Value>,
-    /// Where each original's bytes are on disk, by file ID, for saving them into the project file.
-    pub original_paths: HashMap<String, PathBuf>,
+    /// Where each original's bytes are, by file ID, for saving them into the project file.
+    pub original_paths: HashMap<String, crate::project::OriginalSource>,
     pub last_saved_at: Option<String>,
+    /// Set when an opened project failed an integrity check: it can be read, not changed.
+    pub read_only: bool,
 }
 
 pub struct Engine {
@@ -213,6 +215,19 @@ impl Engine {
         })
     }
 
+    /// The open project, unless it opened read-only.
+    fn writable(&self) -> Result<&Project> {
+        let p = self.project()?;
+        if p.read_only {
+            return Err(EngineError::new(
+                "READ_ONLY_PROJECT",
+                "This project opened read-only because its integrity checks failed, so it cannot be changed.",
+                "Review the Open report and the project issues. To continue working, import the original files into a new project.",
+            ));
+        }
+        Ok(p)
+    }
+
     fn dataset(&self, id: &Value) -> Result<&Dataset> {
         let id = id.as_str().unwrap_or("");
         self.project()?
@@ -292,6 +307,7 @@ impl Engine {
             exports: Vec::new(),
             original_paths: HashMap::new(),
             last_saved_at: None,
+            read_only: false,
         });
         let mut d = draft("project.create", json!({}));
         d.insert(
@@ -331,13 +347,13 @@ impl Engine {
             "profile": p.profile,
             "unitSystem": p.unit_system,
             "projectArea": null,
-            "readOnly": false,
-            "dirty": seq > 0,
-            "lastSavedAt": null,
+            "readOnly": p.read_only,
+            "dirty": p.log.entries().last().is_some_and(|e| e["action"] != "project.save"),
+            "lastSavedAt": p.last_saved_at,
             "originals": p.originals,
             "datasets": p.datasets.iter().map(Self::dataset_summary).collect::<Vec<_>>(),
             "exports": p.exports,
-            "rulePacks": [],
+            "rulePacks": rule_packs_of(&p.log),
             "auditHead": { "seq": seq, "hash": hash },
         }))
     }
@@ -783,7 +799,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
-    let project_id = engine.project()?.id.clone();
+    let project_id = engine.writable()?.id.clone();
     let d = engine.dataset(dataset)?;
     let dataset_id = d.id.clone();
     let view = quote_ident(&d.view);
@@ -887,7 +903,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
-    let project_id = engine.project()?.id.clone();
+    let project_id = engine.writable()?.id.clone();
     let profile = req["profile"].as_str().unwrap_or("").to_string();
     let statuses = crate::export::profile_statuses();
     let status = statuses
@@ -1020,6 +1036,22 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
     Ok(json!({ "jobId": job, "kind": "export" }))
 }
 
+/// The rule packs the project's check runs used, in the order they were first used.
+fn rule_packs_of(log: &AuditLog) -> Vec<Value> {
+    let mut packs: Vec<Value> = Vec::new();
+    for e in log.entries().iter().filter(|e| e["action"] == "check.run") {
+        for r in e["payload"]["packs"].as_array().into_iter().flatten() {
+            if !packs
+                .iter()
+                .any(|x| x["id"] == r["id"] && x["version"] == r["version"])
+            {
+                packs.push(r.clone());
+            }
+        }
+    }
+    packs
+}
+
 /// A reader's note as JSON, as the TypeScript IngestNote holds it.
 fn note_json(n: &Note) -> Value {
     let mut v = json!({ "code": n.code, "message": n.message });
@@ -1032,7 +1064,6 @@ fn note_json(n: &Note) -> Value {
     v
 }
 
-#[allow(dead_code)] // Read back by openProject.
 fn note_from_json(v: &Value) -> Note {
     Note {
         code: v["code"].as_str().unwrap_or_default().to_string(),
@@ -1101,7 +1132,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
     let target = target_path(target)?;
-    let p = engine.project()?;
+    let p = engine.writable()?;
     let project_id = p.id.clone();
     let datasets: Vec<SavedDataset> = p
         .datasets
@@ -1118,7 +1149,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             source_seq: d.source_seq,
         })
         .collect();
-    let originals: Vec<(Value, PathBuf)> = p
+    let originals: Vec<(Value, crate::project::OriginalSource)> = p
         .originals
         .iter()
         .filter_map(|o| {
@@ -1180,14 +1211,17 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                 }
             }
             // Checked before the save is recorded, so a changed original leaves no save behind.
-            for (info, path) in &originals {
+            for (info, source) in &originals {
                 progress("Checking the original files", 0);
-                let (sha, _) = crate::project::hash_file(path).map_err(|_| {
+                let place = match source {
+                    crate::project::OriginalSource::File(path) => path.display().to_string(),
+                    crate::project::OriginalSource::Entry { archive, .. } => {
+                        archive.display().to_string()
+                    }
+                };
+                let sha = crate::project::hash_source(source).map_err(|_| {
                     EngineError::not_found(
-                        format!(
-                            "The original file {} can no longer be read.",
-                            path.display()
-                        ),
+                        format!("The original file {place} can no longer be read."),
                         "Put the original file back where it was imported from, then save again.",
                     )
                 })?;
@@ -1195,8 +1229,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                     return Err(EngineError::new(
                         "INVALID_INPUT",
                         format!(
-                            "{} has changed since it was imported, so it cannot be saved as the project's original.",
-                            path.display()
+                            "{place} has changed since it was imported, so it cannot be saved as the project's original."
                         ),
                         "Put the original file back as it was, or import the changed file as a new source.",
                     ));
@@ -1229,22 +1262,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                 .ok_or_else(|| EngineError::internal("The project disappeared during the save."))?;
             p.last_saved_at = Some(saved_at.clone());
             let (seq, hash) = p.log.head();
-            let mut packs: Vec<Value> = Vec::new();
-            for e in p
-                .log
-                .entries()
-                .iter()
-                .filter(|e| e["action"] == "check.run")
-            {
-                for r in e["payload"]["packs"].as_array().into_iter().flatten() {
-                    if !packs
-                        .iter()
-                        .any(|x| x["id"] == r["id"] && x["version"] == r["version"])
-                    {
-                        packs.push(r.clone());
-                    }
-                }
-            }
+            let packs = rule_packs_of(&p.log);
             let mut rule_packs = Vec::new();
             for r in packs {
                 let text =
@@ -1428,7 +1446,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
-    let project_id = engine.project()?.id.clone();
+    let project_id = engine.writable()?.id.clone();
     let preview = &o["preview"];
     if preview.is_null() {
         return Err(EngineError::invalid(
@@ -1659,7 +1677,7 @@ fn commit_import(
     if let Some(id) = file_id.as_str() {
         p.original_paths
             .entry(id.to_string())
-            .or_insert_with(|| original.to_path_buf());
+            .or_insert_with(|| crate::project::OriginalSource::File(original.to_path_buf()));
     }
     if !p.originals.iter().any(|o| o["fileId"] == file_id) {
         p.originals.push(json!({ "fileId": file_id, "name": spec["fileName"], "size": spec["size"], "mediaType": media_type, "addedSeq": added_seq }));
@@ -1667,4 +1685,481 @@ fn commit_import(
     p.next_dataset += 1;
     p.datasets.push(dataset);
     Ok(summary)
+}
+
+/// What a cache of the project file gives back for one dataset.
+struct Restored {
+    rows_file: PathBuf,
+    exceptions_file: PathBuf,
+    notes: Vec<Note>,
+    row_count: u64,
+}
+
+/// Copies an entry of the project file to `dest`, streaming it.
+fn extract(archive: &Path, e: &crate::zip::Entry, dest: &Path) -> Result<()> {
+    let mut out = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(dest)?);
+    crate::zip::read_entry(archive, e, &mut |b| {
+        out.write_all(b)?;
+        Ok(())
+    })?;
+    out.flush()?;
+    Ok(())
+}
+
+/// The dataset's caches when all three are in the file, verified and tied to this source.add.
+fn restore_cache(
+    conn: &Connection,
+    archive: &Path,
+    read: &crate::project::TwpRead,
+    manifest: &Value,
+    dataset_id: &str,
+    seq: u64,
+    dir: &Path,
+) -> Result<Option<Restored>> {
+    let entry = |kind: &str| -> Option<crate::zip::Entry> {
+        let path = manifest["caches"].as_array()?.iter().find(|c| {
+            c["datasetId"] == dataset_id
+                && c["sourceSeq"].as_u64() == Some(seq)
+                && c["kind"] == kind
+        })?["path"]
+            .as_str()?
+            .to_string();
+        if !read.verified.contains(&path) {
+            return None;
+        }
+        read.entries.iter().find(|e| e.name == path).cloned()
+    };
+    let (Some(rows), Some(exc), Some(notes)) = (entry("rows"), entry("exceptions"), entry("notes"))
+    else {
+        return Ok(None);
+    };
+    let rows_file = dir.join(format!("{dataset_id}.parquet"));
+    let exceptions_file = dir.join(format!("{dataset_id}{EXCEPTIONS_SUFFIX}.parquet"));
+    extract(archive, &rows, &rows_file)?;
+    extract(archive, &exc, &exceptions_file)?;
+    let notes: Value = serde_json::from_slice(&crate::project::entry_bytes(archive, &notes)?)
+        .map_err(|_| {
+            EngineError::internal("The notes of a dataset in the project file are not JSON.")
+        })?;
+    let row_count: i64 = conn.query_row(
+        &format!(
+            "SELECT count(*) FROM read_parquet({})",
+            quote_text(&rows_file.to_string_lossy())
+        ),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(Some(Restored {
+        rows_file,
+        exceptions_file,
+        notes: notes
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(note_from_json)
+            .collect(),
+        row_count: row_count.max(0) as u64,
+    }))
+}
+
+struct Reopen<'a> {
+    conn: &'a Connection,
+    archive: &'a Path,
+    workdir: &'a Path,
+    threads: usize,
+    cancel: &'a AtomicBool,
+}
+
+impl Reopen<'_> {
+    /// Rebuilds a dataset from its source.add entry: from its caches, or by importing its original
+    /// again under the recorded plan. Returns the dataset and whether a cache was used.
+    fn source_add(
+        &self,
+        p: &mut Project,
+        read: &crate::project::TwpRead,
+        manifest: &Value,
+        e: &Value,
+        progress: &mut dyn FnMut(&str, u64),
+    ) -> Result<bool> {
+        let dataset_id = e["target"]["datasetId"].as_str().unwrap_or("").to_string();
+        let seq = e["seq"].as_u64().unwrap_or(0);
+        let spec = e["payload"]["spec"].clone();
+        let plan = csv_plan(&spec)?;
+        let file_id = spec["fileId"].as_str().unwrap_or("").to_string();
+        let original = manifest["originals"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|o| o["fileId"] == file_id.as_str())
+            .and_then(|o| {
+                read.entries
+                    .iter()
+                    .find(|x| Some(x.name.as_str()) == o["path"].as_str())
+            })
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::new(
+                    "PROJECT_INVALID",
+                    format!("The original file {} is missing.", spec["fileName"]),
+                    "Open the project from a complete .twp file.",
+                )
+            })?;
+        let dir = self.workdir.join(&p.id);
+        std::fs::create_dir_all(&dir)?;
+        let cached = restore_cache(
+            self.conn,
+            self.archive,
+            read,
+            manifest,
+            &dataset_id,
+            seq,
+            &dir,
+        )?;
+        let used_cache = cached.is_some();
+        let source = if original.method == 0 {
+            crate::project::OriginalSource::Entry {
+                archive: self.archive.to_path_buf(),
+                offset: original.data_offset,
+                size: original.size,
+            }
+        } else {
+            let uploads = self.workdir.join("uploads");
+            std::fs::create_dir_all(&uploads)?;
+            let path = uploads.join(&file_id);
+            extract(self.archive, &original, &path)?;
+            crate::project::OriginalSource::File(path)
+        };
+        let restored = match cached {
+            Some(r) => r,
+            None => {
+                // Imported again from the original under the plan the log recorded.
+                let path = match &source {
+                    crate::project::OriginalSource::File(path) => path.clone(),
+                    crate::project::OriginalSource::Entry { .. } => {
+                        let uploads = self.workdir.join("uploads");
+                        std::fs::create_dir_all(&uploads)?;
+                        let path = uploads.join(&file_id);
+                        extract(self.archive, &original, &path)?;
+                        path
+                    }
+                };
+                let job = format!("open_{dataset_id}");
+                let imported = import_csv(
+                    self.conn,
+                    &path,
+                    &plan,
+                    &job,
+                    &dir,
+                    self.threads,
+                    self.cancel,
+                    &mut |n| progress("Importing the original files again", n),
+                )?;
+                self.conn.execute_batch(&format!(
+                    "DROP VIEW IF EXISTS {}; DROP VIEW IF EXISTS {};",
+                    quote_ident(&imported.view),
+                    quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", imported.view)),
+                ))?;
+                let mut notes = imported.notes;
+                if let Some(note) = assumed_encoding_note(&spec) {
+                    if !notes.iter().any(|n| n.code == "TW-IMP-004") {
+                        notes.insert(0, note);
+                    }
+                }
+                Restored {
+                    rows_file: dir.join(format!("{job}.parquet")),
+                    exceptions_file: dir.join(format!("{job}{EXCEPTIONS_SUFFIX}.parquet")),
+                    notes,
+                    row_count: imported.row_count,
+                }
+            }
+        };
+        let view = format!("{}_{dataset_id}", p.id);
+        self.conn.execute_batch(&format!(
+            "CREATE OR REPLACE VIEW {v} AS SELECT * FROM read_parquet({rows}); \
+             CREATE OR REPLACE VIEW {x} AS SELECT * FROM read_parquet({exc});",
+            v = quote_ident(&view),
+            x = quote_ident(&format!("{view}{EXCEPTIONS_SUFFIX}")),
+            rows = quote_text(&restored.rows_file.to_string_lossy()),
+            exc = quote_text(&restored.exceptions_file.to_string_lossy()),
+        ))?;
+        let media_type = e["payload"]["mediaType"].clone();
+        if !p.originals.iter().any(|o| o["fileId"] == file_id.as_str()) {
+            p.originals.push(json!({ "fileId": file_id, "name": spec["fileName"], "size": spec["size"], "mediaType": media_type, "addedSeq": seq }));
+        }
+        p.original_paths.entry(file_id).or_insert(source);
+        let n: u64 = dataset_id.trim_start_matches('d').parse().unwrap_or(0);
+        p.next_dataset = p.next_dataset.max(n + 1);
+        p.datasets.push(Dataset {
+            id: dataset_id,
+            name: spec["datasetName"].as_str().unwrap_or_default().to_string(),
+            columns: plan
+                .columns
+                .iter()
+                .map(|c| (c.id.clone(), c.kind))
+                .collect(),
+            spec,
+            view,
+            row_count: restored.row_count,
+            assumptions: Vec::new(),
+            notes: restored.notes,
+            issues: Vec::new(),
+            check_packs: Vec::new(),
+            rows_file: restored.rows_file,
+            exceptions_file: restored.exceptions_file,
+            source_seq: seq,
+        });
+        Ok(used_cache)
+    }
+
+    /// Runs the checks a check.run entry recorded, with the rule packs it names.
+    fn check_run(&self, p: &mut Project, e: &Value) -> Result<()> {
+        let packs: Vec<Value> = check_packs().iter().map(|p| p.reference()).collect();
+        if e["payload"]["packs"].as_array() != Some(&packs) {
+            return Err(EngineError::unsupported(
+                "check runs with rule packs other than the built-in ones",
+            ));
+        }
+        let seq = e["seq"].as_u64().unwrap_or(0);
+        let id = e["target"]["datasetId"].as_str().unwrap_or("");
+        let d = p.datasets.iter_mut().find(|d| d.id == id).ok_or_else(|| {
+            EngineError::internal(format!("The log checks dataset {id} before importing it."))
+        })?;
+        let ctx = CheckCtx {
+            conn: self.conn,
+            view: quote_ident(&d.view),
+            exceptions: quote_ident(&d.exceptions_view()),
+            dataset_id: d.id.clone(),
+            row_count: d.row_count,
+            columns: d.check_columns(),
+            crs: d.spec["crs"]["value"]["code"].as_str().map(String::from),
+            notes: &d.notes,
+            assumptions: &d.assumptions,
+            project_area: None,
+        };
+        let drafts = ctx.run(self.cancel, &mut |_, _| ())?;
+        let rows = d.row_count;
+        merge_check_run(&mut d.issues, drafts, seq, rows);
+        d.check_packs = packs;
+        Ok(())
+    }
+}
+
+/**
+ * Opens a .twp project file (SAD section 11, decision D-13): every integrity check the TypeScript
+ * reader makes, then a replay of the audit log, with each dataset restored from its caches when
+ * they are present and verified, and imported again from its original otherwise. The datasets'
+ * digests are then compared with the manifest's. Any failure opens the project read-only.
+ * Result: ProjectOpenReport.
+ */
+pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let (archive, name) = input_path(&engine, msg, file)?;
+    let conn = engine.conn.try_clone()?;
+    let workdir = engine.workdir.clone();
+    let threads = engine.threads;
+    let (job, cancel) = engine.start_job();
+    drop(engine);
+
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let progress_shared = shared.clone();
+        let progress_job = job_id.clone();
+        let mut last = Instant::now();
+        let mut progress = move |phase: &str, done: u64| {
+            if last.elapsed().as_millis() < 100 {
+                return;
+            }
+            last = Instant::now();
+            let p = json!({ "phase": phase, "done": done, "unit": "bytes" });
+            if let Ok(mut e) = progress_shared.engine.lock() {
+                e.jobs.insert(
+                    progress_job.clone(),
+                    json!({ "state": "running", "progress": p }),
+                );
+            }
+            progress_shared
+                .event(json!({ "type": "job.progress", "jobId": progress_job, "progress": p }));
+        };
+        let outcome = (|| -> Result<Value> {
+            let read = crate::project::read_twp(&archive, &mut progress);
+            let mut checks = read.checks.clone();
+            let manifest = read.manifest.clone().unwrap_or(Value::Null);
+            let project_id = manifest["projectId"]
+                .as_str()
+                .unwrap_or("p_0000000000000000")
+                .to_string();
+            let text = read.audit_jsonl.clone();
+            let (log, bad_line) = AuditLog::from_jsonl(&project_id, text.as_deref().unwrap_or(""));
+            let chain = log.verify();
+            let (seq, hash) = log.head();
+            let fail = |id: &str, detail: String, rule: &str| {
+                crate::project::integrity(id, false, detail, Some(rule), None)
+            };
+            checks.push(if text.is_none() {
+                fail("audit-chain", "The audit chain cannot be verified because audit.jsonl is missing.".into(), "TW-PRJ-002")
+            } else if let Some((line, why)) = &bad_line {
+                fail("audit-chain", format!("audit.jsonl line {line} cannot be read: {why}."), "TW-PRJ-002")
+            } else if chain["ok"] != true {
+                fail("audit-chain", format!("The audit chain is broken at entry {}: {}.", chain["brokenAt"], chain["reason"].as_str().unwrap_or("an entry does not verify")), "TW-PRJ-002")
+            } else if manifest["auditHead"]["seq"].as_u64() != Some(seq) || manifest["auditHead"]["hash"].as_str() != Some(hash.as_str()) {
+                fail("audit-chain", format!("The audit log ends at entry {seq}, but the manifest says it ends at entry {} with another hash.", manifest["auditHead"]["seq"]), "TW-PRJ-002")
+            } else {
+                crate::project::integrity("audit-chain", true, format!("All {} audit entries verify, each linked to the one before.", log.entries().len()), None, None)
+            });
+
+            let mut p = Project {
+                id: project_id.clone(),
+                name: manifest["name"]
+                    .as_str()
+                    .map_or_else(|| name.trim_end_matches(".twp").to_string(), String::from),
+                created_at: manifest["createdAt"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                profile: Value::Null,
+                unit_system: manifest["unitSystem"].as_str().unwrap_or("SI").to_string(),
+                log: AuditLog::new(&project_id),
+                datasets: Vec::new(),
+                originals: Vec::new(),
+                next_dataset: 1,
+                exports: Vec::new(),
+                original_paths: HashMap::new(),
+                last_saved_at: None,
+                read_only: false,
+            };
+            let reopen = Reopen {
+                conn: &conn,
+                archive: &archive,
+                workdir: &workdir,
+                threads,
+                cancel: &cancel,
+            };
+            let mut stopped: Option<String> = None;
+            let mut from_cache = 0;
+            if read.manifest.is_none() || text.is_none() {
+                stopped = Some("the manifest or the audit log could not be read".into());
+            } else {
+                for e in log.entries() {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(EngineError::new(
+                            "CANCELLED",
+                            "Opening the project was cancelled.",
+                            "Open it again when you are ready.",
+                        ));
+                    }
+                    let at = e["seq"].clone();
+                    let step = match e["action"].as_str().unwrap_or("") {
+                        "project.create" => {
+                            p.name = e["new"]["name"].as_str().unwrap_or(&p.name).to_string();
+                            p.unit_system =
+                                e["new"]["unitSystem"].as_str().unwrap_or("SI").to_string();
+                            p.created_at = e["at"].as_str().unwrap_or_default().to_string();
+                            p.profile = e["payload"]["profile"].clone();
+                            Ok(())
+                        }
+                        "source.add" => {
+                            progress("Restoring the datasets", 0);
+                            reopen
+                                .source_add(&mut p, &read, &manifest, e, &mut progress)
+                                .map(|cached| {
+                                    if cached {
+                                        from_cache += 1;
+                                    }
+                                })
+                        }
+                        "detection.assume" => {
+                            let id = e["target"]["datasetId"].as_str().unwrap_or("");
+                            if let Some(d) = p.datasets.iter_mut().find(|d| d.id == id) {
+                                d.assumptions = e["payload"]["assumptions"]
+                                    .as_array()
+                                    .cloned()
+                                    .unwrap_or_default();
+                            }
+                            Ok(())
+                        }
+                        "check.run" => {
+                            progress("Running the recorded checks", 0);
+                            reopen.check_run(&mut p, e)
+                        }
+                        "export.create" => {
+                            p.exports.push(e["payload"]["record"].clone());
+                            Ok(())
+                        }
+                        "project.save" => {
+                            p.last_saved_at = e["at"].as_str().map(String::from);
+                            Ok(())
+                        }
+                        other => Err(EngineError::unsupported(format!(
+                            "replaying {other} entries"
+                        ))),
+                    };
+                    if let Err(err) = step {
+                        stopped = Some(format!("entry {at}: {}", err.message));
+                        break;
+                    }
+                }
+            }
+            checks.push(match &stopped {
+                Some(why) => fail("replay-digest", format!("Rebuilding the project stopped at {why}"), "TW-PRJ-003"),
+                None => {
+                    let mut bad = Vec::new();
+                    let saved: Vec<Value> = manifest["datasets"].as_array().cloned().unwrap_or_default();
+                    for d in &p.datasets {
+                        progress("Comparing the dataset digests", 0);
+                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), &out_columns(d), d.row_count, threads)?;
+                        match saved.iter().find(|s| s["id"] == d.id.as_str()) {
+                            None => bad.push(format!("the audit log builds dataset {}, which the manifest does not list", d.id)),
+                            Some(s) if s["rowCount"].as_u64() != Some(d.row_count) => bad.push(format!("dataset {} has {} rows instead of the {} saved", d.id, d.row_count, s["rowCount"])),
+                            Some(s) if s["workingDigest"].as_str() != Some(sha.as_str()) || s["outputDigest"].as_str() != Some(sha.as_str()) => {
+                                bad.push(format!("dataset {} ({}) differs from its saved digest", d.id, d.name))
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    for s in &saved {
+                        if !p.datasets.iter().any(|d| s["id"] == d.id.as_str()) {
+                            bad.push(format!("dataset {} is not rebuilt by the audit log", s["id"]));
+                        }
+                    }
+                    if bad.is_empty() {
+                        let n = p.datasets.len();
+                        let how = if from_cache == n {
+                            "restored from their saved working data".to_string()
+                        } else if from_cache == 0 {
+                            "rebuilt from the originals and the audit log".to_string()
+                        } else {
+                            format!("rebuilt ({from_cache} from their saved working data, {} from the originals)", n - from_cache)
+                        };
+                        crate::project::integrity("replay-digest", true, format!("All {n} datasets were {how} and match their saved digests."), None, None)
+                    } else {
+                        fail("replay-digest", format!("Rebuilding the project gives {}.", bad.join("; ")), "TW-PRJ-003")
+                    }
+                }
+            });
+            let read_only = checks.iter().any(|c| c["ok"] == false);
+            p.read_only = read_only;
+            p.log = log;
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            engine.project = Some(p);
+            let summary = engine.summary()?;
+            Ok(json!({ "project": summary, "readOnly": read_only, "checks": checks }))
+        })();
+        finish_job(
+            &shared,
+            &job_id,
+            outcome,
+            &[
+                "project", "datasets", "schema", "issues", "audit", "steps", "exports",
+            ],
+            "",
+        );
+    });
+    Ok(json!({ "jobId": job, "kind": "open" }))
 }

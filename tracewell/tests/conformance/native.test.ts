@@ -57,6 +57,8 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
   let reference: EngineClient;
   const imported: string[] = [];
   const refused: string[] = [];
+  /** The project file the native engine saved, for the tests that open it again. */
+  let savedByNative: Uint8Array | null = null;
   /** Dataset IDs per fixture, native and reference. */
   const pairs = new Map<string, { nat: string; ref: string }>();
 
@@ -255,6 +257,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     const saved = await native.client.awaitJob<SaveResult>(await native.client.saveProject());
     expect(saved.fileName).toBe('Parity.twp');
     const bytes = saved.bytes as Uint8Array;
+    savedByNative = bytes;
     expect(saved.size).toBe(bytes.byteLength);
     const zip = readZip(bytes);
     const manifest = JSON.parse(zip.readText('manifest.json')) as ProjectManifest;
@@ -280,6 +283,74 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(await all(opener)).toEqual(await all(native.client));
     } finally {
       opener.close();
+    }
+  });
+
+  const allAudit = async (e: EngineClient): Promise<AuditEntry[]> => {
+    const out: AuditEntry[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await e.listAudit({ offset, limit: 500 });
+      out.push(...page.items);
+      if (offset + 500 >= page.total) return out;
+    }
+  };
+
+  /** A fresh native engine opening a project file: its open report, then the engine itself. */
+  const openNatively = async (bytes: Uint8Array): Promise<{ report: ProjectOpenReport; opened: NativeProcess }> => {
+    const opened = startNative(['--fixed-clock', START, '--seed', '1', '--threads', '2', '--owner', 'Prasad']);
+    const report = await opened.client.awaitJob<ProjectOpenReport>(
+      await opened.client.openProject({ kind: 'bytes', bytes, name: 'Parity.twp' }),
+    );
+    return { report, opened };
+  };
+
+  it('opens its own project file from the saved working data, with the same log and issues', async () => {
+    const { report, opened } = await openNatively(savedByNative as Uint8Array);
+    try {
+      expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(report.readOnly).toBe(false);
+      expect(report.checks.find((c) => c.id === 'replay-digest')?.detail).toContain(
+        'restored from their saved working data',
+      );
+      expect(await allAudit(opened.client)).toEqual(await allAudit(native.client));
+      const issues = async (e: EngineClient) => (await e.listIssues({ limit: 1000 })).items;
+      expect(await issues(opened.client)).toEqual(await issues(native.client));
+      const first = pairs.get('csv_well_daily_golden.csv') as { nat: string };
+      expect(await allRows(opened.client, first.nat)).toEqual(await allRows(native.client, first.nat));
+    } finally {
+      stopNative(opened);
+    }
+  });
+
+  it("opens the TypeScript engine's project file by importing its originals again", async () => {
+    const saved = await reference.awaitJob<SaveResult>(await reference.saveProject());
+    const { report, opened } = await openNatively(saved.bytes as Uint8Array);
+    try {
+      expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(report.checks.find((c) => c.id === 'replay-digest')?.detail).toContain('rebuilt from the originals');
+      expect(await allAudit(opened.client)).toEqual(await allAudit(reference));
+    } finally {
+      stopNative(opened);
+    }
+  });
+
+  it('opens a project file with a damaged cache read-only, its data rebuilt from the original', async () => {
+    const bytes = (savedByNative as Uint8Array).slice();
+    const zip = readZip(bytes);
+    const path = 'data/d1/rows.parquet';
+    const at = new TextDecoder('latin1')
+      .decode(bytes)
+      .indexOf(new TextDecoder('latin1').decode(zip.read(path).subarray(0, 64)));
+    expect(at).toBeGreaterThan(0);
+    bytes[at + 100] = (bytes[at + 100] as number) ^ 0xff;
+    const { report, opened } = await openNatively(bytes);
+    try {
+      expect(report.readOnly).toBe(true);
+      expect(report.checks.filter((c) => !c.ok).map((c) => [c.id, c.target])).toEqual([['entry-checksum', path]]);
+      expect(report.checks.find((c) => c.id === 'replay-digest')).toMatchObject({ ok: true });
+      await expect(opened.client.runChecks('d1')).rejects.toMatchObject({ code: 'READ_ONLY_PROJECT' });
+    } finally {
+      stopNative(opened);
     }
   });
 
