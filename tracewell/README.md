@@ -99,9 +99,10 @@ Recorded by `npm run test:slow` in the build container (headless Chromium, Lite 
 
 Each run writes its figures to `test-results/benchmarks.json`.
 
-The native engine imports, checks and exports a 10 GB CSV (124 million rows) in 17 minutes on four
-cores: import 2.7 minutes, checks 6.2 minutes, Parquet export 8.1 minutes. Set-up, memory and disk
-figures, and the commands to reproduce the run, are in [docs/benchmarks.md](../docs/benchmarks.md).
+The native engine imports, checks and exports a 10 GB CSV (124 million rows) in 14 minutes on four
+cores, within a memory budget of half the machine's RAM: import 2.6 minutes, checks 6.4 minutes,
+Parquet export 5.3 minutes. Set-up, memory and disk figures, and the commands to reproduce the run,
+are in [docs/benchmarks.md](../docs/benchmarks.md).
 
 ## Determinism and traceability
 
