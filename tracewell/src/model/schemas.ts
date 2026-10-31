@@ -494,7 +494,8 @@ const projectManifest = z
         z.strictObject({
           datasetId,
           sourceSeq: auditSeq,
-          kind: z.enum(['rows', 'exceptions', 'notes']),
+          checkSeq: auditSeq.exactOptional(),
+          kind: z.enum(['rows', 'exceptions', 'notes', 'issues']),
           path: packagePath,
         }),
       )
@@ -508,6 +509,13 @@ const projectManifest = z
     m.caches?.forEach((c, i) => {
       if (!listed.has(c.path)) {
         ctx.addIssue({ code: 'custom', path: ['caches', i, 'path'], message: `The cache ${c.path} is not an entry.` });
+      }
+      if ((c.kind === 'issues') !== (c.checkSeq !== undefined)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['caches', i, 'checkSeq'],
+          message: 'An issues cache names its check run, and only an issues cache does.',
+        });
       }
     });
     requireUnique<{ id: string; version: string }>('rulePacks', packKey)(m.rulePacks, ctx);

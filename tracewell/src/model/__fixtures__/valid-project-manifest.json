@@ -173,6 +173,11 @@
         "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
       },
       {
+        "path": "data/d1/issues.json",
+        "size": 2048,
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
         "path": "data/d1/rows.parquet",
         "size": 40960,
         "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
@@ -210,6 +215,13 @@
         "sourceSeq": 2,
         "kind": "exceptions",
         "path": "data/d1/exceptions.parquet"
+      },
+      {
+        "datasetId": "d1",
+        "sourceSeq": 2,
+        "checkSeq": 4,
+        "kind": "issues",
+        "path": "data/d1/issues.json"
       }
     ]
   }

@@ -25,19 +25,23 @@ export interface IntegrityCheck {
 }
 
 /**
- * A Parquet copy of what importing an original gave (format 0.2, SAD decision D-13), saved so a
- * large project opens without importing its originals again. A reader may ignore it and replay; one
- * that uses it still verifies its SHA-256 and the dataset digests after replay.
+ * A saved copy of what replaying part of the audit log gave (format 0.2, SAD decision D-13), so a
+ * large project opens without importing its originals or running its checks again. A reader may
+ * ignore it and replay; one that uses it still verifies its SHA-256 and the dataset digests after
+ * replay.
  */
 export interface ProjectCache {
   datasetId: DatasetId;
-  /** The `source.add` entry whose result it holds. */
+  /** The dataset's `source.add` entry. */
   sourceSeq: AuditSeq;
+  /** 'issues' only: the `check.run` entry whose result it holds, the dataset's last before the save. */
+  checkSeq?: AuditSeq;
   /**
    * 'rows': the typed values with their row IDs (Parquet); 'exceptions': the source text of values
-   * that did not parse (Parquet); 'notes': what the reader noticed in the file (JSON).
+   * that did not parse (Parquet); 'notes': what the reader noticed in the file (JSON); 'issues': the
+   * dataset's issues as that check run left them, with their rows (JSON).
    */
-  kind: 'rows' | 'exceptions' | 'notes';
+  kind: 'rows' | 'exceptions' | 'notes' | 'issues';
   path: string;
 }
 

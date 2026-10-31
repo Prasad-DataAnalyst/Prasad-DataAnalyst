@@ -17,7 +17,7 @@ use crate::rules::{RowSet, check_packs};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1108,6 +1108,15 @@ fn target_path(target: &Value) -> Result<Option<PathBuf>> {
     }
 }
 
+/// The sequence number of the dataset's last check.run entry.
+fn last_check_run(log: &AuditLog, dataset_id: &str) -> Option<u64> {
+    log.entries()
+        .iter()
+        .rev()
+        .find(|e| e["action"] == "check.run" && e["target"]["datasetId"] == dataset_id)
+        .and_then(|e| e["seq"].as_u64())
+}
+
 struct SavedDataset {
     notes: Vec<Value>,
     id: String,
@@ -1292,7 +1301,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                     })
                 })
                 .collect();
-            let cache_bytes = datasets
+            let mut cache_bytes: Vec<(Value, Vec<u8>)> = datasets
                 .iter()
                 .map(|d| {
                     let record =
@@ -1301,6 +1310,23 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                     (record, text.into_bytes())
                 })
                 .collect();
+            // Each checked dataset's issues, so a reopen need not run its checks again.
+            for d in p
+                .datasets
+                .iter()
+                .filter(|d| datasets.iter().any(|s| s.id == d.id))
+            {
+                let Some(check_seq) = last_check_run(&p.log, &d.id) else {
+                    continue;
+                };
+                let record = json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "checkSeq": check_seq, "kind": "issues" });
+                let body = json!({
+                    "rowCount": d.row_count,
+                    "issues": d.issues.iter().map(crate::issues::to_cache).collect::<Vec<_>>(),
+                });
+                let text = format!("{}\n", crate::canonical::canonical_json(&body));
+                cache_bytes.push((record, text.into_bytes()));
+            }
             let input = crate::project::SaveInput {
                 cache_bytes,
                 manifest,
@@ -1768,6 +1794,21 @@ struct Reopen<'a> {
     workdir: &'a Path,
     threads: usize,
     cancel: &'a AtomicBool,
+    /// The (dataset, seq) of every check.run entry in the log.
+    check_runs: HashSet<(String, u64)>,
+    /// Per dataset, once its first check run is replayed: the check run its issues cache holds the
+    /// result of, with the issues, when the cache is usable.
+    issue_caches: HashMap<String, Option<(u64, Vec<IssueState>)>>,
+}
+
+/// How a check.run entry was replayed.
+enum CheckReplay {
+    /// The checks ran again.
+    Ran,
+    /// The issues came from the dataset's issues cache.
+    Restored,
+    /// A later run's cached issues stand in for this one.
+    Superseded,
 }
 
 impl Reopen<'_> {
@@ -1911,8 +1952,52 @@ impl Reopen<'_> {
         Ok(used_cache)
     }
 
-    /// Runs the checks a check.run entry recorded, with the rule packs it names.
-    fn check_run(&self, p: &mut Project, e: &Value) -> Result<()> {
+    /// The dataset's issues cache, when it is present, verified, tied to this import of the
+    /// dataset and to one of its recorded check runs, and reads back whole.
+    fn load_issues(
+        &self,
+        read: &crate::project::TwpRead,
+        manifest: &Value,
+        d: &Dataset,
+    ) -> Option<(u64, Vec<IssueState>)> {
+        let cache = manifest["caches"].as_array()?.iter().find(|c| {
+            c["datasetId"] == d.id.as_str()
+                && c["kind"] == "issues"
+                && c["sourceSeq"].as_u64() == Some(d.source_seq)
+        })?;
+        let check_seq = cache["checkSeq"].as_u64()?;
+        let path = cache["path"].as_str()?;
+        if !self.check_runs.contains(&(d.id.clone(), check_seq)) || !read.verified.contains(path) {
+            return None;
+        }
+        let entry = read.entries.iter().find(|x| x.name == path)?;
+        let bytes = crate::project::entry_bytes(self.archive, entry).ok()?;
+        let body: Value = serde_json::from_slice(&bytes).ok()?;
+        if body["rowCount"].as_u64() != Some(d.row_count) {
+            return None;
+        }
+        let issues = body["issues"]
+            .as_array()?
+            .iter()
+            .map(|v| crate::issues::from_cache(v, d.row_count))
+            .collect::<Option<Vec<_>>>()?;
+        if issues.iter().any(|i| i.draft.dataset_id != d.id) {
+            return None;
+        }
+        Some((check_seq, issues))
+    }
+
+    /// Replays a check.run entry with the rule packs it names. A usable issues cache stands in for
+    /// the run it holds the result of and every run of the dataset before it; any other run runs
+    /// the checks again.
+    fn check_run(
+        &mut self,
+        p: &mut Project,
+        read: &crate::project::TwpRead,
+        manifest: &Value,
+        e: &Value,
+        progress: &mut dyn FnMut(&str, u64),
+    ) -> Result<CheckReplay> {
         let packs: Vec<Value> = check_packs().iter().map(|p| p.reference()).collect();
         if e["payload"]["packs"].as_array() != Some(&packs) {
             return Err(EngineError::unsupported(
@@ -1924,6 +2009,24 @@ impl Reopen<'_> {
         let d = p.datasets.iter_mut().find(|d| d.id == id).ok_or_else(|| {
             EngineError::internal(format!("The log checks dataset {id} before importing it."))
         })?;
+        if !self.issue_caches.contains_key(id) {
+            progress("Restoring the saved check results", 0);
+            let loaded = self.load_issues(read, manifest, d);
+            self.issue_caches.insert(id.to_string(), loaded);
+        }
+        match self.issue_caches.get_mut(id) {
+            Some(Some((check_seq, _))) if seq < *check_seq => {
+                d.check_packs = packs;
+                return Ok(CheckReplay::Superseded);
+            }
+            Some(Some((check_seq, issues))) if seq == *check_seq => {
+                d.issues = std::mem::take(issues);
+                d.check_packs = packs;
+                return Ok(CheckReplay::Restored);
+            }
+            _ => {}
+        }
+        progress("Running the recorded checks", 0);
         let ctx = CheckCtx {
             conn: self.conn,
             view: quote_ident(&d.view),
@@ -1940,7 +2043,7 @@ impl Reopen<'_> {
         let rows = d.row_count;
         merge_check_run(&mut d.issues, drafts, seq, rows);
         d.check_packs = packs;
-        Ok(())
+        Ok(CheckReplay::Ran)
     }
 }
 
@@ -2031,15 +2134,28 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 last_saved_at: None,
                 read_only: false,
             };
-            let reopen = Reopen {
+            let mut reopen = Reopen {
                 conn: &conn,
                 archive: &archive,
                 workdir: &workdir,
                 threads,
                 cancel: &cancel,
+                check_runs: log
+                    .entries()
+                    .iter()
+                    .filter(|e| e["action"] == "check.run")
+                    .filter_map(|e| {
+                        Some((
+                            e["target"]["datasetId"].as_str()?.to_string(),
+                            e["seq"].as_u64()?,
+                        ))
+                    })
+                    .collect(),
+                issue_caches: HashMap::new(),
             };
             let mut stopped: Option<String> = None;
             let mut from_cache = 0;
+            let (mut checks_restored, mut checks_ran) = (0, 0);
             if read.manifest.is_none() || text.is_none() {
                 stopped = Some("the manifest or the audit log could not be read".into());
             } else {
@@ -2081,10 +2197,13 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                             }
                             Ok(())
                         }
-                        "check.run" => {
-                            progress("Running the recorded checks", 0);
-                            reopen.check_run(&mut p, e)
-                        }
+                        "check.run" => reopen
+                            .check_run(&mut p, &read, &manifest, e, &mut progress)
+                            .map(|how| match how {
+                                CheckReplay::Ran => checks_ran += 1,
+                                CheckReplay::Restored => checks_restored += 1,
+                                CheckReplay::Superseded => {}
+                            }),
                         "export.create" => {
                             p.exports.push(e["payload"]["record"].clone());
                             Ok(())
@@ -2134,7 +2253,14 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                         } else {
                             format!("rebuilt ({from_cache} from their saved working data, {} from the originals)", n - from_cache)
                         };
-                        crate::project::integrity("replay-digest", true, format!("All {n} datasets were {how} and match their saved digests."), None, None)
+                        let issues = match (checks_restored, checks_ran) {
+                            (0, 0) => String::new(),
+                            (_, 0) => " Their issues were restored from the saved check results.".to_string(),
+                            (0, 1) => " The recorded check run ran again.".to_string(),
+                            (0, r) => format!(" The {r} recorded check runs ran again."),
+                            (k, r) => format!(" The issues of {k} datasets were restored from the saved check results, and {r} recorded check runs ran again."),
+                        };
+                        crate::project::integrity("replay-digest", true, format!("All {n} datasets were {how} and match their saved digests.{issues}"), None, None)
                     } else {
                         fail("replay-digest", format!("Rebuilding the project gives {}.", bad.join("; ")), "TW-PRJ-003")
                     }

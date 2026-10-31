@@ -174,7 +174,28 @@
       {
         "op": "replace",
         "path": "/caches/0/kind",
-        "value": "issues"
+        "value": "summary"
+      }
+    ]
+  },
+  {
+    "why": "an issues cache that names no check run",
+    "base": 2,
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/caches/2/checkSeq"
+      }
+    ]
+  },
+  {
+    "why": "a rows cache that names a check run",
+    "base": 2,
+    "patch": [
+      {
+        "op": "add",
+        "path": "/caches/0/checkSeq",
+        "value": 4
       }
     ]
   },

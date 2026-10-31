@@ -254,6 +254,8 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
   });
 
   it('saves a project file that the TypeScript engine opens with every check passing', async () => {
+    // A second check run of d1: its saved results stand in for both runs when the file is opened.
+    await native.client.awaitJob<CheckSummary>(await native.client.runChecks('d1'));
     const saved = await native.client.awaitJob<SaveResult>(await native.client.saveProject());
     expect(saved.fileName).toBe('Parity.twp');
     const bytes = saved.bytes as Uint8Array;
@@ -262,7 +264,13 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     const zip = readZip(bytes);
     const manifest = JSON.parse(zip.readText('manifest.json')) as ProjectManifest;
     expect(manifest.formatVersion).toBe('0.2');
-    expect(manifest.caches?.length).toBe(3 * manifest.datasets.length);
+    const caches = (kind: string) => (manifest.caches ?? []).filter((c) => c.kind === kind);
+    for (const kind of ['rows', 'exceptions', 'notes']) expect(caches(kind)).toHaveLength(manifest.datasets.length);
+    // One issues cache per checked dataset, holding the result of its last check run.
+    const lastRun = new Map<unknown, unknown>();
+    for (const e of await allAudit(native.client)) if (e.action === 'check.run') lastRun.set(e.target.datasetId, e.seq);
+    expect(lastRun.size).toBeGreaterThan(1);
+    expect(new Map(caches('issues').map((c) => [c.datasetId, c.checkSeq]))).toEqual(lastRun);
 
     const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
     try {
@@ -309,9 +317,9 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     try {
       expect(report.checks.filter((c) => !c.ok)).toEqual([]);
       expect(report.readOnly).toBe(false);
-      expect(report.checks.find((c) => c.id === 'replay-digest')?.detail).toContain(
-        'restored from their saved working data',
-      );
+      const detail = report.checks.find((c) => c.id === 'replay-digest')?.detail;
+      expect(detail).toContain('restored from their saved working data');
+      expect(detail).toContain('Their issues were restored from the saved check results.');
       expect(await allAudit(opened.client)).toEqual(await allAudit(native.client));
       const issues = async (e: EngineClient) => (await e.listIssues({ limit: 1000 })).items;
       expect(await issues(opened.client)).toEqual(await issues(native.client));
@@ -349,6 +357,28 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(report.checks.filter((c) => !c.ok).map((c) => [c.id, c.target])).toEqual([['entry-checksum', path]]);
       expect(report.checks.find((c) => c.id === 'replay-digest')).toMatchObject({ ok: true });
       await expect(opened.client.runChecks('d1')).rejects.toMatchObject({ code: 'READ_ONLY_PROJECT' });
+    } finally {
+      stopNative(opened);
+    }
+  });
+
+  it('runs the checks again when the saved check results are damaged, and raises the same issues', async () => {
+    const bytes = (savedByNative as Uint8Array).slice();
+    const path = 'data/d1/issues.json';
+    const latin1 = new TextDecoder('latin1');
+    const text = latin1.decode(readZip(bytes).read(path));
+    const at = latin1.decode(bytes).indexOf(text) + text.indexOf('"datasetId":"d1"');
+    expect(at).toBeGreaterThan(0);
+    bytes[at + 14] = '9'.charCodeAt(0);
+    const { report, opened } = await openNatively(bytes);
+    try {
+      expect(report.readOnly).toBe(true);
+      expect(report.checks.filter((c) => !c.ok).map((c) => [c.id, c.target])).toEqual([['entry-checksum', path]]);
+      const replay = report.checks.find((c) => c.id === 'replay-digest');
+      expect(replay?.ok).toBe(true);
+      expect(replay?.detail).toContain('and 2 recorded check runs ran again');
+      const issues = async (e: EngineClient) => (await e.listIssues({ limit: 1000 })).items;
+      expect(await issues(opened.client)).toEqual(await issues(native.client));
     } finally {
       stopNative(opened);
     }

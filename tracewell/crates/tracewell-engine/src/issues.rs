@@ -60,6 +60,79 @@ pub fn merge_check_run(issues: &mut Vec<IssueState>, drafts: Vec<Draft>, seq: u6
     }
 }
 
+/// An issue as a project file's issues cache keeps it (decision D-13): everything needed to give it
+/// back exactly as the check runs left it, so a reopened project need not run them again.
+pub fn to_cache(st: &IssueState) -> Value {
+    let d = &st.draft;
+    json!({
+        "id": st.id,
+        "ruleId": d.rule_id,
+        "ruleVersion": d.rule_version,
+        "packId": d.pack_id,
+        "severity": d.severity,
+        "category": d.category,
+        "datasetId": d.dataset_id,
+        "columns": d.columns,
+        "scope": d.scope,
+        "message": d.message,
+        "detail": d.detail,
+        "rows": d.rows.to_cache(),
+        "flagged": st.flagged.to_cache(),
+        "current": st.current.to_cache(),
+        "accepted": st.accepted.to_cache(),
+        "present": st.present,
+        "acceptedWhole": st.accepted_whole,
+        "comments": st.comments,
+        "firstSeenSeq": st.first_seen_seq,
+        "lastCheckedSeq": st.last_checked_seq,
+    })
+}
+
+/// An issue of a dataset of `n` rows from its cached form, or None when the form is not one, or its
+/// ID is not the one its rule, dataset and columns give.
+pub fn from_cache(v: &Value, n: u64) -> Option<IssueState> {
+    let text = |k: &str| v[k].as_str().map(String::from);
+    let scope = match v["scope"].as_str()? {
+        "rows" => "rows",
+        "column" => "column",
+        "dataset" => "dataset",
+        _ => return None,
+    };
+    let draft = Draft {
+        rule_id: text("ruleId")?,
+        rule_version: text("ruleVersion")?,
+        pack_id: text("packId")?,
+        severity: text("severity")?,
+        category: text("category")?,
+        dataset_id: text("datasetId")?,
+        columns: v["columns"]
+            .as_array()?
+            .iter()
+            .map(|c| c.as_str().map(String::from))
+            .collect::<Option<Vec<_>>>()?,
+        scope,
+        rows: RowSet::from_cache(&v["rows"], n)?,
+        message: text("message")?,
+        detail: Some(v["detail"].clone()).filter(|d| !d.is_null()),
+    };
+    let id = text("id")?;
+    if id != draft.issue_id() {
+        return None;
+    }
+    Some(IssueState {
+        id,
+        draft,
+        flagged: RowSet::from_cache(&v["flagged"], n)?,
+        current: RowSet::from_cache(&v["current"], n)?,
+        accepted: RowSet::from_cache(&v["accepted"], n)?,
+        present: v["present"].as_bool()?,
+        accepted_whole: v["acceptedWhole"].as_bool()?,
+        comments: v["comments"].as_array()?.clone(),
+        first_seen_seq: v["firstSeenSeq"].as_u64()?,
+        last_checked_seq: v["lastCheckedSeq"].as_u64()?,
+    })
+}
+
 struct Counts {
     flagged: u64,
     open: u64,

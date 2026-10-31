@@ -87,7 +87,11 @@ pub fn original_path(file_id: &str, name: &str) -> String {
 }
 
 pub fn cache_path(dataset_id: &str, kind: &str) -> String {
-    let extension = if kind == "notes" { "json" } else { "parquet" };
+    let extension = if matches!(kind, "notes" | "issues") {
+        "json"
+    } else {
+        "parquet"
+    };
     format!(
         "data/{}/{kind}.{extension}",
         safe_segment(dataset_id, "dataset")
@@ -573,7 +577,12 @@ fn manifest_problem(m: &Value) -> Option<String> {
             a.iter().all(|x| {
                 x["datasetId"].is_string()
                     && x["sourceSeq"].is_u64()
-                    && matches!(x["kind"].as_str(), Some("rows" | "exceptions" | "notes"))
+                    && matches!(
+                        x["kind"].as_str(),
+                        Some("rows" | "exceptions" | "notes" | "issues")
+                    )
+                    && (x["kind"] == "issues") == x["checkSeq"].is_u64()
+                    && x.get("checkSeq").is_none_or(Value::is_u64)
                     && x["path"].is_string()
             })
         })

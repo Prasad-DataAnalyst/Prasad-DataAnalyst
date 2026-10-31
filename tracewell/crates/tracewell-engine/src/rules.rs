@@ -181,6 +181,103 @@ impl RowSet {
         }
         json!({ "count": self.count(), "ranges": ranges })
     }
+
+    /// The row set as a project file's issues cache keeps it (decision D-13): `{ ranges }`, each an
+    /// inclusive pair, while there are few, otherwise `{ words }`, the bitset's 64-bit words
+    /// little-endian in base64, so the size stays bounded by the dataset's row count.
+    pub fn to_cache(&self) -> Value {
+        let limit = (self.words.len() / 8).max(64);
+        let mut ranges: Vec<[u64; 2]> = Vec::new();
+        for r in self.iter() {
+            if let Some(last) = ranges.last_mut().filter(|last| r == last[1] + 1) {
+                last[1] = r;
+            } else if ranges.len() == limit {
+                let bytes: Vec<u8> = self.words.iter().flat_map(|w| w.to_le_bytes()).collect();
+                return json!({ "words": base64_encode(&bytes) });
+            } else {
+                ranges.push([r, r]);
+            }
+        }
+        json!({ "ranges": ranges })
+    }
+
+    /// The row set of `n` rows from its cached form, or None when it is not one or names a row
+    /// beyond `n`.
+    pub fn from_cache(v: &Value, n: u64) -> Option<RowSet> {
+        let mut set = RowSet::new(n);
+        if let Some(text) = v["words"].as_str() {
+            let bytes = base64_decode(text)?;
+            if bytes.len() != set.words.len() * 8 {
+                return None;
+            }
+            for (w, b) in set.words.iter_mut().zip(bytes.chunks_exact(8)) {
+                *w = u64::from_le_bytes(b.try_into().ok()?);
+            }
+            let tail = n % 64;
+            if tail != 0 && set.words.last().is_some_and(|w| w >> tail != 0) {
+                return None;
+            }
+            return Some(set);
+        }
+        for range in v["ranges"].as_array()? {
+            let (lo, hi) = (range[0].as_u64()?, range[1].as_u64()?);
+            if lo > hi || hi >= n {
+                return None;
+            }
+            for r in lo..=hi {
+                set.insert(r);
+            }
+        }
+        Some(set)
+    }
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Standard base64 with padding (RFC 4648 section 4).
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(BASE64[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The bytes of standard padded base64, or None when the text is not that.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let t = text.as_bytes();
+    if t.len() % 4 != 0 {
+        return None;
+    }
+    let value = |c: u8| BASE64.iter().position(|&x| x == c).map(|i| i as u32);
+    let mut out = Vec::with_capacity(t.len() / 4 * 3);
+    for (i, chunk) in t.chunks(4).enumerate() {
+        let last = i == t.len() / 4 - 1;
+        let pad = chunk.iter().rev().take_while(|&&c| c == b'=').count();
+        if pad > 2 || (pad > 0 && !last) {
+            return None;
+        }
+        let mut n = 0u32;
+        for &c in &chunk[..4 - pad] {
+            n = (n << 6) | value(c)?;
+        }
+        n <<= 6 * pad as u32;
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..3 - pad]);
+    }
+    Some(out)
 }
 
 /// A message variable: text, or a number written as JavaScript writes it.
@@ -259,6 +356,65 @@ impl Draft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_matches_rfc_4648_vectors() {
+        for (plain, coded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_encode(plain.as_bytes()), coded);
+            assert_eq!(base64_decode(coded).as_deref(), Some(plain.as_bytes()));
+        }
+        assert_eq!(base64_decode("Zm9"), None);
+        assert_eq!(base64_decode("Zg==Zg=="), None);
+        assert_eq!(base64_decode("Z!=="), None);
+    }
+
+    #[test]
+    fn row_sets_survive_the_cache_in_both_forms() {
+        let n = 10_000;
+        let mut few = RowSet::new(n);
+        for r in [0, 1, 2, 500, 9_999] {
+            few.insert(r);
+        }
+        let cached = few.to_cache();
+        assert_eq!(
+            cached,
+            json!({ "ranges": [[0, 2], [500, 500], [9_999, 9_999]] })
+        );
+        assert_eq!(RowSet::from_cache(&cached, n), Some(few));
+
+        let mut many = RowSet::new(n);
+        for r in (0..n).step_by(3) {
+            many.insert(r);
+        }
+        let cached = many.to_cache();
+        assert!(cached["words"].is_string());
+        assert_eq!(RowSet::from_cache(&cached, n), Some(many));
+
+        assert_eq!(
+            RowSet::from_cache(&json!({ "ranges": [[5, 10_000]] }), n),
+            None
+        );
+        assert_eq!(RowSet::from_cache(&json!({ "ranges": [[6, 5]] }), n), None);
+        assert_eq!(RowSet::from_cache(&json!({ "words": "AAAA" }), n), None);
+        // Row 70 of a 70-row set: bit 6 of the second word.
+        let beyond =
+            json!({ "words": base64_encode(&[0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 0]) });
+        assert_eq!(RowSet::from_cache(&beyond, 70), None);
+        let last =
+            json!({ "words": base64_encode(&[0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0, 0, 0, 0, 0]) });
+        assert_eq!(
+            RowSet::from_cache(&last, 70).map(|s| s.iter().collect::<Vec<_>>()),
+            Some(vec![69])
+        );
+    }
 
     #[test]
     fn loads_both_packs_byte_for_byte() {

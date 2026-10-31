@@ -30,7 +30,7 @@ import { twpReadme } from './readme';
 
 export const TWP_MIMETYPE = 'application/vnd.tracewell.project+zip';
 export const TWP_FORMAT_VERSION = '0.1';
-/** Versions this reader opens: 0.2 adds Parquet caches (SAD decision D-13), which it verifies but does not need. */
+/** Versions this reader opens: 0.2 adds caches (SAD decision D-13), which it verifies but does not need. */
 export const TWP_READ_VERSIONS: readonly string[] = ['0.1', '0.2'];
 
 const MIMETYPE = 'mimetype';
