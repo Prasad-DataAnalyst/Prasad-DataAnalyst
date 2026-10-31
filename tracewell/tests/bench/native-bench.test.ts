@@ -8,14 +8,17 @@
  *
  * TW_BENCH_LOG names a file that gets a line as each stage starts and ends, for following a long run.
  * TW_BENCH_ENGINE_ARGS passes extra engine arguments, such as '--memory-limit 1073741824'.
+ * TW_BENCH_SAVE names a .twp file: the project is then saved there and opened by a second engine
+ * process from it. The first engine's working folder is emptied before the open, so a 10 GB run
+ * stays within the disk it needs; the folder must not hold anything else.
  *
  * The engine uses its defaults: DuckDB may use half the machine's memory and spills the rest to disk.
  */
-import { appendFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { CheckSummary, DatasetSummary, ExportResult, JsonValue } from '@tw/model';
+import type { CheckSummary, DatasetSummary, ExportResult, JsonValue, ProjectOpenReport, SaveResult } from '@tw/model';
 import { ENGINE_FACTORIES } from '../conformance/harness';
 import { nativeBuilt, peakResidentBytes, startNative, stopNative } from '../conformance/native-process';
 
@@ -45,6 +48,8 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
       )();
       const engineArgs = (process.env['TW_BENCH_ENGINE_ARGS'] ?? '').split(' ').filter((a) => a !== '');
       const native = startNative(engineArgs, process.env['TW_BENCH_WORKDIR']);
+      // The engine the stages run in: the second one once the saved project is opened.
+      let current = native;
       const stages: Stage[] = [];
       const timed = async <T>(name: string, run: () => Promise<T>, detail: (r: T) => Record<string, JsonValue>) => {
         progress(`${name}: started`);
@@ -55,7 +60,7 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
         });
         const seconds = (performance.now() - started) / 1000;
         progress(`${name}: ${seconds.toFixed(1)} s`);
-        stages.push({ name, seconds, peakResidentBytes: peakResidentBytes(native.child.pid), detail: detail(result) });
+        stages.push({ name, seconds, peakResidentBytes: peakResidentBytes(current.child.pid), detail: detail(result) });
         console.log(`${name}: ${seconds.toFixed(1)} s`);
         return result;
       };
@@ -89,6 +94,30 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
         );
         expect(exported.validation.checks.filter((c) => !c.ok)).toEqual([]);
         rmSync(target.path, { force: true });
+        const twp = process.env['TW_BENCH_SAVE'];
+        if (twp !== undefined) {
+          await timed(
+            'save',
+            async () =>
+              native.client.awaitJob<SaveResult>(await native.client.saveProject({ kind: 'path', path: twp })),
+            (s) => ({ projectBytes: s.size }),
+          );
+          stopNative(native);
+          rmSync(native.workdir, { recursive: true, force: true });
+          mkdirSync(native.workdir, { recursive: true });
+          current = startNative(engineArgs, native.workdir);
+          const opened = await timed(
+            'open',
+            async () =>
+              current.client.awaitJob<ProjectOpenReport>(await current.client.openProject({ kind: 'path', path: twp })),
+            (r) => ({
+              readOnly: r.readOnly,
+              failedChecks: r.checks.filter((c) => !c.ok).length,
+              replay: r.checks.find((c) => c.id === 'replay-digest')?.detail ?? '',
+            }),
+          );
+          expect(opened.readOnly).toBe(false);
+        }
         const result = {
           file: { path, bytes: size },
           engine: { name: info.name, version: info.version, memoryBudgetBytes: info.capabilities.memoryBudgetBytes },
@@ -100,6 +129,7 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
         console.log(JSON.stringify(result, null, 2));
       } finally {
         stopNative(native);
+        if (current !== native) stopNative(current);
         reference.close();
       }
     },
