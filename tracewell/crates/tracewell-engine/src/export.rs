@@ -245,6 +245,34 @@ fn scan_column(
     })
 }
 
+/**
+ * The digest the TypeScript viewDigest gives a view without steps or exclusions (SAD section 9.4):
+ * the SHA-256 of the canonical JSON of its row count and each column's name, unit, type and value
+ * digest. A project file records it, and opening the project compares it after replay.
+ */
+pub fn dataset_digest(
+    conn: &Connection,
+    view: &str,
+    columns: &[OutColumn],
+    rows: u64,
+    threads: usize,
+) -> Result<String> {
+    let digests = per_column(conn, columns, threads, |conn, c| {
+        let mut d = ColumnDigest::default();
+        scan_column(conn, view, c, |cell| d.push(&cell))?;
+        Ok(d.finish())
+    })?;
+    let summary = json!({
+        "rowCount": rows,
+        "columns": columns
+            .iter()
+            .zip(&digests)
+            .map(|(c, sha)| json!({ "name": c.name, "unit": c.unit, "type": c.typ, "sha256": sha }))
+            .collect::<Vec<_>>(),
+    });
+    Ok(sha256_hex(canonical_json(&summary).as_bytes()))
+}
+
 fn view_digests(conn: &Connection, input: &ExportInput) -> Result<Vec<ColumnDigests>> {
     per_column(conn, &input.columns, input.threads, |conn, c| {
         let mut exported = ColumnDigest::default();

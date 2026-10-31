@@ -472,7 +472,7 @@ const originalFileShape = { fileId: sha256, name: nonEmpty, size: count, mediaTy
 const projectManifest = z
   .strictObject({
     format: z.literal('tracewell-project'),
-    formatVersion: z.literal('0.1'),
+    formatVersion: z.enum(['0.1', '0.2']),
     appVersion: nonEmpty,
     projectId,
     name: nonEmpty,
@@ -489,8 +489,27 @@ const projectManifest = z
     ),
     auditHead,
     entries: z.array(z.strictObject({ path: packagePath, size: count, sha256 })),
+    caches: z
+      .array(
+        z.strictObject({
+          datasetId,
+          sourceSeq: auditSeq,
+          kind: z.enum(['rows', 'exceptions', 'notes']),
+          path: packagePath,
+        }),
+      )
+      .exactOptional(),
   })
   .superRefine((m, ctx) => {
+    if (m.caches !== undefined && m.formatVersion !== '0.2') {
+      ctx.addIssue({ code: 'custom', path: ['caches'], message: 'Caches need format version 0.2.' });
+    }
+    const listed = new Set(m.entries.map((e) => e.path));
+    m.caches?.forEach((c, i) => {
+      if (!listed.has(c.path)) {
+        ctx.addIssue({ code: 'custom', path: ['caches', i, 'path'], message: `The cache ${c.path} is not an entry.` });
+      }
+    });
     requireUnique<{ id: string; version: string }>('rulePacks', packKey)(m.rulePacks, ctx);
     requireUnique<{ fileId: string }>('originals', (o) => o.fileId)(m.originals, ctx);
     requireUnique<{ id: string }>('datasets', (d) => d.id)(m.datasets, ctx);

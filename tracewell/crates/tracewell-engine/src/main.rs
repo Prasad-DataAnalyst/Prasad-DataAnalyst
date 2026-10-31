@@ -22,6 +22,7 @@ mod import;
 mod issues;
 mod memory;
 mod parse;
+mod project;
 mod rules;
 mod stream;
 mod time;
@@ -155,6 +156,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     }
     if method == "exportData" {
         return engine::export_data(shared, param(params, 0));
+    }
+    if method == "saveProject" {
+        return engine::save_project(shared, param(params, 0));
     }
     let mut e = shared
         .engine

@@ -42,6 +42,11 @@ pub struct Dataset {
     pub issues: Vec<IssueState>,
     /// The rule packs of the last check run, recorded in export manifests.
     pub check_packs: Vec<Value>,
+    /// The working Parquet files: the typed rows and the source text of values that did not parse.
+    pub rows_file: PathBuf,
+    pub exceptions_file: PathBuf,
+    /// The `source.add` entry that imported it, which a project file's cache names.
+    pub source_seq: u64,
 }
 
 impl Dataset {
@@ -72,6 +77,9 @@ pub struct Project {
     pub next_dataset: u64,
     /// Records of the packages exported and verified.
     pub exports: Vec<Value>,
+    /// Where each original's bytes are on disk, by file ID, for saving them into the project file.
+    pub original_paths: HashMap<String, PathBuf>,
+    pub last_saved_at: Option<String>,
 }
 
 pub struct Engine {
@@ -282,6 +290,8 @@ impl Engine {
             originals: Vec::new(),
             next_dataset: 1,
             exports: Vec::new(),
+            original_paths: HashMap::new(),
+            last_saved_at: None,
         });
         let mut d = draft("project.create", json!({}));
         d.insert(
@@ -901,32 +911,8 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
                 .unwrap_or("Choose another export profile."),
         ));
     }
-    let target = match &req["target"] {
-        Value::Null => None,
-        t if t["kind"] == "return-bytes" => None,
-        t if t["kind"] == "path" && t["path"].as_str().is_some_and(|p| !p.is_empty()) => {
-            Some(PathBuf::from(t["path"].as_str().unwrap_or_default()))
-        }
-        _ => {
-            return Err(EngineError::invalid(
-                "The save target is not valid.",
-                "Pass { kind: 'return-bytes' } or a file path.",
-            ));
-        }
-    };
-    let columns: Vec<crate::export::OutColumn> = d.spec["columns"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .zip(&d.columns)
-        .map(|(c, (id, kind))| crate::export::OutColumn {
-            id: id.clone(),
-            name: c["name"].as_str().unwrap_or_default().to_string(),
-            unit: c["unit"]["value"].as_str().map(String::from),
-            typ: c["type"]["value"].as_str().unwrap_or_default().to_string(),
-            kind: *kind,
-        })
-        .collect();
+    let target = target_path(&req["target"])?;
+    let columns = out_columns(d);
     let base_name = req["baseName"]
         .as_str()
         .map(str::trim)
@@ -1034,6 +1020,306 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
     Ok(json!({ "jobId": job, "kind": "export" }))
 }
 
+/// A reader's note as JSON, as the TypeScript IngestNote holds it.
+fn note_json(n: &Note) -> Value {
+    let mut v = json!({ "code": n.code, "message": n.message });
+    if let Some(at) = n.src_loc {
+        v["srcLoc"] = json!(at);
+    }
+    if !n.detail.is_null() {
+        v["detail"] = n.detail.clone();
+    }
+    v
+}
+
+#[allow(dead_code)] // Read back by openProject.
+fn note_from_json(v: &Value) -> Note {
+    Note {
+        code: v["code"].as_str().unwrap_or_default().to_string(),
+        message: v["message"].as_str().unwrap_or_default().to_string(),
+        src_loc: v["srcLoc"].as_u64(),
+        detail: v["detail"].clone(),
+    }
+}
+
+/// A dataset's columns as the export and the digests read them.
+fn out_columns(d: &Dataset) -> Vec<crate::export::OutColumn> {
+    d.spec["columns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(&d.columns)
+        .map(|(c, (id, kind))| crate::export::OutColumn {
+            id: id.clone(),
+            name: c["name"].as_str().unwrap_or_default().to_string(),
+            unit: c["unit"]["value"].as_str().map(String::from),
+            typ: c["type"]["value"].as_str().unwrap_or_default().to_string(),
+            kind: *kind,
+        })
+        .collect()
+}
+
+/// Packages up to this size are handed back with the job's result; larger ones stay on disk.
+const RETURN_BYTES_MAX: u64 = 256 * 1024 * 1024;
+
+/// Where a save or an export should be written: a path, or None to hand the bytes back.
+fn target_path(target: &Value) -> Result<Option<PathBuf>> {
+    match target {
+        Value::Null => Ok(None),
+        t if t["kind"] == "return-bytes" => Ok(None),
+        t if t["kind"] == "path" && t["path"].as_str().is_some_and(|p| !p.is_empty()) => {
+            Ok(Some(PathBuf::from(t["path"].as_str().unwrap_or_default())))
+        }
+        _ => Err(EngineError::invalid(
+            "The save target is not valid.",
+            "Pass { kind: 'return-bytes' } or a file path.",
+        )),
+    }
+}
+
+struct SavedDataset {
+    notes: Vec<Value>,
+    id: String,
+    name: String,
+    rows: u64,
+    view: String,
+    columns: Vec<crate::export::OutColumn>,
+    rows_file: PathBuf,
+    exceptions_file: PathBuf,
+    source_seq: u64,
+}
+
+/**
+ * Saves the project as a .twp file (SAD section 11, decision D-13): the dataset digests are
+ * computed, every original is checked to still be the file that was imported, the save is
+ * recorded, then the file is written with the originals, the audit log, the rule packs, the unit
+ * registry and each dataset's working Parquet files. Result: SaveResult.
+ */
+pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let target = target_path(target)?;
+    let p = engine.project()?;
+    let project_id = p.id.clone();
+    let datasets: Vec<SavedDataset> = p
+        .datasets
+        .iter()
+        .map(|d| SavedDataset {
+            notes: d.notes.iter().map(note_json).collect(),
+            id: d.id.clone(),
+            name: d.name.clone(),
+            rows: d.row_count,
+            view: quote_ident(&d.view),
+            columns: out_columns(d),
+            rows_file: d.rows_file.clone(),
+            exceptions_file: d.exceptions_file.clone(),
+            source_seq: d.source_seq,
+        })
+        .collect();
+    let originals: Vec<(Value, PathBuf)> = p
+        .originals
+        .iter()
+        .filter_map(|o| {
+            let path = p.original_paths.get(o["fileId"].as_str()?)?;
+            Some((o.clone(), path.clone()))
+        })
+        .collect();
+    if originals.len() != p.originals.len() {
+        return Err(EngineError::internal(
+            "An original file of the project has no known location.",
+        ));
+    }
+    let conn = engine.conn.try_clone()?;
+    let threads = engine.threads;
+    let workdir = engine.workdir.join(&project_id);
+    let (job, cancel) = engine.start_job();
+    drop(engine);
+
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let progress_shared = shared.clone();
+        let progress_job = job_id.clone();
+        let mut last = Instant::now();
+        let mut progress = move |phase: &str, done: u64| {
+            if last.elapsed().as_millis() < 100 {
+                return;
+            }
+            last = Instant::now();
+            let p = json!({ "phase": phase, "done": done, "unit": "bytes" });
+            if let Ok(mut e) = progress_shared.engine.lock() {
+                e.jobs.insert(
+                    progress_job.clone(),
+                    json!({ "state": "running", "progress": p }),
+                );
+            }
+            progress_shared
+                .event(json!({ "type": "job.progress", "jobId": progress_job, "progress": p }));
+        };
+        let cancelled = || {
+            EngineError::new(
+                "CANCELLED",
+                "The save was cancelled.",
+                "Save again when you are ready.",
+            )
+        };
+        let out = target
+            .clone()
+            .unwrap_or_else(|| workdir.join(format!("{job_id}.twp")));
+        let outcome = (|| -> Result<Value> {
+            let mut digests = Vec::new();
+            for d in &datasets {
+                progress("Computing the dataset digests", 0);
+                let sha =
+                    crate::export::dataset_digest(&conn, &d.view, &d.columns, d.rows, threads)?;
+                digests.push(json!({ "id": d.id, "name": d.name, "rowCount": d.rows, "workingDigest": sha, "outputDigest": sha }));
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(cancelled());
+                }
+            }
+            // Checked before the save is recorded, so a changed original leaves no save behind.
+            for (info, path) in &originals {
+                progress("Checking the original files", 0);
+                let (sha, _) = crate::project::hash_file(path).map_err(|_| {
+                    EngineError::not_found(
+                        format!(
+                            "The original file {} can no longer be read.",
+                            path.display()
+                        ),
+                        "Put the original file back where it was imported from, then save again.",
+                    )
+                })?;
+                if info["fileId"].as_str() != Some(sha.as_str()) {
+                    return Err(EngineError::new(
+                        "INVALID_INPUT",
+                        format!(
+                            "{} has changed since it was imported, so it cannot be saved as the project's original.",
+                            path.display()
+                        ),
+                        "Put the original file back as it was, or import the changed file as a new source.",
+                    ));
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(cancelled());
+                }
+            }
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            if engine.project.as_ref().map(|p| p.id.as_str()) != Some(project_id.as_str()) {
+                return Err(EngineError::new(
+                    "CANCELLED",
+                    "The project was closed before it was saved.",
+                    "Save the open project again.",
+                ));
+            }
+            let file_name = crate::project::suggested_file_name(&engine.project()?.name);
+            let mut entry = draft("project.save", json!({}));
+            entry.insert("new".into(), json!({ "fileName": file_name }));
+            entry.insert("payload".into(), json!({ "datasets": digests }));
+            let saved = engine.append(entry, None)?;
+            let saved_at = saved["at"].as_str().unwrap_or_default().to_string();
+            let version = engine.version.clone();
+            let p = engine
+                .project
+                .as_mut()
+                .ok_or_else(|| EngineError::internal("The project disappeared during the save."))?;
+            p.last_saved_at = Some(saved_at.clone());
+            let (seq, hash) = p.log.head();
+            let mut packs: Vec<Value> = Vec::new();
+            for e in p
+                .log
+                .entries()
+                .iter()
+                .filter(|e| e["action"] == "check.run")
+            {
+                for r in e["payload"]["packs"].as_array().into_iter().flatten() {
+                    if !packs
+                        .iter()
+                        .any(|x| x["id"] == r["id"] && x["version"] == r["version"])
+                    {
+                        packs.push(r.clone());
+                    }
+                }
+            }
+            let mut rule_packs = Vec::new();
+            for r in packs {
+                let text =
+                    crate::rules::pack_json(r["id"].as_str().unwrap_or("")).ok_or_else(|| {
+                        EngineError::internal(format!("The rule pack {} is not built in.", r["id"]))
+                    })?;
+                rule_packs.push((r, text));
+            }
+            let mut manifest = Map::new();
+            manifest.insert("appVersion".into(), json!(version));
+            manifest.insert("projectId".into(), json!(p.id));
+            manifest.insert("name".into(), json!(p.name));
+            manifest.insert("createdAt".into(), json!(p.created_at));
+            manifest.insert("savedAt".into(), json!(saved_at));
+            manifest.insert("savedBy".into(), p.profile["name"].clone());
+            manifest.insert("unitSystem".into(), json!(p.unit_system));
+            manifest.insert("projectArea".into(), Value::Null);
+            manifest.insert("datasets".into(), json!(digests));
+            manifest.insert("auditHead".into(), json!({ "seq": seq, "hash": hash }));
+            let registry: Value =
+                serde_json::from_str(crate::units::REGISTRY_JSON).unwrap_or(Value::Null);
+            let caches = datasets
+                .iter()
+                .flat_map(|d| {
+                    [("rows", &d.rows_file), ("exceptions", &d.exceptions_file)].map(|(kind, file)| {
+                        (json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "kind": kind }), file.clone())
+                    })
+                })
+                .collect();
+            let cache_bytes = datasets
+                .iter()
+                .map(|d| {
+                    let record =
+                        json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "kind": "notes" });
+                    let text = format!("{}\n", crate::canonical::canonical_json(&json!(d.notes)));
+                    (record, text.into_bytes())
+                })
+                .collect();
+            let input = crate::project::SaveInput {
+                cache_bytes,
+                manifest,
+                audit_jsonl: p.log.to_jsonl(),
+                originals: originals.clone(),
+                caches,
+                rule_packs,
+                registry: (
+                    registry["version"].as_str().unwrap_or("").to_string(),
+                    crate::units::REGISTRY_JSON,
+                ),
+            };
+            drop(engine);
+            crate::project::write_twp(&out, input, &mut progress)?;
+            let (sha256, size) = crate::project::hash_file(&out)?;
+            let mut result = json!({ "fileName": file_name, "size": size, "sha256": sha256 });
+            if target.is_none() {
+                if size <= RETURN_BYTES_MAX {
+                    let bytes = std::fs::read(&out)?;
+                    let _ = std::fs::remove_file(&out);
+                    if let Ok(mut e) = shared.engine.lock() {
+                        e.job_bytes.insert(job_id.clone(), bytes);
+                    }
+                } else {
+                    result["path"] = json!(out.to_string_lossy());
+                }
+            }
+            Ok(result)
+        })();
+        if outcome.is_err() {
+            let _ = std::fs::remove_file(&out);
+        }
+        finish_job(&shared, &job_id, outcome, &["project", "audit"], "");
+    });
+    Ok(json!({ "jobId": job, "kind": "save" }))
+}
+
 /// Records a job's outcome and tells the client.
 fn finish_job(
     shared: &Arc<Shared>,
@@ -1055,9 +1341,11 @@ fn finish_job(
             );
             drop(engine);
             shared.event(json!({ "type": "job.done", "jobId": job_id }));
-            shared.event(
-                json!({ "type": "project.changed", "what": changed, "datasetId": dataset_id }),
-            );
+            let mut event = json!({ "type": "project.changed", "what": changed });
+            if !dataset_id.is_empty() {
+                event["datasetId"] = json!(dataset_id);
+            }
+            shared.event(event);
         }
         Err(e) if e.code == "CANCELLED" => {
             engine
@@ -1225,6 +1513,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
                 &workdir,
                 &job_id,
                 assumptions,
+                &path,
             )
         })();
         let mut engine = match shared.engine.lock() {
@@ -1272,6 +1561,7 @@ fn commit_import(
     workdir: &Path,
     job_id: &str,
     assumptions: Vec<Value>,
+    original: &Path,
 ) -> Result<Value> {
     let mut engine = shared
         .engine
@@ -1319,6 +1609,7 @@ fn commit_import(
     );
     let entry = engine.append(add, None)?;
     let added_seq = entry["seq"].clone();
+    let source_seq = entry["seq"].as_u64().unwrap_or(0);
     let assumptions: Vec<Value> = assumptions
         .into_iter()
         .map(|mut a| {
@@ -1356,12 +1647,20 @@ fn commit_import(
         notes,
         issues: Vec::new(),
         check_packs: Vec::new(),
+        rows_file: parquet,
+        exceptions_file: exc,
+        source_seq,
     };
     let summary = Engine::dataset_summary(&dataset);
     let p = engine
         .project
         .as_mut()
         .ok_or_else(|| EngineError::internal("The project disappeared during the import."))?;
+    if let Some(id) = file_id.as_str() {
+        p.original_paths
+            .entry(id.to_string())
+            .or_insert_with(|| original.to_path_buf());
+    }
     if !p.originals.iter().any(|o| o["fileId"] == file_id) {
         p.originals.push(json!({ "fileId": file_id, "name": spec["fileName"], "size": spec["size"], "mediaType": media_type, "addedSeq": added_seq }));
     }

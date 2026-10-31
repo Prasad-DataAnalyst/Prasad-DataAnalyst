@@ -4,6 +4,7 @@
 export type { TwpContents, TwpInput } from './twp';
 export {
   TWP_FORMAT_VERSION,
+  TWP_READ_VERSIONS,
   TWP_MIMETYPE,
   originalPath,
   readTwp,

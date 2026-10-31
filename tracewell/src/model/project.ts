@@ -24,9 +24,27 @@ export interface IntegrityCheck {
   ruleId?: 'TW-PRJ-001' | 'TW-PRJ-002' | 'TW-PRJ-003' | 'TW-PRJ-004';
 }
 
+/**
+ * A Parquet copy of what importing an original gave (format 0.2, SAD decision D-13), saved so a
+ * large project opens without importing its originals again. A reader may ignore it and replay; one
+ * that uses it still verifies its SHA-256 and the dataset digests after replay.
+ */
+export interface ProjectCache {
+  datasetId: DatasetId;
+  /** The `source.add` entry whose result it holds. */
+  sourceSeq: AuditSeq;
+  /**
+   * 'rows': the typed values with their row IDs (Parquet); 'exceptions': the source text of values
+   * that did not parse (Parquet); 'notes': what the reader noticed in the file (JSON).
+   */
+  kind: 'rows' | 'exceptions' | 'notes';
+  path: string;
+}
+
 export interface ProjectManifest {
   format: 'tracewell-project';
-  formatVersion: '0.1';
+  /** '0.2' adds `caches`. */
+  formatVersion: '0.1' | '0.2';
   appVersion: string;
   projectId: ProjectId;
   name: string;
@@ -42,6 +60,7 @@ export interface ProjectManifest {
   datasets: { id: DatasetId; name: string; rowCount: number; workingDigest: Sha256Hex; outputDigest: Sha256Hex }[];
   auditHead: { seq: AuditSeq; hash: Sha256Hex };
   entries: { path: string; size: number; sha256: Sha256Hex }[];
+  caches?: ProjectCache[];
 }
 
 export interface DatasetSummary {

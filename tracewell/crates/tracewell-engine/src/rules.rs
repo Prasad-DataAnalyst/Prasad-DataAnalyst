@@ -69,6 +69,15 @@ impl Pack {
 }
 
 /// The packs a check run uses, in the order they run.
+/** The exact text of a built-in pack, as a project file stores it. */
+pub fn pack_json(id: &str) -> Option<&'static str> {
+    [GENERIC_DQ_JSON, SYSTEM_JSON]
+        .into_iter()
+        .zip(check_packs())
+        .find(|(_, p)| p.id == id)
+        .map(|(text, _)| text)
+}
+
 pub fn check_packs() -> &'static [Pack] {
     static PACKS: OnceLock<Vec<Pack>> = OnceLock::new();
     PACKS.get_or_init(|| vec![Pack::parse(GENERIC_DQ_JSON), Pack::parse(SYSTEM_JSON)])

@@ -20,6 +20,9 @@ import {
   type Issue,
   type IssueOccurrence,
   type ImportPreview,
+  type ProjectManifest,
+  type ProjectOpenReport,
+  type SaveResult,
   type JsonValue,
   type RowWindow,
 } from '@tw/model';
@@ -248,8 +251,40 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   });
 
+  it('saves a project file that the TypeScript engine opens with every check passing', async () => {
+    const saved = await native.client.awaitJob<SaveResult>(await native.client.saveProject());
+    expect(saved.fileName).toBe('Parity.twp');
+    const bytes = saved.bytes as Uint8Array;
+    expect(saved.size).toBe(bytes.byteLength);
+    const zip = readZip(bytes);
+    const manifest = JSON.parse(zip.readText('manifest.json')) as ProjectManifest;
+    expect(manifest.formatVersion).toBe('0.2');
+    expect(manifest.caches?.length).toBe(3 * manifest.datasets.length);
+
+    const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    try {
+      const report = await opener.awaitJob<ProjectOpenReport>(
+        await opener.openProject({ kind: 'bytes', bytes, name: saved.fileName }),
+      );
+      // Every dataset rebuilt by the TypeScript engine from the originals matches the native digests.
+      expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(report.readOnly).toBe(false);
+      const all = async (e: EngineClient) => {
+        const out: AuditEntry[] = [];
+        for (let offset = 0; ; offset += 500) {
+          const page = await e.listAudit({ offset, limit: 500 });
+          out.push(...page.items);
+          if (offset + 500 >= page.total) return out;
+        }
+      };
+      expect(await all(opener)).toEqual(await all(native.client));
+    } finally {
+      opener.close();
+    }
+  });
+
   it('refuses what it does not support yet with a reason and a fix', async () => {
-    await expect(native.client.saveProject()).rejects.toMatchObject({
+    await expect(native.client.listRulePacks()).rejects.toMatchObject({
       code: 'PROTOCOL_MISMATCH',
       fix: expect.any(String),
     });

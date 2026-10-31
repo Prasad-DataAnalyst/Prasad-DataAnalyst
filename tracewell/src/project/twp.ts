@@ -30,6 +30,8 @@ import { twpReadme } from './readme';
 
 export const TWP_MIMETYPE = 'application/vnd.tracewell.project+zip';
 export const TWP_FORMAT_VERSION = '0.1';
+/** Versions this reader opens: 0.2 adds Parquet caches (SAD decision D-13), which it verifies but does not need. */
+export const TWP_READ_VERSIONS: readonly string[] = ['0.1', '0.2'];
 
 const MIMETYPE = 'mimetype';
 const MANIFEST = 'manifest.json';
@@ -259,14 +261,20 @@ function formatVersionCheck(raw: RawJson): IntegrityCheck {
       'TW-PRJ-004',
     );
   }
-  if (version !== TWP_FORMAT_VERSION) {
+  if (typeof version !== 'string' || !TWP_READ_VERSIONS.includes(version)) {
     return fail(
       'format-version',
-      `The project uses format version ${JSON.stringify(version)}; this version of Tracewell reads ${TWP_FORMAT_VERSION}.`,
+      `The project uses format version ${JSON.stringify(version)}; this version of Tracewell reads ${TWP_READ_VERSIONS.join(' and ')}.`,
       'TW-PRJ-004',
     );
   }
-  return pass('format-version', `Format tracewell-project ${TWP_FORMAT_VERSION} is supported.`);
+  return pass('format-version', `Format tracewell-project ${version} is supported.`);
+}
+
+/** The manifest's own version when this reader opens it, else the one it writes. */
+function readableVersion(value: unknown): string {
+  const v = (value as { formatVersion?: unknown }).formatVersion;
+  return typeof v === 'string' && TWP_READ_VERSIONS.includes(v) ? v : TWP_FORMAT_VERSION;
 }
 
 /**
@@ -280,7 +288,7 @@ function validManifest(raw: RawJson, checks: IntegrityCheck[]): ProjectManifest 
   }
   const candidate =
     typeof raw.value === 'object' && raw.value !== null && !Array.isArray(raw.value)
-      ? { ...(raw.value as Record<string, unknown>), formatVersion: TWP_FORMAT_VERSION }
+      ? { ...(raw.value as Record<string, unknown>), formatVersion: readableVersion(raw.value) }
       : raw.value;
   const checked = schemas.projectManifest.safeParse(candidate);
   if (!checked.success) {

@@ -84,6 +84,18 @@ Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 
 **Consequences.** Both engines write identical `source.add` payloads for the same file and plan, so their audit logs mean the same thing. Parity work moves to execution: reading every format under a plan, check primitives as SQL, steps as SQL views, and exports.
 
+### 3.2 Decision D-13 (slice 2): one project file, with optional Parquet caches
+
+**Context.** A project is rebuilt by replaying its audit log over its original files (section 11). For a 10 GB file that means importing it again on every open, minutes of work. Section 4.3 left open whether large projects should be a stored ZIP64 `.twp` or a project folder exported to `.twp`; NFR-11 budgets disk at 3× the data size, and FR-PRJ-02 asks for a single portable file.
+
+**Decision.** The `.twp` stays one ZIP file for every size: entries STORED where they are large, ZIP64 fields past 4 GiB, so any ZIP tool opens it. A project folder exists only as the engine's working folder, never as a second exchange format. Format 0.2 adds optional caches per dataset, each tied to the `source.add` entry whose result it holds: `data/<id>/rows.parquet` (the typed values with their row IDs), `data/<id>/exceptions.parquet` (the source text of values that did not parse) and `data/<id>/notes.json` (what the reader noticed in the file). They are listed in the manifest's `caches` and checksummed like every entry.
+
+- **Caches never decide what the data is.** The audit log does. A reader that does not use caches (the TypeScript engine) verifies their checksums and replays from the originals; one that uses them still verifies their checksums, the audit chain and the dataset digests after replay, and any failure opens the project read-only.
+- **Both engines read both.** The TypeScript engine reads format 0.1 and 0.2 and writes 0.1; the native engine writes 0.2 with caches. The conformance suite opens a native-saved project in the TypeScript engine, which rebuilds every dataset from the originals and must match every digest the native engine recorded.
+- **Disk.** A saved 10 GB project holds the original (10 GB) and its caches (about 1.4 GB); with the working folder that stays within 3× the data size.
+
+**Rejected.** A project folder (data and originals side by side) is faster to update in place but is not one portable file, and two formats would need two sets of integrity rules. Caching the issue register as well was left out: issues are recomputed by the checks the log records, so a cache could only disagree with them.
+
 ---
 
 ## 4. Long-term architecture
@@ -726,7 +738,7 @@ README.txt                       how to inspect and verify (sha256sum -c CHECKSU
 CHECKSUMS.sha256                 every entry except itself
 ```
 
-Working data is **not** stored in slice 1; it is rebuilt by replay. Slice 2 adds Parquet working files (`data/<datasetId>/*.parquet`) as a cache with digests, so large projects open without re-import.
+Working data is **not** stored in slice 1; it is rebuilt by replay. Format 0.2 (decision D-13) adds per-dataset caches under `data/<datasetId>/` (`rows.parquet`, `exceptions.parquet`, `notes.json`), listed in the manifest's `caches` with the `source.add` entry each holds the result of, so large projects open without re-import. Every reader verifies their checksums; one that uses them still verifies the audit chain and the dataset digests after replay.
 
 **On open, in order.** Each failure is recorded as an `IntegrityCheck` and an issue:
 
