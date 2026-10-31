@@ -1042,6 +1042,8 @@ fn finish_job(
     changed: &[&str],
     dataset_id: &str,
 ) {
+    // A large job frees most of what it used; give it back before the next one starts.
+    crate::memory::release();
     let Ok(mut engine) = shared.engine.lock() else {
         return;
     };

@@ -7,6 +7,7 @@
  *     [TW_BENCH_PROFILE=parquet|csv] [TW_BENCH_LOG=progress.log] npx vitest run tests/bench
  *
  * TW_BENCH_LOG names a file that gets a line as each stage starts and ends, for following a long run.
+ * TW_BENCH_ENGINE_ARGS passes extra engine arguments, such as '--memory-limit 1073741824'.
  *
  * The engine uses its defaults: DuckDB may use half the machine's memory and spills the rest to disk.
  */
@@ -42,7 +43,8 @@ describe.skipIf(CSV === undefined || !nativeBuilt)('native engine benchmark', ()
       const reference = await (
         ENGINE_FACTORIES['tracewell-ts'] as () => Promise<import('@tw/engine-api').EngineClient>
       )();
-      const native = startNative([], process.env['TW_BENCH_WORKDIR']);
+      const engineArgs = (process.env['TW_BENCH_ENGINE_ARGS'] ?? '').split(' ').filter((a) => a !== '');
+      const native = startNative(engineArgs, process.env['TW_BENCH_WORKDIR']);
       const stages: Stage[] = [];
       const timed = async <T>(name: string, run: () => Promise<T>, detail: (r: T) => Record<string, JsonValue>) => {
         progress(`${name}: started`);

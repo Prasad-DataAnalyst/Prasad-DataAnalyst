@@ -5,6 +5,8 @@
 //!                          [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
 //!
 //! The owner is the registered owner of this copy; every export manifest records it.
+//! The memory limit is the budget of the whole process (default half the machine's RAM); DuckDB
+//! gets a share of it (memory.rs).
 
 mod audit;
 mod canonical;
@@ -18,6 +20,7 @@ mod export;
 mod framing;
 mod import;
 mod issues;
+mod memory;
 mod parse;
 mod rules;
 mod stream;
@@ -106,9 +109,10 @@ fn open(args: &Args) -> Result<Engine> {
     } else {
         args.memory_limit
     };
+    let duckdb_limit = memory::duckdb_limit(limit);
     let temp = args.workdir.join("spill");
     conn.execute_batch(&format!(
-        "SET memory_limit = '{limit}B'; SET temp_directory = {}; SET preserve_insertion_order = true;{}",
+        "SET memory_limit = '{duckdb_limit}B'; SET temp_directory = {}; SET preserve_insertion_order = true;{}",
         import::quote_text(&temp.to_string_lossy()),
         args.threads.map_or(String::new(), |t| format!(" SET threads = {t};")),
     ))?;
@@ -217,6 +221,8 @@ fn serve(args: Args) -> io::Result<()> {
 }
 
 fn main() {
+    // Before any thread starts, so every allocation follows it.
+    memory::limit_arenas();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     match parse_args(&argv) {
         Ok(args) => {
