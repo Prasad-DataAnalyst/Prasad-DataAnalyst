@@ -93,7 +93,10 @@ describe('jsonImporter', () => {
   it('streams the same rows whatever the chunk size', async () => {
     const records = Array.from({ length: 2500 }, (_, i) => ({ id: i, name: `ü-${i}`, v: i / 4, tags: [i % 3] }));
     const bytes = enc(JSON.stringify({ total: records.length, records }));
-    const options: FormatOptions = { format: 'json', json: { layout: 'member', member: 'records', nested: 'json-text' } };
+    const options: FormatOptions = {
+      format: 'json',
+      json: { layout: 'member', member: 'records', nested: 'json-text' },
+    };
     const whole = await readAll(bytesSource(bytes, 'r.json'), options);
     expect(whole).toHaveLength(2500);
     expect(whole[2499]).toEqual({ srcLoc: 2499, fields: [2499, 'ü-2499', 624.75, '[0]'] });

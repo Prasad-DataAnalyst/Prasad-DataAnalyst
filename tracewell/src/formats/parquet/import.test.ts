@@ -78,7 +78,9 @@ describe('parquetImporter', () => {
   });
 
   it('refuses a file that is not Parquet, saying how to fix it', async () => {
-    await expect(parquetImporter.sniff(source(new TextEncoder().encode('a,b\n1,2\n'), 'x.parquet'))).rejects.toMatchObject({
+    await expect(
+      parquetImporter.sniff(source(new TextEncoder().encode('a,b\n1,2\n'), 'x.parquet')),
+    ).rejects.toMatchObject({
       code: 'PARSE_FAILED',
       message: expect.stringContaining('could not be read as Parquet'),
     });

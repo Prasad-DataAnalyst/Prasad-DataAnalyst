@@ -27,7 +27,10 @@ describe('detectFormat', () => {
     const enc = (t: string) => new TextEncoder().encode(t);
     expect(detectFormat(enc('[{"a":1}]'), 'rows.json')).toMatchObject({ value: 'json', confidence: 'high' });
     expect(detectFormat(enc('{"a":1}\n{"a":2}\n'), 'rows.jsonl')).toMatchObject({ value: 'json', confidence: 'high' });
-    expect(detectFormat(enc('{"data":[{"a":1}]}'), 'export.dat')).toMatchObject({ value: 'json', confidence: 'medium' });
+    expect(detectFormat(enc('{"data":[{"a":1}]}'), 'export.dat')).toMatchObject({
+      value: 'json',
+      confidence: 'medium',
+    });
   });
 
   it('reads a GeoJSON object by its top-level type, not by a type inside a record', () => {

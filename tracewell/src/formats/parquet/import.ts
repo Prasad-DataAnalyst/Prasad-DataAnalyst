@@ -89,7 +89,9 @@ function timestamp(value: bigint, perMs: bigint, digits: number): RawField {
 }
 
 function date(days: number): RawField {
-  return Math.abs(days * DAY_MS) > MAX_DATE_MS ? String(days) : { date: new Date(days * DAY_MS).toISOString().slice(0, 10) };
+  return Math.abs(days * DAY_MS) > MAX_DATE_MS
+    ? String(days)
+    : { date: new Date(days * DAY_MS).toISOString().slice(0, 10) };
 }
 
 const PARSERS = {
@@ -107,7 +109,13 @@ function hex(bytes: Uint8Array): string {
 
 function jsonText(v: unknown): string {
   return JSON.stringify(v, (_k, x: unknown) =>
-    typeof x === 'bigint' ? (Number.isSafeInteger(Number(x)) ? Number(x) : String(x)) : x instanceof Uint8Array ? hex(x) : x,
+    typeof x === 'bigint'
+      ? Number.isSafeInteger(Number(x))
+        ? Number(x)
+        : String(x)
+      : x instanceof Uint8Array
+        ? hex(x)
+        : x,
   );
 }
 
@@ -179,9 +187,18 @@ async function rowsOf(
 ): Promise<RawRow[]> {
   let objects: Record<string, unknown>[];
   try {
-    objects = await parquetReadObjects({ file, metadata, rowStart, rowEnd, parsers: PARSERS as never, geoparquet: false });
+    objects = await parquetReadObjects({
+      file,
+      metadata,
+      rowStart,
+      rowEnd,
+      parsers: PARSERS as never,
+      geoparquet: false,
+    });
   } catch (e) {
-    throw notParquet(`rows ${formatCount(rowStart)} to ${formatCount(rowEnd - 1)}: ${e instanceof Error ? e.message : String(e)}`);
+    throw notParquet(
+      `rows ${formatCount(rowStart)} to ${formatCount(rowEnd - 1)}: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
   const zones = timestampZones(metadata);
   return objects.map((o, i) => ({
@@ -203,12 +220,7 @@ async function sniff(src: ByteSource): Promise<SniffResult> {
     .children.filter((c) => c.children.length > 0)
     .map((c) => c.element.name);
   const detections: SniffResult['detections'] = {
-    columns: detection(
-      names,
-      'high',
-      'parquet-schema',
-      `The file's schema lists ${names.length} columns.`,
-    ),
+    columns: detection(names, 'high', 'parquet-schema', `The file's schema lists ${names.length} columns.`),
     rowCount: detection(
       rows,
       'high',

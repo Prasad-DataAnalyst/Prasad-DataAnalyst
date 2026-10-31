@@ -1220,9 +1220,30 @@ function mixedGeometryNested() {
 function jsonApiWrapper() {
   const choke = (/** @type {number} */ size) => ({ size, unit: '64ths' });
   const data = [
-    { well_id: 'NS-B01', test_date: '2026-03-02', 'Oil rate (bbl/d)': 1250.5, 'Water cut (%)': 12.5, choke: choke(32), flowing: true },
-    { well_id: 'NS-B02', test_date: '2026-03-02', 'Oil rate (bbl/d)': 980, 'Water cut (%)': 30.25, choke: choke(28), flowing: true },
-    { well_id: 'NS-B03', test_date: '2026-03-03', 'Oil rate (bbl/d)': 0, 'Water cut (%)': null, choke: null, flowing: false },
+    {
+      well_id: 'NS-B01',
+      test_date: '2026-03-02',
+      'Oil rate (bbl/d)': 1250.5,
+      'Water cut (%)': 12.5,
+      choke: choke(32),
+      flowing: true,
+    },
+    {
+      well_id: 'NS-B02',
+      test_date: '2026-03-02',
+      'Oil rate (bbl/d)': 980,
+      'Water cut (%)': 30.25,
+      choke: choke(28),
+      flowing: true,
+    },
+    {
+      well_id: 'NS-B03',
+      test_date: '2026-03-03',
+      'Oil rate (bbl/d)': 0,
+      'Water cut (%)': null,
+      choke: null,
+      flowing: false,
+    },
     { well_id: 'NS-B04', test_date: '2026-03-03', 'Oil rate (bbl/d)': 1105.75, choke: choke(30), flowing: true },
     {
       well_id: 'NS-B05',
@@ -1233,7 +1254,14 @@ function jsonApiWrapper() {
       flowing: true,
       comment: 'after workover',
     },
-    { well_id: 'NS-B06', test_date: '2026-03-05', 'Oil rate (bbl/d)': 1010.5, 'Water cut (%)': 140, choke: choke(30), flowing: true },
+    {
+      well_id: 'NS-B06',
+      test_date: '2026-03-05',
+      'Oil rate (bbl/d)': 1010.5,
+      'Water cut (%)': 140,
+      choke: choke(30),
+      flowing: true,
+    },
   ];
   const doc = { status: 'ok', count: data.length, data, next: null };
   return { name: 'json_api_wrapper_nested.json', bytes: utf8(`${JSON.stringify(doc, null, 2)}\n`) };
@@ -1249,7 +1277,12 @@ function jsonLinesWellTests() {
     { well_id: 'WT-02', start: '2026-02-01T18:00:00Z', 'Gas rate (MMscf/d)': 11.95, 'Separator pressure (psig)': 842 },
     { well_id: 'WT-03', start: '2026-02-02T06:00:00Z', 'Gas rate (MMscf/d)': 13.1, 'Separator pressure (psig)': 861 },
     null,
-    { well_id: 'WT-04', start: '2026-02-02T18:00:00Z', 'Gas rate (MMscf/d)': -999.25, 'Separator pressure (psig)': 838 },
+    {
+      well_id: 'WT-04',
+      start: '2026-02-02T18:00:00Z',
+      'Gas rate (MMscf/d)': -999.25,
+      'Separator pressure (psig)': 838,
+    },
     { well_id: 'WT-05', start: '2026-02-03T06:00:00Z', 'Gas rate (MMscf/d)': 12.75, 'Separator pressure (psig)': 855 },
     {
       well_id: 'WT-06',

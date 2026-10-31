@@ -100,7 +100,10 @@ function Preview(p: {
   const detected = p.initial.sniff.options;
   const optionsChanged = JSON.stringify(options) !== JSON.stringify(detected);
 
-  const resniff = async (next: FormatOptions, template: TemplateId | null | undefined): Promise<ImportPreview | null> => {
+  const resniff = async (
+    next: FormatOptions,
+    template: TemplateId | null | undefined,
+  ): Promise<ImportPreview | null> => {
     setBusy('preview');
     const fresh = await attempt(() =>
       engine.sniff(
