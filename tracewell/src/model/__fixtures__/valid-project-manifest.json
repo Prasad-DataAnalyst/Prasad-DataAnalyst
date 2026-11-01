@@ -219,7 +219,7 @@
       {
         "datasetId": "d1",
         "sourceSeq": 2,
-        "checkSeq": 4,
+        "afterSeq": 4,
         "kind": "issues",
         "path": "data/d1/issues.json"
       }

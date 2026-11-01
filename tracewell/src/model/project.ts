@@ -34,12 +34,15 @@ export interface ProjectCache {
   datasetId: DatasetId;
   /** The dataset's `source.add` entry. */
   sourceSeq: AuditSeq;
-  /** 'issues' only: the `check.run` entry whose result it holds, the dataset's last before the save. */
-  checkSeq?: AuditSeq;
+  /**
+   * 'issues' only: the entry after which the dataset's issues are as the cache holds them, the last
+   * before the save that could change them (its own entries, or a change of the project area).
+   */
+  afterSeq?: AuditSeq;
   /**
    * 'rows': the typed values with their row IDs (Parquet); 'exceptions': the source text of values
    * that did not parse (Parquet); 'notes': what the reader noticed in the file (JSON); 'issues': the
-   * dataset's issues as that check run left them, with their rows (JSON).
+   * dataset's issues as they stood after that entry, with their rows and decisions (JSON).
    */
   kind: 'rows' | 'exceptions' | 'notes' | 'issues';
   path: string;

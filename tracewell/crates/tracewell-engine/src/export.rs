@@ -103,7 +103,9 @@ pub struct ExportInput {
     pub dataset_id: String,
     pub dataset_name: String,
     pub view: String,
+    /// Rows in the output view: the dataset's rows less the excluded ones.
     pub row_count: u64,
+    pub excluded_rows: u64,
     pub columns: Vec<OutColumn>,
     pub sources: Vec<Value>,
     pub rule_packs: Vec<Value>,
@@ -225,20 +227,20 @@ fn scan_column(
     mut f: impl FnMut(Cell),
 ) -> Result<()> {
     let sql = format!("SELECT __rid, {} FROM {view}", quote_ident(&c.id));
-    let mut next: i64 = 0;
+    let mut last: i64 = -1;
     each_batch(conn, &sql, |batch| {
         let rids = batch.column(0).as_primitive::<Int64Type>();
         let values = batch.column(1);
         for i in 0..batch.num_rows() {
-            // The working file is written in row order and read back in it; a gap would mean the
-            // digest compares the wrong rows.
-            if rids.value(i) != next {
+            // The working file is written in row order and read back in it; excluded rows leave
+            // gaps, but a row out of order would mean the digest compares the wrong rows.
+            if rids.value(i) <= last {
                 return Err(EngineError::internal(format!(
-                    "The working table is out of row order at row {next} of column {}.",
+                    "The working table is out of row order after row {last} of column {}.",
                     c.id
                 )));
             }
-            next += 1;
+            last = rids.value(i);
             f(cell_at(values, i, c.kind));
         }
         Ok(())
@@ -246,7 +248,7 @@ fn scan_column(
 }
 
 /**
- * The digest the TypeScript viewDigest gives a view without steps or exclusions (SAD section 9.4):
+ * The digest the TypeScript viewDigest gives a view without steps (SAD section 9.4):
  * the SHA-256 of the canonical JSON of its row count and each column's name, unit, type and value
  * digest. A project file records it, and opening the project compares it after replay.
  */
@@ -1484,7 +1486,7 @@ pub fn build_export(
         "rulePacks": input.rule_packs,
         "unitRegistry": { "version": registry_version(), "sha256": sha256_hex(REGISTRY_JSON.as_bytes()) },
         "steps": [],
-        "excludedRows": 0,
+        "excludedRows": input.excluded_rows,
         "openIssues": open_issues(&input.issues),
         "assumptions": input.assumptions,
         "substitutions": [],

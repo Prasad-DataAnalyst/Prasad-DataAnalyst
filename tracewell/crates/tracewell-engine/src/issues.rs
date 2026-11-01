@@ -1,12 +1,12 @@
 //! The issues register (SAD section 7.7), as the TypeScript issues-state.ts and queries.ts: issues
-//! grouped per (rule, dataset, columns), with flagged, current and accepted rows, from which the
-//! counts and the status follow. The native engine takes no decisions yet, so nothing is accepted
-//! or excluded; the counts still follow the same formulas.
+//! grouped per (rule, dataset, columns), with flagged, current and accepted rows and the dataset's
+//! excluded rows, from which the counts and the status follow.
 
 use crate::error::{EngineError, Result};
 use crate::rules::{Draft, RowSet, find_rule};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 
 const MAX_OPEN_RANGES: usize = 1000;
 
@@ -21,6 +21,8 @@ pub struct IssueState {
     pub comments: Vec<Value>,
     pub first_seen_seq: u64,
     pub last_checked_seq: u64,
+    /// The issue.accept entry that decided each accepted row, for drill-down.
+    pub decided_by: HashMap<u64, u64>,
 }
 
 /// Merges a check run's drafts: issues it raised are updated, issues it did not raise are no
@@ -50,6 +52,7 @@ pub fn merge_check_run(issues: &mut Vec<IssueState>, drafts: Vec<Draft>, seq: u6
                 comments: Vec::new(),
                 first_seen_seq: seq,
                 last_checked_seq: seq,
+                decided_by: HashMap::new(),
             }),
         }
     }
@@ -94,7 +97,23 @@ pub fn to_cache(st: &IssueState) -> Value {
         "comments": st.comments,
         "firstSeenSeq": st.first_seen_seq,
         "lastCheckedSeq": st.last_checked_seq,
+        "decidedBy": decided_groups(st),
     })
+}
+
+/// The accepted rows grouped by the entry that decided them, in entry order.
+fn decided_groups(st: &IssueState) -> Vec<Value> {
+    let mut by_seq: BTreeMap<u64, RowSet> = BTreeMap::new();
+    for (&row, &seq) in &st.decided_by {
+        by_seq
+            .entry(seq)
+            .or_insert_with(|| RowSet::new(st.accepted.capacity()))
+            .insert(row);
+    }
+    by_seq
+        .into_iter()
+        .map(|(seq, rows)| json!({ "seq": seq, "rows": rows.to_cache() }))
+        .collect()
 }
 
 /// An issue of a dataset of `n` rows from its cached form, or None when the form is not one, or its
@@ -147,6 +166,16 @@ pub fn from_cache(v: &Value, n: u64) -> Option<IssueState> {
         comments: v["comments"].as_array()?.clone(),
         first_seen_seq: v["firstSeenSeq"].as_u64()?,
         last_checked_seq: v["lastCheckedSeq"].as_u64()?,
+        decided_by: {
+            let mut map = HashMap::new();
+            for group in v["decidedBy"].as_array()? {
+                let seq = group["seq"].as_u64()?;
+                for row in RowSet::from_cache(&group["rows"], n)?.iter() {
+                    map.insert(row, seq);
+                }
+            }
+            map
+        },
     })
 }
 
@@ -158,7 +187,7 @@ struct Counts {
     fixed: u64,
 }
 
-fn counts(st: &IssueState) -> Counts {
+fn counts(st: &IssueState, excluded: &RowSet) -> Counts {
     if st.draft.scope != "rows" {
         return Counts {
             flagged: 1,
@@ -168,13 +197,19 @@ fn counts(st: &IssueState) -> Counts {
             fixed: u64::from(!st.present),
         };
     }
+    let current = st.current.minus(excluded);
     Counts {
         flagged: st.flagged.count(),
-        open: st.current.minus(&st.accepted).count(),
-        accepted: st.current.intersect(&st.accepted).count(),
-        excluded: 0,
-        fixed: st.flagged.minus(&st.current).count(),
+        open: current.minus(&st.accepted).count(),
+        accepted: current.intersect(&st.accepted).count(),
+        excluded: st.flagged.intersect(excluded).count(),
+        fixed: st.flagged.minus(&st.current).minus(excluded).count(),
     }
+}
+
+/// The rows still open in the issue: flagged by the latest run, neither excluded nor accepted.
+pub fn open_rows(st: &IssueState, excluded: &RowSet) -> RowSet {
+    st.current.minus(excluded).minus(&st.accepted)
 }
 
 fn status(c: &Counts) -> &'static str {
@@ -187,12 +222,12 @@ fn status(c: &Counts) -> &'static str {
     }
 }
 
-/// The issue as the protocol carries it (toIssue).
-pub fn to_issue(st: &IssueState) -> Value {
+/// The issue as the protocol carries it (toIssue), given its dataset's excluded rows.
+pub fn to_issue(st: &IssueState, excluded: &RowSet) -> Value {
     let rule = find_rule(&st.draft.rule_id).map(|(_, r)| r);
-    let c = counts(st);
+    let c = counts(st, excluded);
     let open_rows = if st.draft.scope == "rows" {
-        st.current.minus(&st.accepted).to_ranges(MAX_OPEN_RANGES)
+        open_rows(st, excluded).to_ranges(MAX_OPEN_RANGES)
     } else {
         json!({ "count": 0, "ranges": [] })
     };
@@ -227,8 +262,10 @@ pub fn to_issue(st: &IssueState) -> Value {
 }
 
 /// The state of one flagged row (occurrenceState).
-pub fn occurrence_state(st: &IssueState, row: u64) -> &'static str {
-    if !st.current.contains(row) {
+pub fn occurrence_state(st: &IssueState, excluded: &RowSet, row: u64) -> &'static str {
+    if excluded.contains(row) {
+        "excluded"
+    } else if !st.current.contains(row) {
         "fixed"
     } else if st.accepted.contains(row) {
         "accepted"
@@ -371,7 +408,8 @@ mod cache_tests {
         assert_eq!(cached["accepted"], json!({ "ranges": [] }));
         let back = from_cache(&cached, n).expect("reads back");
         assert_eq!(to_cache(&back), cached);
-        assert_eq!(to_issue(&back), to_issue(st));
+        let none = RowSet::new(n);
+        assert_eq!(to_issue(&back, &none), to_issue(st, &none));
         assert_eq!((back.first_seen_seq, back.last_checked_seq), (5, 9));
 
         // Not raised by a later run: no current rows, so the draft's rows are written out.
@@ -380,8 +418,11 @@ mod cache_tests {
         assert_eq!(cached["rows"], json!({ "ranges": [[4, 4], [60, 60]] }));
         assert_eq!(cached["accepted"], json!({ "sameAs": "current" }));
         assert_eq!(
-            to_issue(&from_cache(&cached, n).expect("reads back")),
-            to_issue(&issues[0])
+            to_issue(
+                &from_cache(&cached, n).expect("reads back"),
+                &RowSet::new(n)
+            ),
+            to_issue(&issues[0], &RowSet::new(n))
         );
 
         let mut wrong = cached.clone();

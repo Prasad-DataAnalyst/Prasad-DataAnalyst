@@ -21,6 +21,7 @@ import {
   type IssueOccurrence,
   type ImportPreview,
   type ProjectManifest,
+  type Decision,
   type ProjectOpenReport,
   type SaveResult,
   type JsonValue,
@@ -253,6 +254,199 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   });
 
+  it('takes the same decisions, with the same entries, issues, rows, health and export', async () => {
+    const { nat, ref } = pairs.get('csv_duplicates_rows_and_keys.csv') as { nat: string; ref: string };
+    const geo = pairs.get('csv_latlon_swapped_out_of_range.csv') as { nat: string; ref: string };
+    const issuesOf = async (e: EngineClient, datasetId: string) =>
+      (await e.listIssues({ datasetId, limit: 1000 })).items;
+    // Issue IDs hash the dataset ID, so the same rule on the same columns names an issue in both.
+    const key = (i: Issue) => `${i.ruleId}|${i.columns.join(',')}`;
+    const issue = async (ruleId: string) => {
+      const a = (await issuesOf(native.client, nat)).find((i) => i.ruleId === ruleId && i.scope === 'rows') as Issue;
+      const b = (await issuesOf(reference, ref)).find((i) => key(i) === key(a)) as Issue;
+      return { a, b };
+    };
+    const comparable = (i: Issue) => {
+      const { id: _id, datasetId: _ds, firstSeenSeq: _f, lastCheckedSeq: _l, comments, ...rest } = i;
+      return { ...rest, comments: comments.map((c) => ({ by: c.by, text: c.text })) };
+    };
+    /** What an entry says, without what depends on its place in each engine's log and project. */
+    const said = (e: AuditEntry) => {
+      const { seq: _s, at: _a, prev: _p, hash: _h, target, ...rest } = e;
+      const t: Record<string, unknown> = { ...target };
+      for (const k of ['datasetId', 'issueId', 'seq']) if (k in t) t[k] = k;
+      return { ...rest, target: t };
+    };
+    /** Occurrences with the action of the entry that decided each, rather than its seq. */
+    const occurrences = async (e: EngineClient, id: string) => {
+      const log = await allAudit(e);
+      const items = (await e.listOccurrences(id, { offset: 0, limit: 1000 })).items;
+      return items.map((o) => ({
+        ...o,
+        issueId: '',
+        decidedBy: o.decidedBy === null ? null : (log.find((x) => x.seq === o.decidedBy)?.action ?? 'missing'),
+      }));
+    };
+    const agree = async (why: string) => {
+      for (const [n, r] of [
+        [nat, ref],
+        [geo.nat, geo.ref],
+      ] as const) {
+        const [a, b] = [await issuesOf(native.client, n), await issuesOf(reference, r)];
+        expect(a.map(comparable), `${why}: issues of ${n}`).toEqual(b.map(comparable));
+        for (const [i, x] of a.entries()) {
+          expect(await occurrences(native.client, x.id), `${why}: ${x.ruleId}`).toEqual(
+            await occurrences(reference, (b[i] as Issue).id),
+          );
+        }
+        const [ha, hb] = [await native.client.getHealth(n), await reference.getHealth(r)];
+        expect({ ...ha, datasetId: '' }, `${why}: health`).toEqual({ ...hb, datasetId: '' });
+      }
+      const [ra, rb] = [await allRows(native.client, nat), await allRows(reference, ref)];
+      expect(
+        ra.map((x) => [x.rowId, x.cells]),
+        `${why}: rows`,
+      ).toEqual(rb.map((x) => [x.rowId, x.cells]));
+      const [sa, sb] = [await native.client.getSchema(nat), await reference.getSchema(ref)];
+      expect(sa.rowCount, `${why}: schema`).toBe(sb.rowCount);
+      for (const c of sb.columns) {
+        const pickStats = (x: Awaited<ReturnType<EngineClient['getColumnStats']>>) => ({
+          count: x.count,
+          nulls: x.nulls,
+          rawRejected: x.rawRejected,
+          distinct: x.distinct,
+          min: x.min,
+          max: x.max,
+        });
+        expect(pickStats(await native.client.getColumnStats(nat, c.id)), `${why}: ${c.name}`).toEqual(
+          pickStats(await reference.getColumnStats(ref, c.id)),
+        );
+      }
+      const summary = async (e: EngineClient, id: string) => {
+        const p = await e.getProject();
+        const d = p.datasets.find((x) => x.id === id);
+        return { area: p.projectArea, rows: d?.rowCount, output: d?.outputRowCount };
+      };
+      expect(await summary(native.client, nat), `${why}: project`).toEqual(await summary(reference, ref));
+    };
+    const both = async (
+      why: string,
+      make: (ids: { dataset: string; issue: (i: { a: Issue; b: Issue }) => string; seq: number }) => Decision,
+      seqs?: [number, number],
+    ) => {
+      const a = await native.client.decide(make({ dataset: nat, issue: (i) => i.a.id, seq: seqs?.[0] ?? 0 }));
+      const b = await reference.decide(make({ dataset: ref, issue: (i) => i.b.id, seq: seqs?.[1] ?? 0 }));
+      expect(a.map(said), `${why}: entries`).toEqual(b.map(said));
+      await agree(why);
+      return [(a[0] as AuditEntry).seq, (b[0] as AuditEntry).seq] as [number, number];
+    };
+
+    const dup = await issue('TW-DQ-003');
+    const time = await issue('TW-TIME-001');
+    await both('comment', (x) => ({
+      kind: 'comment_issue',
+      issueId: x.issue(dup),
+      text: '  Checked with the field team  ',
+    }));
+    const first = dup.a.openRows.ranges[0]?.[0] as number;
+    const accepted = await both('accept', (x) => ({
+      kind: 'accept_issue',
+      issueId: x.issue(dup),
+      rows: [first],
+      reason: 'Confirmed by the operator',
+    }));
+    const excluded = await both('exclude by issue', (x) => ({
+      kind: 'exclude_rows',
+      datasetId: x.dataset,
+      rows: { issueId: x.issue(time) },
+      reason: 'Test records from commissioning',
+    }));
+    await both('exclude rows', (x) => ({
+      kind: 'exclude_rows',
+      datasetId: x.dataset,
+      rows: [0, 1],
+      reason: 'Header rows sent twice',
+    }));
+    await both(
+      'revert the acceptance',
+      (x) => ({ kind: 'revert', seq: x.seq, reason: 'Accepted by mistake' }),
+      accepted,
+    );
+    await both('project area', () => ({
+      kind: 'set_project_area',
+      bbox: [-10, 40, 10, 60],
+      reason: 'North Sea licence area',
+    }));
+    await both(
+      'revert the exclusion',
+      (x) => ({ kind: 'revert', seq: x.seq, reason: 'The records are real' }),
+      excluded,
+    );
+    await both('accept everything open', (x) => ({
+      kind: 'accept_issue',
+      issueId: x.issue(dup),
+      rows: 'all',
+      reason: 'Known duplicates from the historian',
+    }));
+
+    // Refusals give the same code and message in both engines.
+    const refusal = async (make: (dataset: string, issueId: string) => Decision) => {
+      const out: unknown[] = [];
+      for (const [e, dataset, id] of [
+        [native.client, nat, dup.a.id],
+        [reference, ref, dup.b.id],
+      ] as const) {
+        out.push(
+          await e.decide(make(dataset, id)).then(
+            () => 'accepted',
+            (err: unknown) => ({
+              code: (err as { code: string }).code,
+              message: (err as Error).message.replaceAll(id, 'ID').replaceAll(dataset, 'DS'),
+            }),
+          ),
+        );
+      }
+      expect(out[0]).toEqual(out[1]);
+      expect(out[0]).not.toBe('accepted');
+    };
+    await refusal((_, id) => ({ kind: 'accept_issue', issueId: id, rows: [first], reason: 'ab' }));
+    await refusal((_, id) => ({ kind: 'accept_issue', issueId: id, rows: [first, 99999], reason: 'Already done' }));
+    await refusal((_, id) => ({ kind: 'accept_issue', issueId: id, rows: 'all', reason: 'Nothing left open' }));
+    await refusal((dataset) => ({
+      kind: 'exclude_rows',
+      datasetId: dataset,
+      rows: [0, 1],
+      reason: 'Excluded already',
+    }));
+    await refusal((dataset) => ({
+      kind: 'exclude_rows',
+      datasetId: dataset,
+      rows: [5, 123456],
+      reason: 'Past the end',
+    }));
+    await refusal((_, id) => ({ kind: 'comment_issue', issueId: id, text: '   ' }));
+    await refusal(() => ({ kind: 'set_project_area', bbox: [10, 60, -10, 40], reason: 'South above north' }));
+    await refusal(() => ({ kind: 'revert', seq: 99999, reason: 'No such entry' }));
+    await refusal(() => ({ kind: 'revert', seq: 1, reason: 'Undo the project' }));
+    await refusal(() => ({ kind: 'accept_issue', issueId: 'I-000000000000', rows: 'all', reason: 'Unknown issue' }));
+
+    // The export leaves the excluded rows out, and both engines describe it the same way.
+    const a = await native.client.awaitJob<ExportResult>(
+      await native.client.exportData({ datasetId: nat, profile: 'parquet' }),
+    );
+    const b = await reference.awaitJob<ExportResult>(
+      await reference.exportData({ datasetId: ref, profile: 'parquet' }),
+    );
+    expect([a.ok, b.ok]).toEqual([true, true]);
+    expect([a.manifest.dataset.rowCount, a.manifest.excludedRows]).toEqual([
+      b.manifest.dataset.rowCount,
+      b.manifest.excludedRows,
+    ]);
+    expect(a.manifest.excludedRows).toBeGreaterThan(0);
+    expect(a.manifest.dataset.viewDigest).toBe(b.manifest.dataset.viewDigest);
+    expect(a.manifest.openIssues).toEqual(b.manifest.openIssues);
+  });
+
   it('saves a project file that the TypeScript engine opens with every check passing', async () => {
     // A second check run of d1: its saved results stand in for both runs when the file is opened.
     await native.client.awaitJob<CheckSummary>(await native.client.runChecks('d1'));
@@ -266,11 +460,21 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     expect(manifest.formatVersion).toBe('0.2');
     const caches = (kind: string) => (manifest.caches ?? []).filter((c) => c.kind === kind);
     for (const kind of ['rows', 'exceptions', 'notes']) expect(caches(kind)).toHaveLength(manifest.datasets.length);
-    // One issues cache per checked dataset, holding the result of its last check run.
-    const lastRun = new Map<unknown, unknown>();
-    for (const e of await allAudit(native.client)) if (e.action === 'check.run') lastRun.set(e.target.datasetId, e.seq);
-    expect(lastRun.size).toBeGreaterThan(1);
-    expect(new Map(caches('issues').map((c) => [c.datasetId, c.checkSeq]))).toEqual(lastRun);
+    // One issues cache per checked dataset, after the last entry that could change its issues.
+    const log = await allAudit(native.client);
+    const checked = new Set(log.filter((e) => e.action === 'check.run').map((e) => e.target.datasetId));
+    const after = new Map<unknown, unknown>();
+    for (const id of checked) {
+      const last = log.filter(
+        (e) =>
+          e.target.datasetId === id ||
+          e.action === 'project.area' ||
+          (e.action === 'entry.revert' && e.target.datasetId === undefined),
+      );
+      after.set(id, last[last.length - 1]?.seq);
+    }
+    expect(after.size).toBeGreaterThan(1);
+    expect(new Map(caches('issues').map((c) => [c.datasetId, c.afterSeq]))).toEqual(after);
 
     const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
     try {
@@ -312,6 +516,26 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     return { report, opened };
   };
 
+  /** Everything a user sees of the datasets, issues, decisions and health, the same in both engines. */
+  const sameState = async (a: EngineClient, b: EngineClient) => {
+    const [pa, pb] = [await a.getProject(), await b.getProject()];
+    expect(pa.projectArea).toEqual(pb.projectArea);
+    const shape = (p: typeof pa) => p.datasets.map((d) => [d.id, d.rowCount, d.outputRowCount]);
+    expect(shape(pa)).toEqual(shape(pb));
+    const [ia, ib] = [(await a.listIssues({ limit: 1000 })).items, (await b.listIssues({ limit: 1000 })).items];
+    expect(ia).toEqual(ib);
+    const page = { offset: 0, limit: 1000 };
+    for (const i of ia) {
+      expect((await a.listOccurrences(i.id, page)).items, i.ruleId).toEqual(
+        (await b.listOccurrences(i.id, page)).items,
+      );
+    }
+    for (const d of pa.datasets) {
+      expect(await a.getHealth(d.id)).toEqual(await b.getHealth(d.id));
+      expect(await allRows(a, d.id), d.id).toEqual(await allRows(b, d.id));
+    }
+  };
+
   it('opens its own project file from the saved working data, with the same log and issues', async () => {
     const { report, opened } = await openNatively(savedByNative as Uint8Array);
     try {
@@ -321,10 +545,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(detail).toContain('restored from their saved working data');
       expect(detail).toContain('Their issues were restored from the saved check results.');
       expect(await allAudit(opened.client)).toEqual(await allAudit(native.client));
-      const issues = async (e: EngineClient) => (await e.listIssues({ limit: 1000 })).items;
-      expect(await issues(opened.client)).toEqual(await issues(native.client));
-      const first = pairs.get('csv_well_daily_golden.csv') as { nat: string };
-      expect(await allRows(opened.client, first.nat)).toEqual(await allRows(native.client, first.nat));
+      await sameState(opened.client, native.client);
     } finally {
       stopNative(opened);
     }
@@ -337,6 +558,8 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(report.checks.filter((c) => !c.ok)).toEqual([]);
       expect(report.checks.find((c) => c.id === 'replay-digest')?.detail).toContain('rebuilt from the originals');
       expect(await allAudit(opened.client)).toEqual(await allAudit(reference));
+      // Replaying the reference engine's decisions, with the checks run again, ends where it did.
+      await sameState(opened.client, reference);
     } finally {
       stopNative(opened);
     }
@@ -379,6 +602,25 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(replay?.detail).toContain('and 2 recorded check runs ran again');
       const issues = async (e: EngineClient) => (await e.listIssues({ limit: 1000 })).items;
       expect(await issues(opened.client)).toEqual(await issues(native.client));
+    } finally {
+      stopNative(opened);
+    }
+  });
+
+  it('replays the decisions with the checks run again when a dataset has no usable saved results', async () => {
+    const { nat } = pairs.get('csv_duplicates_rows_and_keys.csv') as { nat: string };
+    const bytes = (savedByNative as Uint8Array).slice();
+    const path = `data/${nat}/issues.json`;
+    const latin1 = new TextDecoder('latin1');
+    const text = latin1.decode(readZip(bytes).read(path));
+    const at = latin1.decode(bytes).indexOf(text) + text.indexOf('"rowCount":') + '"rowCount":'.length;
+    expect(at).toBeGreaterThan(0);
+    bytes[at] = '9'.charCodeAt(0);
+    const { report, opened } = await openNatively(bytes);
+    try {
+      expect(report.checks.filter((c) => !c.ok).map((c) => [c.id, c.target])).toEqual([['entry-checksum', path]]);
+      expect(report.checks.find((c) => c.id === 'replay-digest')).toMatchObject({ ok: true });
+      await sameState(opened.client, native.client);
     } finally {
       stopNative(opened);
     }

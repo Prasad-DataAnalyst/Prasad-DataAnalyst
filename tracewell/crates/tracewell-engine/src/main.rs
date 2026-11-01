@@ -163,6 +163,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     if method == "openProject" {
         return engine::open_project(shared, msg, param(params, 0));
     }
+    if method == "decide" {
+        return engine::decide(shared, param(params, 0));
+    }
     let mut e = shared
         .engine
         .lock()

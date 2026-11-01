@@ -179,22 +179,22 @@
     ]
   },
   {
-    "why": "an issues cache that names no check run",
+    "why": "an issues cache that names no entry",
     "base": 2,
     "patch": [
       {
         "op": "remove",
-        "path": "/caches/2/checkSeq"
+        "path": "/caches/2/afterSeq"
       }
     ]
   },
   {
-    "why": "a rows cache that names a check run",
+    "why": "a rows cache that names an entry",
     "base": 2,
     "patch": [
       {
         "op": "add",
-        "path": "/caches/0/checkSeq",
+        "path": "/caches/0/afterSeq",
         "value": 4
       }
     ]

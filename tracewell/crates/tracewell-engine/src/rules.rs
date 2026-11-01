@@ -110,8 +110,19 @@ impl RowSet {
         }
     }
 
+    pub fn remove(&mut self, r: u64) {
+        if r < self.n {
+            self.words[(r / 64) as usize] &= !(1 << (r % 64));
+        }
+    }
+
     pub fn contains(&self, r: u64) -> bool {
         r < self.n && self.words[(r / 64) as usize] & (1 << (r % 64)) != 0
+    }
+
+    /// The number of rows the set can hold: the dataset's row count.
+    pub fn capacity(&self) -> u64 {
+        self.n
     }
 
     pub fn count(&self) -> u64 {

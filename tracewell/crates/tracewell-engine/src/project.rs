@@ -581,8 +581,8 @@ fn manifest_problem(m: &Value) -> Option<String> {
                         x["kind"].as_str(),
                         Some("rows" | "exceptions" | "notes" | "issues")
                     )
-                    && (x["kind"] == "issues") == x["checkSeq"].is_u64()
-                    && x.get("checkSeq").is_none_or(Value::is_u64)
+                    && (x["kind"] == "issues") == x["afterSeq"].is_u64()
+                    && x.get("afterSeq").is_none_or(Value::is_u64)
                     && x["path"].is_string()
             })
         })

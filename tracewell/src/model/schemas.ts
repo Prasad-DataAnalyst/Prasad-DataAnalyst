@@ -494,7 +494,7 @@ const projectManifest = z
         z.strictObject({
           datasetId,
           sourceSeq: auditSeq,
-          checkSeq: auditSeq.exactOptional(),
+          afterSeq: auditSeq.exactOptional(),
           kind: z.enum(['rows', 'exceptions', 'notes', 'issues']),
           path: packagePath,
         }),
@@ -510,11 +510,11 @@ const projectManifest = z
       if (!listed.has(c.path)) {
         ctx.addIssue({ code: 'custom', path: ['caches', i, 'path'], message: `The cache ${c.path} is not an entry.` });
       }
-      if ((c.kind === 'issues') !== (c.checkSeq !== undefined)) {
+      if ((c.kind === 'issues') !== (c.afterSeq !== undefined)) {
         ctx.addIssue({
           code: 'custom',
-          path: ['caches', i, 'checkSeq'],
-          message: 'An issues cache names its check run, and only an issues cache does.',
+          path: ['caches', i, 'afterSeq'],
+          message: 'An issues cache names the entry it follows, and only an issues cache does.',
         });
       }
     });

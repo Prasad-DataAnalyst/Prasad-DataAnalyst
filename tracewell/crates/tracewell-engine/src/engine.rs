@@ -10,10 +10,10 @@ use crate::error::{EngineError, Result};
 use crate::framing::{Incoming, write_message};
 use crate::import::{CsvPlan, EXCEPTIONS_SUFFIX, csv_plan, import_csv, quote_ident, quote_text};
 use crate::issues::{
-    IssueState, Listed, matches, merge_check_run, occurrence_state, sort, to_issue,
+    IssueState, Listed, matches, merge_check_run, occurrence_state, open_rows, sort, to_issue,
 };
 use crate::parse::Kind;
-use crate::rules::{RowSet, check_packs};
+use crate::rules::{Draft, RowSet, check_packs};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
@@ -47,11 +47,55 @@ pub struct Dataset {
     pub exceptions_file: PathBuf,
     /// The `source.add` entry that imported it, which a project file's cache names.
     pub source_seq: u64,
+    /// Rows the user excluded; the working view leaves them out.
+    pub excluded: RowSet,
+    /// Each rows.exclude entry still in force, with the rows it excluded, ascending. A row is
+    /// excluded by exactly one entry.
+    pub exclusions: Vec<(u64, Vec<u64>)>,
 }
 
 impl Dataset {
     fn exceptions_view(&self) -> String {
         format!("{}{EXCEPTIONS_SUFFIX}", self.view)
+    }
+
+    /// The view of every row, excluded ones included, for looking rows up by ID.
+    fn all_view(&self) -> String {
+        format!("{}__all", self.view)
+    }
+
+    fn all_exceptions_view(&self) -> String {
+        format!("{}__all{EXCEPTIONS_SUFFIX}", self.view)
+    }
+
+    /// Rows in the working view: all but the excluded ones.
+    fn visible_rows(&self) -> u64 {
+        self.row_count - self.excluded.count()
+    }
+
+    /// Whether a check run has been recorded for it, so a change runs the checks again.
+    fn checked(&self) -> bool {
+        !self.check_packs.is_empty()
+    }
+
+    /// The rows.exclude entry that excluded a row.
+    fn excluded_by(&self, row: u64) -> Option<u64> {
+        self.exclusions
+            .iter()
+            .find(|(_, rows)| rows.binary_search(&row).is_ok())
+            .map(|(seq, _)| *seq)
+    }
+
+    /// The row ID at visible position `i` of the working view.
+    fn row_at(&self, i: u64) -> u64 {
+        let mut r = i;
+        for e in self.excluded.iter() {
+            if e > r {
+                break;
+            }
+            r += 1;
+        }
+        r
     }
 
     fn check_columns(&self) -> Vec<Col> {
@@ -82,6 +126,21 @@ pub struct Project {
     pub last_saved_at: Option<String>,
     /// Set when an opened project failed an integrity check: it can be read, not changed.
     pub read_only: bool,
+    /// The project area as the last project.area entry set it: null or [west, south, east, north].
+    pub project_area: Value,
+    /// Entries an entry.revert has undone.
+    pub reverted: HashSet<u64>,
+}
+
+/// The project area as the checks take it.
+fn area_of(v: &Value) -> Option<[f64; 4]> {
+    let a = v.as_array()?;
+    Some([
+        a.first()?.as_f64()?,
+        a.get(1)?.as_f64()?,
+        a.get(2)?.as_f64()?,
+        a.get(3)?.as_f64()?,
+    ])
 }
 
 pub struct Engine {
@@ -308,6 +367,8 @@ impl Engine {
             original_paths: HashMap::new(),
             last_saved_at: None,
             read_only: false,
+            project_area: Value::Null,
+            reverted: HashSet::new(),
         });
         let mut d = draft("project.create", json!({}));
         d.insert(
@@ -329,7 +390,7 @@ impl Engine {
             "name": d.name,
             "source": { "fileId": d.spec["fileId"], "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
             "rowCount": d.row_count,
-            "outputRowCount": d.row_count,
+            "outputRowCount": d.visible_rows(),
             "columnCount": d.columns.len(),
             "assumptions": d.assumptions.len(),
             "partial": false,
@@ -346,7 +407,7 @@ impl Engine {
             "createdAt": p.created_at,
             "profile": p.profile,
             "unitSystem": p.unit_system,
-            "projectArea": null,
+            "projectArea": p.project_area,
             "readOnly": p.read_only,
             "dirty": p.log.entries().last().is_some_and(|e| e["action"] != "project.save"),
             "lastSavedAt": p.last_saved_at,
@@ -364,7 +425,7 @@ impl Engine {
             "datasetId": d.id,
             "name": d.name,
             "source": { "fileId": d.spec["fileId"], "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
-            "rowCount": d.row_count,
+            "rowCount": d.visible_rows(),
             "columns": d.spec["columns"],
             "crs": d.spec["crs"],
             "geometryColumn": null,
@@ -437,8 +498,16 @@ impl Engine {
             select.join(", "),
             quote_ident(&d.view)
         );
+        // Positions in the working view, as row-ID bounds, so the Parquet scan stays a range.
+        let total = d.visible_rows();
+        let end = (offset + limit).min(total);
+        let (from, to) = if offset >= end {
+            (0, 0)
+        } else {
+            (d.row_at(offset), d.row_at(end - 1) + 1)
+        };
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query(duckdb::params![offset as i64, (offset + limit) as i64])?;
+        let mut rows = stmt.query(duckdb::params![from as i64, to as i64])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let rid: i64 = row.get(0)?;
@@ -447,19 +516,42 @@ impl Engine {
             for (j, (_, kind, _)) in cols.iter().enumerate() {
                 cells.push(Self::cell(row, j + 2, *kind)?);
             }
+            // The worst severity of the open row-scope issues that flag this cell (windows.ts).
+            let r = rid as u64;
+            let issue: Vec<Value> = cols
+                .iter()
+                .map(|(id, _, _)| {
+                    d.issues
+                        .iter()
+                        .filter(|st| {
+                            st.draft.scope == "rows"
+                                && st.draft.columns.contains(id)
+                                && st.current.contains(r)
+                                && !st.accepted.contains(r)
+                                && !d.excluded.contains(r)
+                        })
+                        .map(|st| st.draft.severity.as_str())
+                        .max_by_key(|s| match *s {
+                            "error" => 3,
+                            "warning" => 2,
+                            _ => 1,
+                        })
+                        .map_or(Value::Null, |s| json!(s))
+                })
+                .collect();
             out.push(json!({
                 "rowId": rid,
                 "locator": format!("line {loc}"),
                 "cells": cells,
                 "edited": vec![false; cols.len()],
-                "issue": vec![Value::Null; cols.len()],
+                "issue": issue,
             }));
         }
         Ok(json!({
             "datasetId": d.id,
             "stage": stage,
             "offset": offset,
-            "totalRows": d.row_count,
+            "totalRows": total,
             "columns": cols.iter().map(|(id, _, plan)| json!({
                 "id": id,
                 "name": plan["name"],
@@ -566,7 +658,7 @@ impl Engine {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let listed = Listed {
-                    issue: to_issue(st),
+                    issue: to_issue(st, &d.excluded),
                     names,
                 };
                 if matches(&listed, q) {
@@ -628,15 +720,16 @@ impl Engine {
                     format!(", v.{}", quote_ident(c)),
                     format!(
                         ", (SELECT coalesce(e.raw, e.marker) FROM {exc} e WHERE e.rid = v.__rid AND e.col = {col})",
-                        exc = quote_ident(&d.exceptions_view()),
+                        exc = quote_ident(&d.all_exceptions_view()),
                         col = quote_text(c)
                     ),
                 ),
                 None => (String::new(), String::new()),
             };
+            // Excluded rows are still occurrences, so they are read from the view of every row.
             let sql = format!(
                 "SELECT v.__rid, v.__loc{select}{raw} FROM {view} v WHERE v.__rid IN ({list}) ORDER BY v.__rid",
-                view = quote_ident(&d.view)
+                view = quote_ident(&d.all_view())
             );
             let mut stmt = self.conn.prepare(&sql)?;
             let mut result = stmt.query([])?;
@@ -662,8 +755,12 @@ impl Engine {
                     "value": value,
                     "raw": raw,
                     "locator": locator,
-                    "state": occurrence_state(st, rid as u64),
-                    "decidedBy": null,
+                    "state": occurrence_state(st, &d.excluded, rid as u64),
+                    "decidedBy": match occurrence_state(st, &d.excluded, rid as u64) {
+                        "excluded" => json!(d.excluded_by(rid as u64)),
+                        "accepted" => json!(st.decided_by.get(&(rid as u64))),
+                        _ => Value::Null,
+                    },
                 }));
             }
         }
@@ -673,8 +770,8 @@ impl Engine {
     /// The data health score (FR-VAL-05), as queries.ts datasetHealth.
     pub fn health(&self, dataset: &Value) -> Result<Value> {
         let d = self.dataset(dataset)?;
-        let checked = !d.check_packs.is_empty();
-        let rows = d.row_count;
+        let checked = d.checked();
+        let rows = d.visible_rows();
         let counted: Vec<&IssueState> = d
             .issues
             .iter()
@@ -683,14 +780,19 @@ impl Engine {
         let affected = |sts: &[&IssueState]| {
             sts.iter()
                 .filter(|st| st.draft.scope == "rows")
-                .fold(RowSet::new(rows), |all, st| {
-                    all.union(&st.current.minus(&st.accepted))
+                .fold(RowSet::new(d.row_count), |all, st| {
+                    all.union(&open_rows(st, &d.excluded))
                 })
                 .count()
         };
         let open = |sts: &[&IssueState]| {
             sts.iter()
-                .filter(|st| to_issue(st)["counts"]["open"].as_u64().unwrap_or(0) > 0)
+                .filter(|st| {
+                    to_issue(st, &d.excluded)["counts"]["open"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        > 0
+                })
                 .count()
         };
         let score = |hit: u64| -> Value {
@@ -793,6 +895,562 @@ impl Engine {
     }
 }
 
+/// (Re)creates a dataset's views over its working Parquet files: `<view>__all` with every row, and
+/// `<view>`, which the grid, the checks, the exports and the digests read, without the excluded
+/// rows. The exceptions views follow the same split.
+fn install_views(conn: &Connection, d: &Dataset) -> Result<()> {
+    let all = quote_ident(&d.all_view());
+    let all_exc = quote_ident(&d.all_exceptions_view());
+    let (view, exc) = (quote_ident(&d.view), quote_ident(&d.exceptions_view()));
+    let table_name = format!("{}__excluded", d.view);
+    let table = quote_ident(&table_name);
+    conn.execute_batch(&format!(
+        "CREATE OR REPLACE VIEW {all} AS SELECT * FROM read_parquet({rows}); \
+         CREATE OR REPLACE VIEW {all_exc} AS SELECT * FROM read_parquet({excf}); \
+         CREATE OR REPLACE TABLE {table} (rid BIGINT);",
+        rows = quote_text(&d.rows_file.to_string_lossy()),
+        excf = quote_text(&d.exceptions_file.to_string_lossy()),
+    ))?;
+    if d.excluded.count() == 0 {
+        conn.execute_batch(&format!(
+            "CREATE OR REPLACE VIEW {view} AS SELECT * FROM {all}; \
+             CREATE OR REPLACE VIEW {exc} AS SELECT * FROM {all_exc};"
+        ))?;
+        return Ok(());
+    }
+    {
+        let mut app = conn.appender(&table_name)?;
+        for r in d.excluded.iter() {
+            app.append_row(duckdb::params![r as i64])?;
+        }
+    }
+    conn.execute_batch(&format!(
+        "CREATE OR REPLACE VIEW {view} AS SELECT * FROM {all} WHERE __rid NOT IN (SELECT rid FROM {table}); \
+         CREATE OR REPLACE VIEW {exc} AS SELECT * FROM {all_exc} WHERE rid NOT IN (SELECT rid FROM {table});"
+    ))?;
+    Ok(())
+}
+
+/// Every check of the check packs over a dataset's working view, as a check run does.
+fn check_drafts(
+    conn: &Connection,
+    d: &Dataset,
+    project_area: Option<[f64; 4]>,
+    cancel: &AtomicBool,
+) -> Result<Vec<Draft>> {
+    let ctx = CheckCtx {
+        conn,
+        view: quote_ident(&d.view),
+        exceptions: quote_ident(&d.exceptions_view()),
+        dataset_id: d.id.clone(),
+        row_count: d.row_count,
+        columns: d.check_columns(),
+        crs: d.spec["crs"]["value"]["code"].as_str().map(String::from),
+        notes: &d.notes,
+        assumptions: &d.assumptions,
+        project_area,
+    };
+    ctx.run(cancel, &mut |_, _| ())
+}
+
+/// Runs the checks again after a change recorded by entry `seq`, once a check run has been
+/// recorded for the dataset (reducer.ts recheck).
+fn recheck(
+    conn: &Connection,
+    d: &mut Dataset,
+    project_area: Option<[f64; 4]>,
+    seq: u64,
+) -> Result<()> {
+    if !d.checked() {
+        return Ok(());
+    }
+    let drafts = check_drafts(conn, d, project_area, &AtomicBool::new(false))?;
+    let n = d.row_count;
+    merge_check_run(&mut d.issues, drafts, seq, n);
+    Ok(())
+}
+
+fn dataset_mut<'a>(p: &'a mut Project, id: &str) -> Result<&'a mut Dataset> {
+    p.datasets.iter_mut().find(|d| d.id == id).ok_or_else(|| {
+        EngineError::not_found(
+            format!("There is no dataset {id} in this project."),
+            "Choose a listed dataset.",
+        )
+    })
+}
+
+/// Who wrote an entry, as an issue comment names them.
+fn author(actor: &Value) -> String {
+    if actor["kind"] == "user" {
+        actor["name"].as_str().unwrap_or_default().to_string()
+    } else {
+        format!(
+            "system ({})",
+            actor["component"].as_str().unwrap_or_default()
+        )
+    }
+}
+
+/// Applies a decision entry to the project, as reducer.ts does: issue.accept, rows.exclude,
+/// issue.comment, project.area and entry.revert. `reverted` is the entry an entry.revert names.
+/// `skip(dataset, seq)` says where a saved issues cache stands in for the entry's effect on a
+/// dataset's issues, which is then left out; its other effects always apply.
+fn apply_decision(
+    conn: &Connection,
+    p: &mut Project,
+    e: &Value,
+    reverted: Option<&Value>,
+    skip: &dyn Fn(&str, u64) -> bool,
+) -> Result<()> {
+    let seq = e["seq"].as_u64().unwrap_or(0);
+    let id = e["target"]["datasetId"].as_str().unwrap_or("").to_string();
+    let rows_of = |v: &Value| -> Vec<u64> {
+        let mut rows: Vec<u64> = v
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
+        rows.sort_unstable();
+        rows
+    };
+    match e["action"].as_str().unwrap_or("") {
+        "issue.accept" => {
+            if skip(&id, seq) {
+                return Ok(());
+            }
+            let d = dataset_mut(p, &id)?;
+            let Some(st) = d
+                .issues
+                .iter_mut()
+                .find(|s| e["target"]["issueId"] == s.id.as_str())
+            else {
+                return Ok(());
+            };
+            let all = e["payload"]["rows"] == "all";
+            if all || st.draft.scope != "rows" {
+                st.accepted_whole = true;
+            }
+            let rows: Vec<u64> = if all {
+                st.current.iter().collect()
+            } else {
+                rows_of(&e["payload"]["rows"])
+            };
+            for r in rows {
+                st.accepted.insert(r);
+                st.decided_by.insert(r, seq);
+            }
+        }
+        "rows.exclude" => {
+            let area = area_of(&p.project_area);
+            let d = dataset_mut(p, &id)?;
+            let rows = rows_of(&e["payload"]["rows"]);
+            for &r in &rows {
+                d.excluded.insert(r);
+            }
+            d.exclusions.push((seq, rows));
+            install_views(conn, d)?;
+            if !skip(&id, seq) {
+                recheck(conn, d, area, seq)?;
+            }
+        }
+        "issue.comment" => {
+            if skip(&id, seq) {
+                return Ok(());
+            }
+            let d = dataset_mut(p, &id)?;
+            if let Some(st) = d
+                .issues
+                .iter_mut()
+                .find(|s| e["target"]["issueId"] == s.id.as_str())
+            {
+                st.comments.push(json!({ "seq": seq, "at": e["at"], "by": author(&e["actor"]), "text": e["new"] }));
+            }
+        }
+        "project.area" => {
+            p.project_area = e["new"].clone();
+            let area = area_of(&p.project_area);
+            for d in &mut p.datasets {
+                if !skip(&d.id, seq) {
+                    recheck(conn, d, area, seq)?;
+                }
+            }
+        }
+        "entry.revert" => {
+            let Some(target) = reverted else {
+                return Ok(());
+            };
+            let target_seq = target["seq"].as_u64().unwrap_or(0);
+            p.reverted.insert(target_seq);
+            let tid = target["target"]["datasetId"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            match target["action"].as_str().unwrap_or("") {
+                "issue.accept" => {
+                    if skip(&tid, seq) {
+                        return Ok(());
+                    }
+                    let d = dataset_mut(p, &tid)?;
+                    if let Some(st) = d
+                        .issues
+                        .iter_mut()
+                        .find(|s| target["target"]["issueId"] == s.id.as_str())
+                    {
+                        st.accepted_whole = false;
+                        let undone: Vec<u64> = st
+                            .decided_by
+                            .iter()
+                            .filter(|(_, by)| **by == target_seq)
+                            .map(|(r, _)| *r)
+                            .collect();
+                        for r in undone {
+                            st.decided_by.remove(&r);
+                            st.accepted.remove(r);
+                        }
+                    }
+                }
+                "rows.exclude" => {
+                    let area = area_of(&p.project_area);
+                    let d = dataset_mut(p, &tid)?;
+                    d.exclusions.retain(|(by, _)| *by != target_seq);
+                    let mut excluded = RowSet::new(d.row_count);
+                    for (_, rows) in &d.exclusions {
+                        for &r in rows {
+                            excluded.insert(r);
+                        }
+                    }
+                    d.excluded = excluded;
+                    install_views(conn, d)?;
+                    if !skip(&tid, seq) {
+                        recheck(conn, d, area, seq)?;
+                    }
+                }
+                "project.area" => {
+                    p.project_area = target["old"].clone();
+                    let area = area_of(&p.project_area);
+                    for d in &mut p.datasets {
+                        if !skip(&d.id, seq) {
+                            recheck(conn, d, area, seq)?;
+                        }
+                    }
+                }
+                other => {
+                    return Err(EngineError::unsupported(format!(
+                        "reverting {other} entries"
+                    )));
+                }
+            }
+        }
+        other => {
+            return Err(EngineError::unsupported(format!(
+                "replaying {other} entries"
+            )));
+        }
+    }
+    Ok(())
+}
+
+const MIN_REASON_LENGTH: usize = 3;
+
+/// The decision's reason, trimmed, or REASON_REQUIRED when it is shorter than the minimum
+/// (requireReason). Length counts UTF-16 units without white space, as JavaScript does.
+fn reason_of(v: &Value) -> Result<String> {
+    let text = v
+        .as_str()
+        .unwrap_or("")
+        .trim_matches(crate::units::is_js_space)
+        .to_string();
+    let length: usize = text
+        .chars()
+        .filter(|c| !crate::units::is_js_space(*c))
+        .map(char::len_utf16)
+        .sum();
+    if length < MIN_REASON_LENGTH {
+        return Err(EngineError::new(
+            "REASON_REQUIRED",
+            format!(
+                "A reason of at least {MIN_REASON_LENGTH} characters is required; it is recorded in the audit log."
+            ),
+            "Say briefly why, for example \"Re-sent value; the field sheet confirms 1205.3\".",
+        ));
+    }
+    Ok(text)
+}
+
+/// A number as JavaScript writes it in a message.
+fn js_number(v: &Value) -> String {
+    v.as_f64()
+        .map_or_else(|| v.to_string(), crate::canonical::canonical_number)
+}
+
+/// The dataset and the issue with this ID (issueOf).
+fn issue_of<'a>(p: &'a Project, id: &Value) -> Result<(&'a Dataset, &'a IssueState)> {
+    let id = id.as_str().unwrap_or("");
+    p.datasets
+        .iter()
+        .find_map(|d| d.issues.iter().find(|s| s.id == id).map(|s| (d, s)))
+        .ok_or_else(|| {
+            EngineError::not_found(
+                format!("There is no issue {id}."),
+                "Refresh the issues list and choose a listed issue.",
+            )
+        })
+}
+
+/// Requested rows, distinct and in ascending order, as `[...new Set(rows)].sort((a, b) => a - b)`.
+fn distinct_rows(v: &Value) -> Vec<f64> {
+    let mut rows: Vec<f64> = v
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
+    rows.sort_by(|a, b| a.total_cmp(b));
+    rows.dedup();
+    rows
+}
+
+fn row_id(r: f64, n: u64) -> Option<u64> {
+    (r.fract() == 0.0 && r >= 0.0 && r < n as f64).then_some(r as u64)
+}
+
+const REVERTIBLE: [&str; 6] = [
+    "cell.edit",
+    "issue.accept",
+    "rows.exclude",
+    "step.apply",
+    "detection.override",
+    "project.area",
+];
+
+/// Validates a decision and turns it into its audit draft, as decisions.ts does. Edits and
+/// detection overrides are refused until the native engine has steps and overrides.
+fn decision_draft(p: &Project, d: &Value) -> Result<Map<String, Value>> {
+    let kind = d["kind"].as_str().unwrap_or("");
+    let entry = match kind {
+        "accept_issue" => {
+            let reason = reason_of(&d["reason"])?;
+            let (ds, st) = issue_of(p, &d["issueId"])?;
+            let rows = if st.draft.scope != "rows" {
+                if !st.present || st.accepted_whole {
+                    return Err(EngineError::invalid(
+                        "This issue is not open.",
+                        "Choose an open issue.",
+                    ));
+                }
+                json!("all")
+            } else {
+                let open = open_rows(st, &ds.excluded);
+                let rows: Vec<f64> = if d["rows"] == "all" {
+                    open.iter().map(|r| r as f64).collect()
+                } else {
+                    distinct_rows(&d["rows"])
+                };
+                let not_open: Vec<String> = rows
+                    .iter()
+                    .filter(|&&r| row_id(r, ds.row_count).is_none_or(|r| !open.contains(r)))
+                    .map(|&r| js_number(&json!(r)))
+                    .collect();
+                if !not_open.is_empty() {
+                    return Err(EngineError::invalid(
+                        format!(
+                            "Rows {} are not open in this issue.",
+                            not_open[..not_open.len().min(5)].join(", ")
+                        ),
+                        "Choose rows the issue currently flags.",
+                    ));
+                }
+                if rows.is_empty() {
+                    return Err(EngineError::invalid(
+                        "The issue has no open rows to accept.",
+                        "Choose an issue with open rows.",
+                    ));
+                }
+                json!(rows.iter().map(|&r| r as u64).collect::<Vec<_>>())
+            };
+            let mut e = draft(
+                "issue.accept",
+                json!({ "datasetId": ds.id, "issueId": st.id }),
+            );
+            e.insert("reason".into(), json!(reason));
+            e.insert("payload".into(), json!({ "rows": rows }));
+            e
+        }
+        "exclude_rows" => {
+            let reason = reason_of(&d["reason"])?;
+            let id = d["datasetId"].as_str().unwrap_or("");
+            let ds = p.datasets.iter().find(|x| x.id == id).ok_or_else(|| {
+                EngineError::not_found(
+                    format!("There is no dataset {id} in this project."),
+                    "Choose a listed dataset.",
+                )
+            })?;
+            let rows: Vec<u64> = if d["rows"].is_array() {
+                let rows = distinct_rows(&d["rows"]);
+                if let Some(bad) = rows.iter().find(|&&r| row_id(r, ds.row_count).is_none()) {
+                    return Err(EngineError::not_found(
+                        format!("Dataset {} has no row {}.", ds.id, js_number(&json!(bad))),
+                        "Choose rows shown in the data grid.",
+                    ));
+                }
+                rows.iter().map(|&r| r as u64).collect()
+            } else {
+                let (owner, st) = issue_of(p, &d["rows"]["issueId"])?;
+                if owner.id != ds.id {
+                    return Err(EngineError::invalid(
+                        "The issue belongs to another dataset.",
+                        "Choose an issue of this dataset.",
+                    ));
+                }
+                open_rows(st, &ds.excluded).iter().collect()
+            };
+            let rows: Vec<u64> = rows
+                .into_iter()
+                .filter(|&r| !ds.excluded.contains(r))
+                .collect();
+            if rows.is_empty() {
+                return Err(EngineError::invalid(
+                    "Every chosen row is already excluded.",
+                    "Choose rows that are still included.",
+                ));
+            }
+            let mut e = draft("rows.exclude", json!({ "datasetId": ds.id }));
+            e.insert("reason".into(), json!(reason));
+            e.insert(
+                "payload".into(),
+                json!({ "count": rows.len(), "rows": rows }),
+            );
+            e
+        }
+        "comment_issue" => {
+            let (ds, st) = issue_of(p, &d["issueId"])?;
+            let text = d["text"]
+                .as_str()
+                .unwrap_or("")
+                .trim_matches(crate::units::is_js_space);
+            if text.is_empty() {
+                return Err(EngineError::invalid(
+                    "The comment is empty.",
+                    "Type a comment.",
+                ));
+            }
+            let mut e = draft(
+                "issue.comment",
+                json!({ "datasetId": ds.id, "issueId": st.id }),
+            );
+            e.insert("new".into(), json!(text));
+            e
+        }
+        "set_project_area" => {
+            let reason = reason_of(&d["reason"])?;
+            let b = &d["bbox"];
+            if !b.is_null() {
+                let valid = area_of(b).is_some_and(|[w, s, e, n]| {
+                    [w, s, e, n].iter().all(|x| x.is_finite())
+                        && w.abs() <= 180.0
+                        && e.abs() <= 180.0
+                        && s >= -90.0
+                        && n <= 90.0
+                        && s <= n
+                });
+                if !valid {
+                    return Err(EngineError::invalid(
+                        "The project area is not a valid longitude/latitude box.",
+                        "Enter west, south, east and north in degrees (south ≤ north).",
+                    ));
+                }
+            }
+            let mut e = draft("project.area", json!({}));
+            e.insert("old".into(), p.project_area.clone());
+            e.insert("new".into(), b.clone());
+            e.insert("reason".into(), json!(reason));
+            e
+        }
+        "revert" => {
+            let reason = reason_of(&d["reason"])?;
+            let seq = d["seq"].as_u64();
+            let target = p
+                .log
+                .entries()
+                .iter()
+                .find(|e| seq.is_some() && e["seq"].as_u64() == seq)
+                .ok_or_else(|| {
+                    EngineError::not_found(
+                        format!("There is no audit entry {}.", js_number(&d["seq"])),
+                        "Choose an entry from the log.",
+                    )
+                })?;
+            let seq = seq.unwrap_or(0);
+            let action = target["action"].as_str().unwrap_or("");
+            if !REVERTIBLE.contains(&action) {
+                return Err(EngineError::invalid(
+                    format!("A {action} entry cannot be reverted."),
+                    "Revert an edit, acceptance, exclusion, step, override or project-area change.",
+                ));
+            }
+            if p.reverted.contains(&seq) {
+                return Err(EngineError::invalid(
+                    format!("Entry {seq} is already reverted."),
+                    "Choose another entry.",
+                ));
+            }
+            let dataset = &target["target"]["datasetId"];
+            if action != "project.area" && !p.datasets.iter().any(|x| *dataset == x.id.as_str()) {
+                return Err(EngineError::not_found(
+                    format!("The dataset of entry {seq} is no longer in the project."),
+                    "Choose another entry.",
+                ));
+            }
+            let mut t = json!({ "seq": seq });
+            if dataset.is_string() {
+                t["datasetId"] = dataset.clone();
+            }
+            let mut e = draft("entry.revert", t);
+            e.insert("reason".into(), json!(reason));
+            e
+        }
+        "edit_cell" | "override_detection" => {
+            return Err(EngineError::unsupported(format!("{kind} decisions")));
+        }
+        other => {
+            return Err(EngineError::invalid(
+                format!("There is no decision of kind {other}."),
+                "Send one of the decisions the protocol lists.",
+            ));
+        }
+    };
+    Ok(entry)
+}
+
+/// Takes a decision (SAD section 8.1): validated, appended to the audit log, then applied by the
+/// same reducer a replay uses. A change that alters what the checks see runs them again before
+/// the answer, as the TypeScript engine does. Result: the audit entries written.
+pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let draft = decision_draft(engine.writable()?, d)?;
+    let entry = engine.append(draft, None)?;
+    let reverted = engine
+        .project()?
+        .log
+        .entries()
+        .iter()
+        .find(|e| entry["action"] == "entry.revert" && e["seq"] == entry["target"]["seq"])
+        .cloned();
+    let Engine { conn, project, .. } = &mut *engine;
+    let p = project
+        .as_mut()
+        .ok_or_else(|| EngineError::internal("The project disappeared during the decision."))?;
+    apply_decision(conn, p, &entry, reverted.as_ref(), &|_, _| false)?;
+    drop(engine);
+    crate::memory::release();
+    let mut event = json!({ "type": "project.changed", "what": ["project", "datasets", "schema", "issues", "audit", "steps"] });
+    if let Some(id) = entry["target"]["datasetId"].as_str() {
+        event["datasetId"] = json!(id);
+    }
+    shared.event(event);
+    Ok(json!([entry]))
+}
+
 /// Starts a check run over a dataset (SAD section 8.3): every rule of the check packs, as SQL.
 pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
     let mut engine = shared
@@ -809,6 +1467,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
     let crs = d.spec["crs"]["value"]["code"].as_str().map(String::from);
     let notes = d.notes.clone();
     let assumptions = d.assumptions.clone();
+    let project_area = area_of(&engine.project()?.project_area);
     let conn = engine.conn.try_clone()?;
     let (job, cancel) = engine.start_job();
     let started = engine.clock.now_ms();
@@ -846,7 +1505,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
             crs,
             notes: &notes,
             assumptions: &assumptions,
-            project_area: None,
+            project_area,
         };
         let outcome = ctx.run(&cancel, &mut progress).and_then(|drafts| {
             let mut engine = shared
@@ -953,12 +1612,17 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         dataset_id: d.id.clone(),
         dataset_name: d.name.clone(),
         view: quote_ident(&d.view),
-        row_count: d.row_count,
+        row_count: d.visible_rows(),
+        excluded_rows: d.excluded.count(),
         columns,
         sources,
         rule_packs: d.check_packs.clone(),
         assumptions: d.assumptions.clone(),
-        issues: d.issues.iter().map(to_issue).collect(),
+        issues: d
+            .issues
+            .iter()
+            .map(|st| to_issue(st, &d.excluded))
+            .collect(),
         audit: p.log.entries().to_vec(),
         audit_head: json!({ "seq": seq, "hash": hash }),
         workdir: engine.workdir.join(&project_id),
@@ -1108,12 +1772,18 @@ fn target_path(target: &Value) -> Result<Option<PathBuf>> {
     }
 }
 
-/// The sequence number of the dataset's last check.run entry.
-fn last_check_run(log: &AuditLog, dataset_id: &str) -> Option<u64> {
+/// The last entry that may have changed the dataset's issues: one of its own entries, or a change
+/// of the project area or the revert of one. An issues cache holds the issues as they stood after
+/// it.
+fn issues_after(log: &AuditLog, dataset_id: &str) -> Option<u64> {
     log.entries()
         .iter()
         .rev()
-        .find(|e| e["action"] == "check.run" && e["target"]["datasetId"] == dataset_id)
+        .find(|e| {
+            e["target"]["datasetId"] == dataset_id
+                || e["action"] == "project.area"
+                || (e["action"] == "entry.revert" && e["target"]["datasetId"].is_null())
+        })
         .and_then(|e| e["seq"].as_u64())
 }
 
@@ -1122,6 +1792,8 @@ struct SavedDataset {
     id: String,
     name: String,
     rows: u64,
+    /// Rows in the working view, which the digest covers.
+    visible: u64,
     view: String,
     columns: Vec<crate::export::OutColumn>,
     rows_file: PathBuf,
@@ -1151,6 +1823,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             id: d.id.clone(),
             name: d.name.clone(),
             rows: d.row_count,
+            visible: d.visible_rows(),
             view: quote_ident(&d.view),
             columns: out_columns(d),
             rows_file: d.rows_file.clone(),
@@ -1213,7 +1886,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             for d in &datasets {
                 progress("Computing the dataset digests", 0);
                 let sha =
-                    crate::export::dataset_digest(&conn, &d.view, &d.columns, d.rows, threads)?;
+                    crate::export::dataset_digest(&conn, &d.view, &d.columns, d.visible, threads)?;
                 digests.push(json!({ "id": d.id, "name": d.name, "rowCount": d.rows, "workingDigest": sha, "outputDigest": sha }));
                 if cancel.load(Ordering::Relaxed) {
                     return Err(cancelled());
@@ -1314,12 +1987,12 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             for d in p
                 .datasets
                 .iter()
-                .filter(|d| datasets.iter().any(|s| s.id == d.id))
+                .filter(|d| d.checked() && datasets.iter().any(|s| s.id == d.id))
             {
-                let Some(check_seq) = last_check_run(&p.log, &d.id) else {
+                let Some(after) = issues_after(&p.log, &d.id) else {
                     continue;
                 };
-                let record = json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "checkSeq": check_seq, "kind": "issues" });
+                let record = json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "afterSeq": after, "kind": "issues" });
                 let body = json!({
                     "rowCount": d.row_count,
                     "issues": d.issues.iter().map(crate::issues::to_cache).collect::<Vec<_>>(),
@@ -1623,15 +2296,9 @@ fn commit_import(
     let parquet = workdir.join(format!("{job_id}.parquet"));
     let exc = workdir.join(format!("{job_id}{EXCEPTIONS_SUFFIX}.parquet"));
     engine.conn.execute_batch(&format!(
-        "DROP VIEW IF EXISTS {jobview}; DROP VIEW IF EXISTS {jobexc}; \
-         CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet({file}); \
-         CREATE OR REPLACE VIEW {excview} AS SELECT * FROM read_parquet({exc});",
+        "DROP VIEW IF EXISTS {jobview}; DROP VIEW IF EXISTS {jobexc};",
         jobview = quote_ident(&imported.view),
         jobexc = quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", imported.view)),
-        view = quote_ident(&view),
-        excview = quote_ident(&format!("{view}{EXCEPTIONS_SUFFIX}")),
-        file = quote_text(&parquet.to_string_lossy()),
-        exc = quote_text(&exc.to_string_lossy()),
     ))?;
     let file_id = spec["fileId"].clone();
     let media_type = if spec["options"]["format"] == "tsv" {
@@ -1694,7 +2361,10 @@ fn commit_import(
         rows_file: parquet,
         exceptions_file: exc,
         source_seq,
+        excluded: RowSet::new(imported.row_count),
+        exclusions: Vec::new(),
     };
+    install_views(&engine.conn, &dataset)?;
     let summary = Engine::dataset_summary(&dataset);
     let p = engine
         .project
@@ -1794,20 +2464,18 @@ struct Reopen<'a> {
     workdir: &'a Path,
     threads: usize,
     cancel: &'a AtomicBool,
-    /// The (dataset, seq) of every check.run entry in the log.
-    check_runs: HashSet<(String, u64)>,
-    /// Per dataset, once its first check run is replayed: the check run its issues cache holds the
-    /// result of, with the issues, when the cache is usable.
-    issue_caches: HashMap<String, Option<(u64, Vec<IssueState>)>>,
+    /// The seq of every entry in the log.
+    seqs: HashSet<u64>,
+    /// Per dataset with a usable issues cache: the entry after which its issues are as the cache
+    /// holds them, and the issues until they are installed there.
+    issue_caches: HashMap<String, (u64, Option<Vec<IssueState>>)>,
 }
 
 /// How a check.run entry was replayed.
 enum CheckReplay {
     /// The checks ran again.
     Ran,
-    /// The issues came from the dataset's issues cache.
-    Restored,
-    /// A later run's cached issues stand in for this one.
+    /// A saved issues cache stands in for it.
     Superseded,
 }
 
@@ -1915,14 +2583,6 @@ impl Reopen<'_> {
             }
         };
         let view = format!("{}_{dataset_id}", p.id);
-        self.conn.execute_batch(&format!(
-            "CREATE OR REPLACE VIEW {v} AS SELECT * FROM read_parquet({rows}); \
-             CREATE OR REPLACE VIEW {x} AS SELECT * FROM read_parquet({exc});",
-            v = quote_ident(&view),
-            x = quote_ident(&format!("{view}{EXCEPTIONS_SUFFIX}")),
-            rows = quote_text(&restored.rows_file.to_string_lossy()),
-            exc = quote_text(&restored.exceptions_file.to_string_lossy()),
-        ))?;
         let media_type = e["payload"]["mediaType"].clone();
         if !p.originals.iter().any(|o| o["fileId"] == file_id.as_str()) {
             p.originals.push(json!({ "fileId": file_id, "name": spec["fileName"], "size": spec["size"], "mediaType": media_type, "addedSeq": seq }));
@@ -1948,7 +2608,12 @@ impl Reopen<'_> {
             rows_file: restored.rows_file,
             exceptions_file: restored.exceptions_file,
             source_seq: seq,
+            excluded: RowSet::new(restored.row_count),
+            exclusions: Vec::new(),
         });
+        if let Some(d) = p.datasets.last() {
+            install_views(self.conn, d)?;
+        }
         Ok(used_cache)
     }
 
@@ -1965,9 +2630,9 @@ impl Reopen<'_> {
                 && c["kind"] == "issues"
                 && c["sourceSeq"].as_u64() == Some(d.source_seq)
         })?;
-        let check_seq = cache["checkSeq"].as_u64()?;
+        let after = cache["afterSeq"].as_u64()?;
         let path = cache["path"].as_str()?;
-        if !self.check_runs.contains(&(d.id.clone(), check_seq)) || !read.verified.contains(path) {
+        if !self.seqs.contains(&after) || after < d.source_seq || !read.verified.contains(path) {
             return None;
         }
         let entry = read.entries.iter().find(|x| x.name == path)?;
@@ -1984,17 +2649,21 @@ impl Reopen<'_> {
         if issues.iter().any(|i| i.draft.dataset_id != d.id) {
             return None;
         }
-        Some((check_seq, issues))
+        Some((after, issues))
     }
 
-    /// Replays a check.run entry with the rule packs it names. A usable issues cache stands in for
-    /// the run it holds the result of and every run of the dataset before it; any other run runs
-    /// the checks again.
+    /// Whether the dataset's issues cache stands in for entry `seq`'s effect on its issues.
+    fn cached(&self, dataset_id: &str, seq: u64) -> bool {
+        self.issue_caches
+            .get(dataset_id)
+            .is_some_and(|(after, _)| seq <= *after)
+    }
+
+    /// Replays a check.run entry with the rule packs it names: the checks run again, unless the
+    /// dataset's issues cache stands in for it.
     fn check_run(
-        &mut self,
+        &self,
         p: &mut Project,
-        read: &crate::project::TwpRead,
-        manifest: &Value,
         e: &Value,
         progress: &mut dyn FnMut(&str, u64),
     ) -> Result<CheckReplay> {
@@ -2006,43 +2675,18 @@ impl Reopen<'_> {
         }
         let seq = e["seq"].as_u64().unwrap_or(0);
         let id = e["target"]["datasetId"].as_str().unwrap_or("");
+        let area = area_of(&p.project_area);
         let d = p.datasets.iter_mut().find(|d| d.id == id).ok_or_else(|| {
             EngineError::internal(format!("The log checks dataset {id} before importing it."))
         })?;
-        if !self.issue_caches.contains_key(id) {
-            progress("Restoring the saved check results", 0);
-            let loaded = self.load_issues(read, manifest, d);
-            self.issue_caches.insert(id.to_string(), loaded);
-        }
-        match self.issue_caches.get_mut(id) {
-            Some(Some((check_seq, _))) if seq < *check_seq => {
-                d.check_packs = packs;
-                return Ok(CheckReplay::Superseded);
-            }
-            Some(Some((check_seq, issues))) if seq == *check_seq => {
-                d.issues = std::mem::take(issues);
-                d.check_packs = packs;
-                return Ok(CheckReplay::Restored);
-            }
-            _ => {}
+        d.check_packs = packs;
+        if self.cached(id, seq) {
+            return Ok(CheckReplay::Superseded);
         }
         progress("Running the recorded checks", 0);
-        let ctx = CheckCtx {
-            conn: self.conn,
-            view: quote_ident(&d.view),
-            exceptions: quote_ident(&d.exceptions_view()),
-            dataset_id: d.id.clone(),
-            row_count: d.row_count,
-            columns: d.check_columns(),
-            crs: d.spec["crs"]["value"]["code"].as_str().map(String::from),
-            notes: &d.notes,
-            assumptions: &d.assumptions,
-            project_area: None,
-        };
-        let drafts = ctx.run(self.cancel, &mut |_, _| ())?;
+        let drafts = check_drafts(self.conn, d, area, self.cancel)?;
         let rows = d.row_count;
         merge_check_run(&mut d.issues, drafts, seq, rows);
-        d.check_packs = packs;
         Ok(CheckReplay::Ran)
     }
 }
@@ -2133,6 +2777,8 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 original_paths: HashMap::new(),
                 last_saved_at: None,
                 read_only: false,
+                project_area: Value::Null,
+                reverted: HashSet::new(),
             };
             let mut reopen = Reopen {
                 conn: &conn,
@@ -2140,16 +2786,10 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 workdir: &workdir,
                 threads,
                 cancel: &cancel,
-                check_runs: log
+                seqs: log
                     .entries()
                     .iter()
-                    .filter(|e| e["action"] == "check.run")
-                    .filter_map(|e| {
-                        Some((
-                            e["target"]["datasetId"].as_str()?.to_string(),
-                            e["seq"].as_u64()?,
-                        ))
-                    })
+                    .filter_map(|e| e["seq"].as_u64())
                     .collect(),
                 issue_caches: HashMap::new(),
             };
@@ -2185,6 +2825,16 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                                     if cached {
                                         from_cache += 1;
                                     }
+                                    if let Some(d) = p.datasets.last() {
+                                        progress("Restoring the saved check results", 0);
+                                        if let Some((after, issues)) =
+                                            reopen.load_issues(&read, &manifest, d)
+                                        {
+                                            reopen
+                                                .issue_caches
+                                                .insert(d.id.clone(), (after, Some(issues)));
+                                        }
+                                    }
                                 })
                         }
                         "detection.assume" => {
@@ -2197,13 +2847,23 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                             }
                             Ok(())
                         }
-                        "check.run" => reopen
-                            .check_run(&mut p, &read, &manifest, e, &mut progress)
-                            .map(|how| match how {
-                                CheckReplay::Ran => checks_ran += 1,
-                                CheckReplay::Restored => checks_restored += 1,
-                                CheckReplay::Superseded => {}
-                            }),
+                        "check.run" => {
+                            reopen
+                                .check_run(&mut p, e, &mut progress)
+                                .map(|how| match how {
+                                    CheckReplay::Ran => checks_ran += 1,
+                                    CheckReplay::Superseded => {}
+                                })
+                        }
+                        "issue.accept" | "rows.exclude" | "issue.comment" | "project.area"
+                        | "entry.revert" => {
+                            let reverted = log.entries().iter().find(|x| {
+                                e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]
+                            });
+                            apply_decision(&conn, &mut p, e, reverted, &|id, seq| {
+                                reopen.cached(id, seq)
+                            })
+                        }
                         "export.create" => {
                             p.exports.push(e["payload"]["record"].clone());
                             Ok(())
@@ -2220,6 +2880,19 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                         stopped = Some(format!("entry {at}: {}", err.message));
                         break;
                     }
+                    // Issues caches that hold the issues as this entry left them.
+                    let seq = e["seq"].as_u64().unwrap_or(0);
+                    for (id, (after, issues)) in reopen.issue_caches.iter_mut() {
+                        if *after != seq {
+                            continue;
+                        }
+                        if let (Some(issues), Some(d)) =
+                            (issues.take(), p.datasets.iter_mut().find(|d| d.id == *id))
+                        {
+                            d.issues = issues;
+                            checks_restored += 1;
+                        }
+                    }
                 }
             }
             checks.push(match &stopped {
@@ -2229,7 +2902,7 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                     let saved: Vec<Value> = manifest["datasets"].as_array().cloned().unwrap_or_default();
                     for d in &p.datasets {
                         progress("Comparing the dataset digests", 0);
-                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), &out_columns(d), d.row_count, threads)?;
+                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), &out_columns(d), d.visible_rows(), threads)?;
                         match saved.iter().find(|s| s["id"] == d.id.as_str()) {
                             None => bad.push(format!("the audit log builds dataset {}, which the manifest does not list", d.id)),
                             Some(s) if s["rowCount"].as_u64() != Some(d.row_count) => bad.push(format!("dataset {} has {} rows instead of the {} saved", d.id, d.row_count, s["rowCount"])),
