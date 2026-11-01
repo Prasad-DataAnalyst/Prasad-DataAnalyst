@@ -14,6 +14,7 @@ use crate::issues::{
 };
 use crate::parse::Kind;
 use crate::rules::{Draft, RowSet, check_packs};
+use crate::steps::{StageColumn, Stages};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
@@ -54,6 +55,10 @@ pub struct Dataset {
     pub exclusions: Vec<(u64, Vec<u64>)>,
     /// Cell edits by (column, row): the value and the entry that set it (the Overlay).
     pub edits: BTreeMap<(String, u64), (Value, u64)>,
+    /// The steps applied, in order, each with its `id` and `seq`.
+    pub steps: Vec<Value>,
+    /// Rows in the output view, counted when the views are installed.
+    pub output_rows: u64,
 }
 
 impl Dataset {
@@ -100,15 +105,69 @@ impl Dataset {
         r
     }
 
+    /// The columns of the working view, as the checks see them: converted columns in place.
     fn check_columns(&self) -> Vec<Col> {
+        self.stages()
+            .map(|st| st.working)
+            .unwrap_or_else(|_| self.base_columns())
+            .iter()
+            .map(|c| Col::from_schema(&c.schema, c.kind))
+            .collect()
+    }
+
+    /// The columns the import planned, with how each is stored.
+    fn base_columns(&self) -> Vec<StageColumn> {
         self.spec["columns"]
             .as_array()
             .into_iter()
             .flatten()
             .zip(&self.columns)
-            .map(|(c, (_, kind))| Col::from_schema(c, *kind))
+            .map(|(c, (_, kind))| StageColumn {
+                schema: c.clone(),
+                kind: *kind,
+            })
             .collect()
     }
+
+    /// The working and output views' columns after the steps.
+    fn stages(&self) -> Result<Stages> {
+        crate::steps::build(&self.base_columns(), &self.steps)
+    }
+
+    /// The view of the output stage: the working view less the rows the filters drop.
+    fn out_view(&self) -> String {
+        format!("{}__out", self.view)
+    }
+}
+
+/// The column a column comes from: itself, or the source its conversions start from (rootColumn).
+fn root_of(stages: &Stages, id: &str) -> String {
+    let mut id = id.to_string();
+    while let Some(from) = stages
+        .every
+        .iter()
+        .find(|c| c.id() == id)
+        .and_then(StageColumn::derived_from)
+    {
+        id = from.to_string();
+    }
+    id
+}
+
+/// Columns as an export or a digest takes them.
+fn out_columns(cols: &[StageColumn]) -> Vec<crate::export::OutColumn> {
+    cols.iter()
+        .map(|c| crate::export::OutColumn {
+            id: c.id().to_string(),
+            name: c.schema["name"].as_str().unwrap_or_default().to_string(),
+            unit: c.schema["unit"]["value"].as_str().map(String::from),
+            typ: c.schema["type"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            kind: c.kind,
+        })
+        .collect()
 }
 
 pub struct Project {
@@ -132,6 +191,8 @@ pub struct Project {
     pub project_area: Value,
     /// Entries an entry.revert has undone.
     pub reverted: HashSet<u64>,
+    /// Step IDs are numbered per project: 's1', 's2', ...
+    pub next_step: u64,
 }
 
 /// The project area as the checks take it.
@@ -371,6 +432,7 @@ impl Engine {
             read_only: false,
             project_area: Value::Null,
             reverted: HashSet::new(),
+            next_step: 1,
         });
         let mut d = draft("project.create", json!({}));
         d.insert(
@@ -392,11 +454,11 @@ impl Engine {
             "name": d.name,
             "source": { "fileId": d.spec["fileId"], "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
             "rowCount": d.row_count,
-            "outputRowCount": d.visible_rows(),
-            "columnCount": d.columns.len(),
+            "outputRowCount": d.output_rows,
+            "columnCount": d.stages().map_or(d.columns.len(), |s| s.working.len()),
             "assumptions": d.assumptions.len(),
             "partial": false,
-            "steps": [],
+            "steps": d.steps,
         })
     }
 
@@ -421,14 +483,35 @@ impl Engine {
         }))
     }
 
-    pub fn schema(&self, dataset: &Value) -> Result<Value> {
+    pub fn schema(&self, dataset: &Value, stage: &Value) -> Result<Value> {
         let d = self.dataset(dataset)?;
+        let output = match stage.as_str() {
+            None | Some("working") if !stage.is_string() || stage == "working" => false,
+            Some("output") => true,
+            _ => {
+                return Err(EngineError::invalid(
+                    format!(
+                        "The stage {} does not exist.",
+                        stage
+                            .as_str()
+                            .map_or_else(|| stage.to_string(), String::from)
+                    ),
+                    "Ask for the 'working' or the 'output' stage.",
+                ));
+            }
+        };
+        let stages = d.stages()?;
+        let cols = if output {
+            &stages.output
+        } else {
+            &stages.working
+        };
         Ok(json!({
             "datasetId": d.id,
             "name": d.name,
             "source": { "fileId": d.spec["fileId"], "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
-            "rowCount": d.visible_rows(),
-            "columns": d.spec["columns"],
+            "rowCount": if output { d.output_rows } else { d.visible_rows() },
+            "columns": cols.iter().map(|c| c.schema.clone()).collect::<Vec<_>>(),
             "crs": d.spec["crs"],
             "geometryColumn": null,
             "partial": false,
@@ -466,50 +549,67 @@ impl Engine {
         }
         let offset = count(&q["offset"], "offset", 0, u64::MAX >> 11)?;
         let limit = count(&q["limit"], "limit", 0, ROW_WINDOW_MAX)?;
+        let stages = d.stages()?;
+        let at_stage = if stage == "output" {
+            &stages.output
+        } else {
+            &stages.working
+        };
         let wanted: Vec<String> = match q["columns"].as_array() {
             Some(cols) => cols
                 .iter()
                 .map(|c| c.as_str().unwrap_or_default().to_string())
                 .collect(),
-            None => d.columns.iter().map(|(id, _)| id.clone()).collect(),
+            None => at_stage.iter().map(|c| c.id().to_string()).collect(),
         };
         let mut cols = Vec::new();
         for id in &wanted {
-            let kind = d
-                .columns
-                .iter()
-                .find(|(c, _)| c == id)
-                .map(|(_, k)| *k)
-                .ok_or_else(|| {
-                    EngineError::not_found(
-                        format!("Dataset {} has no column {id} at this stage.", d.id),
-                        "Choose a listed column.",
-                    )
-                })?;
-            let plan = d.spec["columns"]
-                .as_array()
-                .and_then(|a| a.iter().find(|c| c["id"] == id.as_str()))
-                .cloned()
-                .unwrap_or(Value::Null);
-            cols.push((id.clone(), kind, plan));
+            let c = at_stage.iter().find(|c| c.id() == id).ok_or_else(|| {
+                EngineError::not_found(
+                    format!("Dataset {} has no column {id} at this stage.", d.id),
+                    "Choose a listed column.",
+                )
+            })?;
+            cols.push((id.clone(), c.kind, c.schema.clone()));
         }
+        let roots: Vec<String> = cols.iter().map(|(id, _, _)| root_of(&stages, id)).collect();
         let select: Vec<String> = cols.iter().map(|(id, _, _)| quote_ident(id)).collect();
-        let sql = format!(
-            "SELECT __rid, __loc{}{} FROM {} WHERE __rid >= ? AND __rid < ? ORDER BY __rid",
+        let columns = format!(
+            "__rid, __loc{}{}",
             if select.is_empty() { "" } else { ", " },
-            select.join(", "),
-            quote_ident(&d.view)
+            select.join(", ")
         );
-        // Positions in the working view, as row-ID bounds, so the Parquet scan stays a range.
-        let total = d.visible_rows();
-        let end = (offset + limit).min(total);
-        let (from, to) = if offset >= end {
-            (0, 0)
+        let filtered = stage == "output" && !stages.filters.is_empty();
+        let (total, sql, params) = if filtered {
+            // Filters keep rows anywhere, so positions are counted in the output view itself.
+            (
+                d.output_rows,
+                format!(
+                    "SELECT {columns} FROM {} ORDER BY __rid LIMIT ? OFFSET ?",
+                    quote_ident(&d.out_view())
+                ),
+                (limit as i64, offset as i64),
+            )
         } else {
-            (d.row_at(offset), d.row_at(end - 1) + 1)
+            // Positions in the working view, as row-ID bounds, so the Parquet scan stays a range.
+            let total = d.visible_rows();
+            let end = (offset + limit).min(total);
+            let (from, to) = if offset >= end {
+                (0, 0)
+            } else {
+                (d.row_at(offset), d.row_at(end - 1) + 1)
+            };
+            (
+                total,
+                format!(
+                    "SELECT {columns} FROM {} WHERE __rid >= ? AND __rid < ? ORDER BY __rid",
+                    quote_ident(&d.view)
+                ),
+                (from as i64, to as i64),
+            )
         };
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query(duckdb::params![from as i64, to as i64])?;
+        let mut rows = stmt.query(duckdb::params![params.0, params.1])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let rid: i64 = row.get(0)?;
@@ -522,12 +622,14 @@ impl Engine {
             let r = rid as u64;
             let issue: Vec<Value> = cols
                 .iter()
-                .map(|(id, _, _)| {
+                .zip(&roots)
+                .map(|((id, _, _), root)| {
                     d.issues
                         .iter()
                         .filter(|st| {
                             st.draft.scope == "rows"
-                                && st.draft.columns.contains(id)
+                                && (st.draft.columns.contains(id)
+                                    || st.draft.columns.contains(root))
                                 && st.current.contains(r)
                                 && !st.accepted.contains(r)
                                 && !d.excluded.contains(r)
@@ -545,7 +647,7 @@ impl Engine {
                 "rowId": rid,
                 "locator": format!("line {loc}"),
                 "cells": cells,
-                "edited": cols.iter().map(|(id, _, _)| d.edits.contains_key(&(id.clone(), r))).collect::<Vec<_>>(),
+                "edited": cols.iter().zip(&roots).map(|((id, _, _), root)| d.edits.contains_key(&(id.clone(), r)) || d.edits.contains_key(&(root.clone(), r))).collect::<Vec<_>>(),
                 "issue": issue,
             }));
         }
@@ -560,7 +662,7 @@ impl Engine {
                 "unit": plan["unit"]["value"],
                 "type": plan["type"]["value"],
                 "assumed": assumed(plan),
-                "derived": false,
+                "derived": plan.get("derivedFrom").is_some(),
             })).collect::<Vec<_>>(),
             "rows": out,
         }))
@@ -570,10 +672,11 @@ impl Engine {
         let d = self.dataset(dataset)?;
         let id = column.as_str().unwrap_or("");
         let kind = d
-            .columns
+            .stages()?
+            .working
             .iter()
-            .find(|(c, _)| c == id)
-            .map(|(_, k)| *k)
+            .find(|c| c.id() == id)
+            .map(|c| c.kind)
             .ok_or_else(|| {
                 EngineError::not_found(
                     format!("Dataset {} has no column {id} at this stage.", d.id),
@@ -932,7 +1035,8 @@ fn sql_literal(v: &Value, kind: Kind) -> Option<String> {
 /// exports and the digests read, leaves the excluded rows out. Its exceptions view also leaves out
 /// edited cells, which keep no source text (checks.ts failedText); `<view>__all__exc` keeps every
 /// row's source text, as an occurrence shows it.
-fn install_views(conn: &Connection, d: &Dataset) -> Result<()> {
+fn install_views(conn: &Connection, d: &mut Dataset) -> Result<()> {
+    let stages = d.stages()?;
     let all = quote_ident(&d.all_view());
     let all_exc = quote_ident(&d.all_exceptions_view());
     let (view, exc) = (quote_ident(&d.view), quote_ident(&d.exceptions_view()));
@@ -951,11 +1055,8 @@ fn install_views(conn: &Connection, d: &Dataset) -> Result<()> {
          CREATE OR REPLACE TABLE {edited} (rid BIGINT, col VARCHAR);",
         excf = quote_text(&d.exceptions_file.to_string_lossy()),
     ))?;
-    if d.edits.is_empty() {
-        conn.execute_batch(&format!(
-            "CREATE OR REPLACE VIEW {all} AS SELECT * FROM {rows};"
-        ))?;
-    } else {
+    let mut base = format!("SELECT * FROM {rows}");
+    if !d.edits.is_empty() {
         let mut select = vec!["b.__rid".to_string(), "b.__loc".to_string()];
         let mut joins = String::new();
         for (i, (col, kind)) in d.columns.iter().enumerate() {
@@ -997,11 +1098,17 @@ fn install_views(conn: &Connection, d: &Dataset) -> Result<()> {
                 "CASE WHEN e{i}.rid IS NULL THEN b.{q} ELSE e{i}.v END AS {q}"
             ));
         }
-        conn.execute_batch(&format!(
-            "CREATE OR REPLACE VIEW {all} AS SELECT {} FROM {rows} b{joins};",
-            select.join(", ")
-        ))?;
+        base = format!("SELECT {} FROM {rows} b{joins}", select.join(", "));
     }
+    // Each conversion adds its column to the layer below, so conversions chain in step order.
+    for der in &stages.derived {
+        base = format!(
+            "SELECT *, {} AS {} FROM ({base})",
+            der.method.sql(&quote_ident(&der.source)),
+            quote_ident(&der.id)
+        );
+    }
+    conn.execute_batch(&format!("CREATE OR REPLACE VIEW {all} AS {base};"))?;
     if d.excluded.count() > 0 {
         let mut app = conn.appender(&excluded_name)?;
         for r in d.excluded.iter() {
@@ -1026,12 +1133,21 @@ fn install_views(conn: &Connection, d: &Dataset) -> Result<()> {
             format!(" WHERE {}", conds.join(" AND "))
         }
     };
+    let out = quote_ident(&d.out_view());
     conn.execute_batch(&format!(
         "CREATE OR REPLACE VIEW {view} AS SELECT * FROM {all}{}; \
-         CREATE OR REPLACE VIEW {exc} AS SELECT e.* FROM {all_exc} e{};",
+         CREATE OR REPLACE VIEW {exc} AS SELECT e.* FROM {all_exc} e{}; \
+         CREATE OR REPLACE VIEW {out} AS SELECT * FROM {view}{};",
         filter(&keep_rows),
         filter(&keep_exc),
+        filter(&stages.filters),
     ))?;
+    d.output_rows = if stages.filters.is_empty() {
+        d.visible_rows()
+    } else {
+        let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {out}"), [], |r| r.get(0))?;
+        n.max(0) as u64
+    };
     Ok(())
 }
 
@@ -1167,6 +1283,36 @@ fn apply_decision(
                 recheck(conn, d, area, seq)?;
             }
         }
+        "step.apply" => {
+            let area = area_of(&p.project_area);
+            let step_id = e["target"]["stepId"].as_str().unwrap_or("").to_string();
+            let n: u64 = step_id.trim_start_matches('s').parse().unwrap_or(0);
+            p.next_step = p.next_step.max(n + 1);
+            let d = dataset_mut(p, &id)?;
+            let mut step = e["new"].clone();
+            step["id"] = json!(step_id);
+            step["seq"] = json!(seq);
+            let convert = step["kind"] == "convert_unit";
+            d.steps.push(step);
+            install_views(conn, d)?;
+            if convert && !skip(&id, seq) {
+                recheck(conn, d, area, seq)?;
+            }
+        }
+        "step.remove" => {
+            let area = area_of(&p.project_area);
+            let d = dataset_mut(p, &id)?;
+            let step_id = &e["target"]["stepId"];
+            let convert = d
+                .steps
+                .iter()
+                .any(|st| st["id"] == *step_id && st["kind"] == "convert_unit");
+            d.steps.retain(|st| st["id"] != *step_id);
+            install_views(conn, d)?;
+            if convert && !skip(&id, seq) {
+                recheck(conn, d, area, seq)?;
+            }
+        }
         "issue.comment" => {
             if skip(&id, seq) {
                 return Ok(());
@@ -1200,6 +1346,15 @@ fn apply_decision(
                 .unwrap_or("")
                 .to_string();
             match target["action"].as_str().unwrap_or("") {
+                "step.apply" => {
+                    let area = area_of(&p.project_area);
+                    let d = dataset_mut(p, &tid)?;
+                    d.steps.retain(|st| st["id"] != target["target"]["stepId"]);
+                    install_views(conn, d)?;
+                    if !skip(&tid, seq) {
+                        recheck(conn, d, area, seq)?;
+                    }
+                }
                 "cell.edit" => {
                     let area = area_of(&p.project_area);
                     let d = dataset_mut(p, &tid)?;
@@ -1404,10 +1559,20 @@ fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, V
         .as_array()
         .and_then(|cs| cs.iter().find(|c| c["id"] == col))
         .ok_or_else(|| {
-            EngineError::not_found(
-                format!("Dataset {} has no column {col}.", ds.id),
-                "Choose a listed column.",
-            )
+            if ds
+                .stages()
+                .is_ok_and(|s| s.working.iter().any(|c| c.id() == col))
+            {
+                EngineError::invalid(
+                    "A converted column is calculated from its source and cannot be edited.",
+                    "Edit the value in the source column instead.",
+                )
+            } else {
+                EngineError::not_found(
+                    format!("Dataset {} has no column {col}.", ds.id),
+                    "Choose a listed column.",
+                )
+            }
         })?;
     let kind = ds
         .columns
@@ -1670,6 +1835,30 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
                     "Choose another entry.",
                 ));
             }
+            if action == "step.apply" {
+                let step_id = &target["target"]["stepId"];
+                let ds = p.datasets.iter().find(|x| *dataset == x.id.as_str());
+                if !ds.is_some_and(|x| x.steps.iter().any(|st| st["id"] == *step_id)) {
+                    return Err(EngineError::invalid(
+                        format!(
+                            "Step {} has already been removed.",
+                            step_id.as_str().unwrap_or_default()
+                        ),
+                        "Choose another entry.",
+                    ));
+                }
+                if let Some(ds) = ds {
+                    require_steps_build(
+                        ds,
+                        ds.steps
+                            .iter()
+                            .filter(|st| st["id"] != *step_id)
+                            .cloned()
+                            .collect(),
+                        &format!("Reverting step {}", step_id.as_str().unwrap_or_default()),
+                    )?;
+                }
+            }
             if action == "cell.edit" {
                 let key = (
                     target["target"]["columnId"]
@@ -1713,6 +1902,295 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
         }
     };
     Ok(entry)
+}
+
+/// Refuses a step list that no longer builds, such as a filter on a column a removed conversion
+/// created (requireStepsBuild).
+fn require_steps_build(d: &Dataset, steps: Vec<Value>, what: &str) -> Result<()> {
+    let base = d.base_columns();
+    if crate::steps::build(&base, &steps).is_ok() {
+        return Ok(());
+    }
+    let later = (0..steps.len())
+        .find(|&i| crate::steps::build(&base, &steps[..=i]).is_err())
+        .and_then(|i| steps[i]["id"].as_str().map(String::from));
+    Err(EngineError::invalid(
+        format!(
+            "{what} would break step {}, which uses a column it creates.",
+            later.as_deref().unwrap_or("a later step")
+        ),
+        format!(
+            "Remove step {} first.",
+            later.as_deref().unwrap_or("the later step")
+        ),
+    ))
+}
+
+const STEP_KINDS: [&str; 3] = ["convert_unit", "filter", "select_columns"];
+
+fn require_step_kind(s: &Value) -> Result<()> {
+    if s["kind"].as_str().is_some_and(|k| STEP_KINDS.contains(&k)) {
+        return Ok(());
+    }
+    Err(EngineError::invalid(
+        format!(
+            "The step kind {} does not exist.",
+            s["kind"]
+                .as_str()
+                .map_or_else(|| "undefined".to_string(), String::from)
+        ),
+        "Choose a unit conversion, a filter or a column selection.",
+    ))
+}
+
+impl Engine {
+    /// What a step would do, without recording it (previewStep): its description, the output's
+    /// row count after it, and for a conversion the method and the first rows before and after.
+    pub fn preview_step(&self, dataset: &Value, s: &Value) -> Result<Value> {
+        let d = self.dataset(dataset)?;
+        let stages = d.stages()?;
+        if let Err(e) = crate::steps::validate(s, &stages) {
+            return Ok(
+                json!({ "ok": false, "error": e.to_json(), "description": "", "sample": [] }),
+            );
+        }
+        let convert = s["kind"] == "convert_unit";
+        let seen = if convert {
+            &stages.working
+        } else {
+            &stages.output
+        };
+        let description = crate::steps::describe(s, seen);
+        let mut next = s.clone();
+        next["id"] = json!(format!("s{}", d.steps.len() + 1));
+        next["seq"] = json!(9_007_199_254_740_991u64);
+        let mut steps = d.steps.clone();
+        steps.push(next);
+        let after = crate::steps::build(&d.base_columns(), &steps)?;
+        let resulting = if after.filters.is_empty() {
+            d.visible_rows()
+        } else {
+            let n: i64 = self.conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM {} WHERE {}",
+                    quote_ident(&d.view),
+                    after.filters.join(" AND ")
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            n.max(0) as u64
+        };
+        if !convert {
+            return Ok(
+                json!({ "ok": true, "description": description, "sample": [], "resultingRows": resulting }),
+            );
+        }
+        let method = crate::steps::conversion_for(s, &stages.working)?;
+        let source = s["columnId"].as_str().unwrap_or_default();
+        let kind = stages
+            .working
+            .iter()
+            .find(|c| c.id() == source)
+            .map_or(Kind::Number, |c| c.kind);
+        let shown = d.visible_rows().min(20);
+        let mut sample = Vec::new();
+        if shown > 0 {
+            let src = quote_ident(source);
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT __rid, {src}, {} FROM {} WHERE __rid >= ? AND __rid < ? ORDER BY __rid",
+                method.sql(&src),
+                quote_ident(&d.view)
+            ))?;
+            let mut rows = stmt.query(duckdb::params![
+                d.row_at(0) as i64,
+                (d.row_at(shown - 1) + 1) as i64
+            ])?;
+            while let Some(row) = rows.next()? {
+                sample.push(json!({
+                    "rowId": row.get::<_, i64>(0)?,
+                    "before": Self::cell(row, 1, kind)?,
+                    "after": Self::cell(row, 2, Kind::Number)?,
+                }));
+            }
+        }
+        Ok(json!({
+            "ok": true,
+            "method": method.to_json(),
+            "description": description,
+            "sample": sample,
+            "resultingRows": resulting,
+        }))
+    }
+}
+
+/// Applies a step as a job (applyStep): validated against the dataset as it stands, recorded with
+/// its description (and, for a conversion, its method), then applied by the reducer. Result:
+/// StepResult.
+pub fn apply_step(
+    shared: &Arc<Shared>,
+    dataset: &Value,
+    s: &Value,
+    reason: &Value,
+) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let text = reason_of(reason)?;
+    engine.writable()?;
+    let d = engine.dataset(dataset)?;
+    require_step_kind(s)?;
+    crate::steps::validate(s, &d.stages()?)?;
+    let dataset_id = d.id.clone();
+    let input = s.clone();
+    let (job, _cancel) = engine.start_job();
+    drop(engine);
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let outcome = (|| -> Result<Value> {
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            let p = engine.writable()?;
+            let d = engine.dataset(&json!(dataset_id))?;
+            let stages = d.stages()?;
+            crate::steps::validate(&input, &stages)?;
+            let convert = input["kind"] == "convert_unit";
+            let seen = if convert {
+                &stages.working
+            } else {
+                &stages.output
+            };
+            let method = if convert {
+                Some(crate::steps::conversion_for(&input, seen)?)
+            } else {
+                None
+            };
+            let description = crate::steps::describe(&input, seen);
+            let step_id = format!("s{}", p.next_step);
+            let mut target = json!({ "datasetId": dataset_id, "stepId": step_id });
+            if convert {
+                target["columnId"] = input["columnId"].clone();
+            }
+            let mut entry = draft("step.apply", target);
+            entry.insert("new".into(), input.clone());
+            entry.insert("reason".into(), json!(text));
+            if let Some(m) = &method {
+                entry.insert("method".into(), m.to_json());
+            }
+            entry.insert("payload".into(), json!({ "description": description }));
+            let appended = engine.append(entry, None)?;
+            let Engine { conn, project, .. } = &mut *engine;
+            let p = project
+                .as_mut()
+                .ok_or_else(|| EngineError::internal("The project disappeared during the step."))?;
+            apply_decision(conn, p, &appended, None, &|_, _| false)?;
+            let d = dataset_mut(p, &dataset_id)?;
+            let step = d
+                .steps
+                .iter()
+                .find(|st| st["id"] == step_id.as_str())
+                .cloned()
+                .ok_or_else(|| EngineError::internal(format!("Step {step_id} was not applied.")))?;
+            let mut result = json!({
+                "step": step,
+                "audit": appended,
+                "description": description,
+                "outputRows": d.output_rows,
+            });
+            if let Some(m) = method {
+                let src = quote_ident(input["columnId"].as_str().unwrap_or_default());
+                let (converted, nulls): (i64, i64) = conn.query_row(
+                    &format!(
+                        "SELECT count({src}), count(*) - count({src}) FROM {}",
+                        quote_ident(&d.view)
+                    ),
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                result["method"] = m.to_json();
+                result["converted"] = json!(converted);
+                result["nullsSkipped"] = json!(nulls);
+            }
+            Ok(result)
+        })();
+        finish_job(
+            &shared,
+            &job_id,
+            outcome,
+            &["project", "steps", "schema", "datasets", "issues", "audit"],
+            &dataset_id,
+        );
+    });
+    Ok(json!({ "jobId": job, "kind": "step" }))
+}
+
+/// Removes a step (removeStep), unless a later step uses a column it creates. Result: the
+/// step.remove entry.
+pub fn remove_step(
+    shared: &Arc<Shared>,
+    dataset: &Value,
+    step_id: &Value,
+    reason: &Value,
+) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let text = reason_of(reason)?;
+    engine.writable()?;
+    let d = engine.dataset(dataset)?;
+    let id = step_id.as_str().unwrap_or_default();
+    let step = d
+        .steps
+        .iter()
+        .find(|st| st["id"] == id)
+        .cloned()
+        .ok_or_else(|| {
+            EngineError::not_found(
+                format!(
+                    "Dataset {} has no step {}.",
+                    d.id,
+                    step_id
+                        .as_str()
+                        .map_or_else(|| step_id.to_string(), String::from)
+                ),
+                "Choose a listed step.",
+            )
+        })?;
+    require_steps_build(
+        d,
+        d.steps
+            .iter()
+            .filter(|st| st["id"] != id)
+            .cloned()
+            .collect(),
+        &format!("Removing step {id}"),
+    )?;
+    let dataset_id = d.id.clone();
+    let mut input = step;
+    if let Some(o) = input.as_object_mut() {
+        o.remove("id");
+        o.remove("seq");
+    }
+    let mut entry = draft(
+        "step.remove",
+        json!({ "datasetId": dataset_id, "stepId": id }),
+    );
+    entry.insert("old".into(), input);
+    entry.insert("reason".into(), json!(text));
+    let appended = engine.append(entry, None)?;
+    let Engine { conn, project, .. } = &mut *engine;
+    let p = project
+        .as_mut()
+        .ok_or_else(|| EngineError::internal("The project disappeared while removing the step."))?;
+    apply_decision(conn, p, &appended, None, &|_, _| false)?;
+    drop(engine);
+    shared.event(json!({ "type": "project.changed", "what": ["project", "steps", "schema", "datasets", "issues", "audit"], "datasetId": dataset_id }));
+    Ok(appended)
 }
 
 /// Takes a decision (SAD section 8.1): validated, appended to the audit log, then applied by the
@@ -1883,7 +2361,22 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         ));
     }
     let target = target_path(&req["target"])?;
-    let columns = out_columns(d);
+    let stages = d.stages()?;
+    let columns = out_columns(&stages.output);
+    let step_descriptions: Vec<String> = d
+        .steps
+        .iter()
+        .map(|st| {
+            engine
+                .project()
+                .map(|p| p.log.entries())
+                .unwrap_or_default()
+                .iter()
+                .find(|e| e["seq"] == st["seq"])
+                .and_then(|e| e["payload"]["description"].as_str().map(String::from))
+                .unwrap_or_else(|| crate::steps::describe(st, &stages.working))
+        })
+        .collect();
     let base_name = req["baseName"]
         .as_str()
         .map(str::trim)
@@ -1907,9 +2400,11 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         project: json!({ "id": p.id, "name": p.name }),
         dataset_id: d.id.clone(),
         dataset_name: d.name.clone(),
-        view: quote_ident(&d.view),
-        row_count: d.visible_rows(),
+        view: quote_ident(&d.out_view()),
+        row_count: d.output_rows,
         excluded_rows: d.excluded.count(),
+        steps: d.steps.clone(),
+        step_descriptions,
         columns,
         sources,
         rule_packs: d.check_packs.clone(),
@@ -2034,23 +2529,6 @@ fn note_from_json(v: &Value) -> Note {
     }
 }
 
-/// A dataset's columns as the export and the digests read them.
-fn out_columns(d: &Dataset) -> Vec<crate::export::OutColumn> {
-    d.spec["columns"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .zip(&d.columns)
-        .map(|(c, (id, kind))| crate::export::OutColumn {
-            id: id.clone(),
-            name: c["name"].as_str().unwrap_or_default().to_string(),
-            unit: c["unit"]["value"].as_str().map(String::from),
-            typ: c["type"]["value"].as_str().unwrap_or_default().to_string(),
-            kind: *kind,
-        })
-        .collect()
-}
-
 /// Packages up to this size are handed back with the job's result; larger ones stay on disk.
 const RETURN_BYTES_MAX: u64 = 256 * 1024 * 1024;
 
@@ -2093,6 +2571,10 @@ struct SavedDataset {
     visible: u64,
     /// Whether the view joins cell edits, so reading it in row order needs ORDER BY.
     edited: bool,
+    /// The output view's columns, its view and its rows.
+    output: Vec<crate::export::OutColumn>,
+    out_view: String,
+    output_rows: u64,
     view: String,
     columns: Vec<crate::export::OutColumn>,
     rows_file: PathBuf,
@@ -2125,7 +2607,16 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             visible: d.visible_rows(),
             edited: !d.edits.is_empty(),
             view: quote_ident(&d.view),
-            columns: out_columns(d),
+            columns: d
+                .stages()
+                .map(|s| out_columns(&s.working))
+                .unwrap_or_default(),
+            output: d
+                .stages()
+                .map(|s| out_columns(&s.output))
+                .unwrap_or_default(),
+            out_view: quote_ident(&d.out_view()),
+            output_rows: d.output_rows,
             rows_file: d.rows_file.clone(),
             exceptions_file: d.exceptions_file.clone(),
             source_seq: d.source_seq,
@@ -2188,7 +2679,15 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                 let sha = crate::export::dataset_digest(
                     &conn, &d.view, d.edited, &d.columns, d.visible, threads,
                 )?;
-                digests.push(json!({ "id": d.id, "name": d.name, "rowCount": d.rows, "workingDigest": sha, "outputDigest": sha }));
+                let out = crate::export::dataset_digest(
+                    &conn,
+                    &d.out_view,
+                    d.edited,
+                    &d.output,
+                    d.output_rows,
+                    threads,
+                )?;
+                digests.push(json!({ "id": d.id, "name": d.name, "rowCount": d.rows, "workingDigest": sha, "outputDigest": out }));
                 if cancel.load(Ordering::Relaxed) {
                     return Err(cancelled());
                 }
@@ -2648,7 +3147,7 @@ fn commit_import(
             notes.insert(0, note);
         }
     }
-    let dataset = Dataset {
+    let mut dataset = Dataset {
         id: dataset_id,
         name: spec["datasetName"].as_str().unwrap_or_default().to_string(),
         spec: spec.clone(),
@@ -2665,8 +3164,10 @@ fn commit_import(
         excluded: RowSet::new(imported.row_count),
         exclusions: Vec::new(),
         edits: BTreeMap::new(),
+        steps: Vec::new(),
+        output_rows: imported.row_count,
     };
-    install_views(&engine.conn, &dataset)?;
+    install_views(&engine.conn, &mut dataset)?;
     let summary = Engine::dataset_summary(&dataset);
     let p = engine
         .project
@@ -2913,8 +3414,10 @@ impl Reopen<'_> {
             excluded: RowSet::new(restored.row_count),
             exclusions: Vec::new(),
             edits: BTreeMap::new(),
+            steps: Vec::new(),
+            output_rows: restored.row_count,
         });
-        if let Some(d) = p.datasets.last() {
+        if let Some(d) = p.datasets.last_mut() {
             install_views(self.conn, d)?;
         }
         Ok(used_cache)
@@ -3082,6 +3585,7 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 read_only: false,
                 project_area: Value::Null,
                 reverted: HashSet::new(),
+                next_step: 1,
             };
             let mut reopen = Reopen {
                 conn: &conn,
@@ -3159,7 +3663,7 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                                 })
                         }
                         "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
-                        | "project.area" | "entry.revert" => {
+                        | "project.area" | "entry.revert" | "step.apply" | "step.remove" => {
                             let reverted = log.entries().iter().find(|x| {
                                 e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]
                             });
@@ -3205,11 +3709,13 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                     let saved: Vec<Value> = manifest["datasets"].as_array().cloned().unwrap_or_default();
                     for d in &p.datasets {
                         progress("Comparing the dataset digests", 0);
-                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), !d.edits.is_empty(), &out_columns(d), d.visible_rows(), threads)?;
+                        let stages = d.stages()?;
+                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), !d.edits.is_empty(), &out_columns(&stages.working), d.visible_rows(), threads)?;
+                        let out = crate::export::dataset_digest(&conn, &quote_ident(&d.out_view()), !d.edits.is_empty(), &out_columns(&stages.output), d.output_rows, threads)?;
                         match saved.iter().find(|s| s["id"] == d.id.as_str()) {
                             None => bad.push(format!("the audit log builds dataset {}, which the manifest does not list", d.id)),
                             Some(s) if s["rowCount"].as_u64() != Some(d.row_count) => bad.push(format!("dataset {} has {} rows instead of the {} saved", d.id, d.row_count, s["rowCount"])),
-                            Some(s) if s["workingDigest"].as_str() != Some(sha.as_str()) || s["outputDigest"].as_str() != Some(sha.as_str()) => {
+                            Some(s) if s["workingDigest"].as_str() != Some(sha.as_str()) || s["outputDigest"].as_str() != Some(out.as_str()) => {
                                 bad.push(format!("dataset {} ({}) differs from its saved digest", d.id, d.name))
                             }
                             Some(_) => {}

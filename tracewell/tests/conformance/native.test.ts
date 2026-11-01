@@ -24,6 +24,9 @@ import {
   type Decision,
   type ProjectOpenReport,
   type SaveResult,
+  type StepInput,
+  type StepPreview,
+  type StepResult,
   type JsonValue,
   type RowWindow,
 } from '@tw/model';
@@ -589,6 +592,166 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         expect(csv(a)).toEqual(csv(b));
       }
     }
+  });
+
+  it('applies the same steps, with the same previews, results, views, refusals and export', async () => {
+    const { nat, ref } = pairs.get('csv_well_daily_golden.csv') as { nat: string; ref: string };
+    const cols = (await reference.getSchema(ref)).columns;
+    const id = (name: string) => cols.find((c) => c.name === name)?.id as string;
+    const [pressure, temperature, date, well] = [id('Pressure'), id('Temperature'), id('date'), id('well_id')];
+    const kpa = `${pressure}~kPa`;
+    const degC = `${temperature}~degC`;
+    const preview = async (s: StepInput) => {
+      const shape = (x: StepPreview) =>
+        x.ok ? x : { ok: false, error: { code: x.error?.code, message: x.error?.message }, description: x.description };
+      const [a, b] = [await native.client.previewStep(nat, s), await reference.previewStep(ref, s)];
+      expect(shape(a), JSON.stringify(s)).toEqual(shape(b));
+      return a;
+    };
+    /** Both engines' output stage: schema and rows. */
+    const sameOutput = async (why: string) => {
+      // A converted column's unit names the entry that set it; the logs differ in length.
+      const schemaOf = async (e: EngineClient, datasetId: string, stage: 'working' | 'output') =>
+        JSON.parse(
+          JSON.stringify({ ...(await e.getSchema(datasetId, stage)), datasetId: '' })
+            .replace(/audit entry \d+/g, 'audit entry N')
+            .replace(/"overriddenBy":\d+/g, '"overriddenBy":0'),
+        ) as unknown;
+      for (const stage of ['working', 'output'] as const) {
+        expect(await schemaOf(native.client, nat, stage), `${why}: ${stage} schema`).toEqual(
+          await schemaOf(reference, ref, stage),
+        );
+      }
+      const rows = async (e: EngineClient, datasetId: string) => {
+        const out: RowWindow[] = [];
+        for (let offset = 0; ; offset += 100) {
+          const w = await e.getRows({ datasetId, stage: 'output', offset, limit: 100 });
+          out.push({ ...w, datasetId: '' });
+          if (offset + 100 >= w.totalRows) return out;
+        }
+      };
+      expect(await rows(native.client, nat), `${why}: output rows`).toEqual(await rows(reference, ref));
+    };
+    const apply = async (why: string, s: StepInput) => {
+      await preview(s);
+      const run = async (e: EngineClient, datasetId: string) =>
+        e.awaitJob<StepResult>(await e.applyStep(datasetId, s, `Step: ${why}`));
+      const [a, b] = [await run(native.client, nat), await run(reference, ref)];
+      const shape = (x: StepResult) => ({ ...x, audit: said(x.audit), step: { ...x.step, seq: 0 } });
+      expect(shape(a), `${why}: result`).toEqual(shape(b));
+      await samePair(nat, ref, why);
+      await sameOutput(why);
+      return [a.audit.seq, b.audit.seq] as [number, number];
+    };
+    const refused = async (why: string, run: (e: EngineClient, datasetId: string) => Promise<unknown>) => {
+      const out: unknown[] = [];
+      for (const [e, datasetId] of [
+        [native.client, nat],
+        [reference, ref],
+      ] as const) {
+        out.push(
+          await run(e, datasetId).then(
+            () => 'accepted',
+            (err: unknown) => ({
+              code: (err as { code: string }).code,
+              message: (err as Error).message.replaceAll(datasetId, 'DS').replace(/entry \d+/g, 'entry N'),
+            }),
+          ),
+        );
+      }
+      expect(out[0], why).toEqual(out[1]);
+      expect(out[0], why).not.toBe('accepted');
+    };
+
+    // Previews that are refused, with the reason.
+    for (const s of [
+      { kind: 'convert_unit', columnId: well, toUnit: 'kPa', mode: 'replace' },
+      { kind: 'convert_unit', columnId: pressure, toUnit: 'm', mode: 'replace' },
+      { kind: 'convert_unit', columnId: pressure, toUnit: 'psig', mode: 'replace' },
+      { kind: 'convert_unit', columnId: pressure, toUnit: 'furlongs', mode: 'replace' },
+      { kind: 'convert_unit', columnId: 'c99', toUnit: 'kPa', mode: 'replace' },
+      { kind: 'filter', predicate: { column: 'c99', op: 'is_null' } },
+      { kind: 'filter', predicate: { column: pressure, op: 'contains', text: '18' } },
+      { kind: 'filter', predicate: { column: pressure, op: 'gt', value: 'high' } },
+      { kind: 'select_columns', columnIds: [] },
+      { kind: 'select_columns', columnIds: [well, well] },
+    ] as StepInput[]) {
+      expect((await preview(s)).ok, JSON.stringify(s)).toBe(false);
+    }
+
+    await apply('pressure to kPa', { kind: 'convert_unit', columnId: pressure, toUnit: 'kPa', mode: 'replace' });
+    await apply('temperature in degC too', {
+      kind: 'convert_unit',
+      columnId: temperature,
+      toUnit: 'degC',
+      mode: 'add_column',
+    });
+    expect((await preview({ kind: 'convert_unit', columnId: temperature, toUnit: 'degC', mode: 'replace' })).ok).toBe(
+      false,
+    );
+    const filter = await apply('high pressure in December', {
+      kind: 'filter',
+      predicate: {
+        all: [
+          { column: kpa, op: 'ge', value: 13000 },
+          { not: { column: well, op: 'in', values: ['NS-A03'] } },
+          {
+            any: [
+              {
+                column: date,
+                op: 'between',
+                low: { datetime: '2025-12-01T00:00:00.000Z' },
+                high: { datetime: '2025-12-15T00:00:00.000Z' },
+              },
+              { column: degC, op: 'lt', value: 80 },
+            ],
+          },
+        ],
+      },
+    });
+    await apply('a few columns', { kind: 'select_columns', columnIds: [well, date, kpa, degC] });
+    // The steps reach the export: rows filtered, columns selected and converted, in order.
+    for (const profile of ['csv', 'parquet'] as const) {
+      const a = await native.client.awaitJob<ExportResult>(await native.client.exportData({ datasetId: nat, profile }));
+      const b = await reference.awaitJob<ExportResult>(await reference.exportData({ datasetId: ref, profile }));
+      expect([a.ok, b.ok], profile).toEqual([true, true]);
+      expect(a.manifest.dataset, profile).toEqual({ ...b.manifest.dataset, id: nat });
+      expect(a.manifest.steps.map((x) => ({ ...x, seq: 0 }))).toEqual(b.manifest.steps.map((x) => ({ ...x, seq: 0 })));
+      const text = (r: ExportResult, f: string) => new TextDecoder().decode(readZip(r.bytes as Uint8Array).read(f));
+      expect(text(a, 'README.txt').split('STEPS')[1]?.split('ASSUMPTIONS')[0]).toBe(
+        text(b, 'README.txt').split('STEPS')[1]?.split('ASSUMPTIONS')[0],
+      );
+      if (profile === 'csv') expect(text(a, 'data.csv')).toBe(text(b, 'data.csv'));
+    }
+
+    await refused('edit a converted cell', (e, d) =>
+      e.decide({
+        kind: 'edit_cell',
+        datasetId: d,
+        rowId: 0,
+        columnId: kpa,
+        value: { value: 1 },
+        reason: 'Converted value',
+      }),
+    );
+    await refused('remove the conversion the filter uses', (e, d) => e.removeStep(d, 's1', 'No longer needed'));
+    await refused('remove a step that is not there', (e, d) => e.removeStep(d, 's99', 'Not there'));
+    const removed = await Promise.all([
+      native.client.removeStep(nat, 's4', 'All columns again'),
+      reference.removeStep(ref, 's4', 'All columns again'),
+    ]);
+    expect(said(removed[0])).toEqual(said(removed[1]));
+    await samePair(nat, ref, 'selection removed');
+    await sameOutput('selection removed');
+    for (const [e, d, seq] of [
+      [native.client, nat, filter[0]],
+      [reference, ref, filter[1]],
+    ] as const) {
+      await e.decide({ kind: 'revert', seq, reason: 'Every row again' });
+      void d;
+    }
+    await samePair(nat, ref, 'filter reverted');
+    await sameOutput('filter reverted');
   });
 
   it('saves a project file that the TypeScript engine opens with every check passing', async () => {

@@ -24,6 +24,7 @@ mod memory;
 mod parse;
 mod project;
 mod rules;
+mod steps;
 mod stream;
 mod time;
 mod units;
@@ -166,6 +167,12 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     if method == "decide" {
         return engine::decide(shared, param(params, 0));
     }
+    if method == "applyStep" {
+        return engine::apply_step(shared, param(params, 0), param(params, 1), param(params, 2));
+    }
+    if method == "removeStep" {
+        return engine::remove_step(shared, param(params, 0), param(params, 1), param(params, 2));
+    }
     let mut e = shared
         .engine
         .lock()
@@ -174,7 +181,8 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "hello" => Ok(e.hello()),
         "newProject" => e.new_project(param(params, 0)),
         "getProject" => e.summary(),
-        "getSchema" => e.schema(param(params, 0)),
+        "getSchema" => e.schema(param(params, 0), param(params, 1)),
+        "previewStep" => e.preview_step(param(params, 0), param(params, 1)),
         "getRows" => e.rows(param(params, 0)),
         "getColumnStats" => e.column_stats(param(params, 0), param(params, 1)),
         "listAudit" => e.list_audit(param(params, 0)),

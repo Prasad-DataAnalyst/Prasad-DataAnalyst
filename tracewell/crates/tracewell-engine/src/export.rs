@@ -106,6 +106,9 @@ pub struct ExportInput {
     /// Rows in the output view: the dataset's rows less the excluded ones.
     pub row_count: u64,
     pub excluded_rows: u64,
+    /// The steps the output view went through, and each described as it was applied.
+    pub steps: Vec<Value>,
+    pub step_descriptions: Vec<String>,
     pub columns: Vec<OutColumn>,
     pub sources: Vec<Value>,
     pub rule_packs: Vec<Value>,
@@ -1013,7 +1016,7 @@ fn text(v: &Value) -> String {
 }
 
 /// README.txt (readme.ts renderReadme).
-fn render_readme(m: &Value) -> String {
+fn render_readme(m: &Value, steps: &[String]) -> String {
     let data: Vec<&Value> = m["files"]
         .as_array()
         .into_iter()
@@ -1114,8 +1117,16 @@ fn render_readme(m: &Value) -> String {
         text(&m["unitRegistry"]["sha256"])
     ));
     lines.push(String::new());
-    lines.push("STEPS (0)".into());
-    lines.push("  none".into());
+    lines.push(format!("STEPS ({})", steps.len()));
+    if steps.is_empty() {
+        lines.push("  none".into());
+    }
+    lines.extend(
+        steps
+            .iter()
+            .enumerate()
+            .map(|(i, d)| format!("  {}. {d}", i + 1)),
+    );
     lines.push(String::new());
     lines.push(format!("ASSUMPTIONS ({})", assumptions.len()));
     if assumptions.is_empty() {
@@ -1505,7 +1516,7 @@ pub fn build_export(
         "sources": input.sources,
         "rulePacks": input.rule_packs,
         "unitRegistry": { "version": registry_version(), "sha256": sha256_hex(REGISTRY_JSON.as_bytes()) },
-        "steps": [],
+        "steps": input.steps,
         "excludedRows": input.excluded_rows,
         "openIssues": open_issues(&input.issues),
         "assumptions": input.assumptions,
@@ -1515,7 +1526,7 @@ pub fn build_export(
         "auditHead": input.audit_head,
         "files": [],
     });
-    let readme = render_readme(&manifest);
+    let readme = render_readme(&manifest, &input.step_descriptions);
     manifest["files"] = json!([
         entry(&data_name, data_size, &data_sha, "data"),
         entry(

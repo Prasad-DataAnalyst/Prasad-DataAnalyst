@@ -17,6 +17,10 @@ pub struct Unit {
     pub quantity: String,
     pub factor: f64,
     pub offset: f64,
+    /// The reference conditions a gauge pressure or standard volume is stated at.
+    pub convention: Option<String>,
+    /// Where the factor comes from, cited with every conversion.
+    pub source: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +35,9 @@ struct Registry {
     by_key: HashMap<String, Unit>,
     family: HashMap<String, String>,
     bounds: HashMap<String, Bounds>,
+    /// Unit codes in registry order.
+    order: Vec<String>,
+    labels: HashMap<String, String>,
 }
 
 fn registry() -> &'static Registry {
@@ -39,13 +46,17 @@ fn registry() -> &'static Registry {
         let units: Value = serde_json::from_str(REGISTRY_JSON).unwrap_or(Value::Null);
         let mut by_code = HashMap::new();
         let mut by_key = HashMap::new();
+        let mut order = Vec::new();
         for u in units["units"].as_array().into_iter().flatten() {
             let unit = Unit {
                 code: u["code"].as_str().unwrap_or_default().to_string(),
                 quantity: u["quantity"].as_str().unwrap_or_default().to_string(),
                 factor: u["toSI"]["factor"].as_f64().unwrap_or(1.0),
                 offset: u["toSI"]["offset"].as_f64().unwrap_or(0.0),
+                convention: u["convention"].as_str().map(String::from),
+                source: u["source"].as_str().unwrap_or_default().to_string(),
             };
+            order.push(unit.code.clone());
             let names = std::iter::once(&u["code"])
                 .chain(u["aliases"].as_array().into_iter().flatten())
                 .filter_map(Value::as_str);
@@ -57,9 +68,11 @@ fn registry() -> &'static Registry {
         let table: Value = serde_json::from_str(QUANTITIES_JSON).unwrap_or(Value::Null);
         let mut family = HashMap::new();
         let mut bounds = HashMap::new();
+        let mut labels = HashMap::new();
         if let Some(qs) = table["quantities"].as_object() {
             for (q, spec) in qs {
                 family.insert(q.clone(), spec["family"].as_str().unwrap_or(q).to_string());
+                labels.insert(q.clone(), spec["label"].as_str().unwrap_or(q).to_string());
                 if let Some(b) = spec["bounds"].as_object() {
                     bounds.insert(
                         q.clone(),
@@ -81,6 +94,8 @@ fn registry() -> &'static Registry {
             by_key,
             family,
             bounds,
+            order,
+            labels,
         }
     })
 }
@@ -297,6 +312,40 @@ pub fn physical_bounds(q: &str, unit: &str) -> Option<Bounds> {
         max: b.max.map(to_unit),
         source: b.source.clone(),
     })
+}
+
+/// The unit with exactly this code (getUnit); aliases are not accepted here.
+pub fn get_unit(code: &str) -> Option<&'static Unit> {
+    registry().by_code.get(code)
+}
+
+/// Every unit, in registry order (allUnits).
+pub fn all_units() -> impl Iterator<Item = &'static Unit> {
+    let r = registry();
+    r.order.iter().filter_map(|c| r.by_code.get(c))
+}
+
+/// True when values of the two quantities convert into each other (sameFamily).
+pub fn same_family(a: &str, b: &str) -> bool {
+    let f = &registry().family;
+    f.get(a).map_or(a, String::as_str) == f.get(b).map_or(b, String::as_str)
+}
+
+/// The plain-language name of a quantity, as messages use it (quantityLabel).
+pub fn quantity_label(q: &str) -> String {
+    registry()
+        .labels
+        .get(q)
+        .cloned()
+        .unwrap_or_else(|| q.to_string())
+}
+
+/// The registry's version, as conversions record it.
+pub fn registry_version() -> String {
+    serde_json::from_str::<Value>(REGISTRY_JSON)
+        .ok()
+        .and_then(|v| v["version"].as_str().map(String::from))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
