@@ -183,6 +183,7 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "getProject" => e.summary(),
         "getSchema" => e.schema(param(params, 0), param(params, 1)),
         "previewStep" => e.preview_step(param(params, 0), param(params, 1)),
+        "explainCell" => e.explain_cell(param(params, 0), param(params, 1), param(params, 2)),
         "getRows" => e.rows(param(params, 0)),
         "getColumnStats" => e.column_stats(param(params, 0), param(params, 1)),
         "listAudit" => e.list_audit(param(params, 0)),

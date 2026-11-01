@@ -2024,6 +2024,193 @@ impl Engine {
     }
 }
 
+/// How a column's text was parsed, in words (lineage.ts parseMethod).
+fn parse_method(c: &Value) -> String {
+    let typ = c["type"]["value"].as_str().unwrap_or("string");
+    match typ {
+        "number" | "integer" => format!(
+            "{typ}, decimal separator '{}'",
+            c["decimalSeparator"]["value"].as_str().unwrap_or(".")
+        ),
+        "date" => format!(
+            "date, {} format",
+            c["dateFormat"]["value"].as_str().unwrap_or("iso")
+        ),
+        "datetime" => format!(
+            "datetime, {}",
+            c["timezone"]["value"]
+                .as_str()
+                .unwrap_or("naive-assumed-utc")
+        ),
+        "boolean" => "boolean, true/false".into(),
+        "geometry" => "GeoJSON geometry".into(),
+        _ => "text as written".into(),
+    }
+}
+
+impl Engine {
+    /// Where a cell's value came from (explainCell, SAD section 9.3): the source locator and text,
+    /// how the text was parsed, every audit entry that changed the cell, and its current value.
+    pub fn explain_cell(&self, dataset: &Value, row: &Value, column: &Value) -> Result<Value> {
+        let p = self.project()?;
+        let d = self.dataset(dataset)?;
+        let r = row
+            .as_f64()
+            .and_then(|x| row_id(x, d.row_count))
+            .ok_or_else(|| {
+                EngineError::not_found(
+                    format!("Dataset {} has no row {}.", d.id, js_number(row)),
+                    "Choose a row shown in the data grid.",
+                )
+            })?;
+        let stages = d.stages()?;
+        let col = column.as_str().unwrap_or_default();
+        let shown = stages
+            .working
+            .iter()
+            .find(|c| c.id() == col)
+            .ok_or_else(|| {
+                EngineError::not_found(
+                    format!("Dataset {} has no column {col} at this stage.", d.id),
+                    "Choose a listed column.",
+                )
+            })?;
+        // The conversion steps the column's values went through.
+        let mut steps = HashSet::new();
+        let mut at = Some(shown.clone());
+        while let Some(c) = at {
+            match (c.schema["derivedFrom"]["step"].as_str(), c.derived_from()) {
+                (Some(step), Some(from)) => {
+                    steps.insert(step.to_string());
+                    at = stages.every.iter().find(|x| x.id() == from).cloned();
+                }
+                _ => at = None,
+            }
+        }
+        let root = root_of(&stages, col);
+        let plan = d.spec["columns"]
+            .as_array()
+            .and_then(|cs| cs.iter().find(|c| c["id"] == root.as_str()))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let (raw, marker): (Option<String>, Option<String>) = {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT raw, marker FROM {} WHERE rid = ? AND col = ?",
+                quote_ident(&d.all_exceptions_view())
+            ))?;
+            let mut rows = stmt.query(duckdb::params![r as i64, root])?;
+            match rows.next()? {
+                Some(x) => (x.get(0)?, x.get(1)?),
+                None => (None, None),
+            }
+        };
+        let (loc, current): (i64, Value) = {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT __loc, {} FROM {} WHERE __rid = ?",
+                quote_ident(col),
+                quote_ident(&d.all_view())
+            ))?;
+            let mut rows = stmt.query(duckdb::params![r as i64])?;
+            match rows.next()? {
+                Some(x) => (x.get(0)?, Self::cell(x, 1, shown.kind)?),
+                None => {
+                    return Err(EngineError::internal(format!(
+                        "Row {r} of dataset {} is missing.",
+                        d.id
+                    )));
+                }
+            }
+        };
+        let file_id = d.spec["fileId"].as_str().unwrap_or_default();
+        let raw_text = match raw.clone().or(marker.clone()) {
+            Some(kept) => Some(kept),
+            None => match p.original_paths.get(file_id) {
+                Some(source) => crate::import::field_text(
+                    source,
+                    &csv_plan(&d.spec)?,
+                    loc,
+                    plan["sourceIndex"].as_u64().unwrap_or(0) as usize,
+                )?,
+                None => None,
+            },
+        };
+        let mut touched = HashSet::new();
+        let mut history = Vec::new();
+        for e in p.log.entries() {
+            let seq = e["seq"].as_u64().unwrap_or(0);
+            let t = &e["target"];
+            let is_revert = e["action"] == "entry.revert"
+                && t["seq"].as_u64().is_some_and(|s| touched.contains(&s));
+            let touches = t["datasetId"] == d.id.as_str()
+                && match e["action"].as_str().unwrap_or("") {
+                    "source.add" => true,
+                    "cell.edit" => t["rowId"].as_u64() == Some(r) && t["columnId"] == root.as_str(),
+                    "detection.override" => {
+                        let property = e["payload"]["property"].as_str().unwrap_or("");
+                        t["columnId"] == root.as_str()
+                            || !matches!(
+                                property,
+                                "name"
+                                    | "type"
+                                    | "unit"
+                                    | "role"
+                                    | "nullMarkers"
+                                    | "dateFormat"
+                                    | "timezone"
+                            )
+                    }
+                    "step.apply" | "step.remove" => {
+                        t["stepId"].as_str().is_some_and(|s| steps.contains(s))
+                    }
+                    "rows.exclude" => e["payload"]["rows"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|x| x.as_u64() == Some(r))),
+                    _ => false,
+                };
+            if !is_revert && !touches {
+                continue;
+            }
+            touched.insert(seq);
+            if e["action"] == "source.add" {
+                continue;
+            }
+            let mut item = json!({ "seq": seq, "at": e["at"], "actor": author(&e["actor"]), "action": e["action"] });
+            for k in ["old", "new", "reason", "method"] {
+                if let Some(v) = e.get(k) {
+                    item[k] = v.clone();
+                }
+            }
+            history.push(item);
+        }
+        let file_name = p
+            .originals
+            .iter()
+            .find(|o| o["fileId"] == file_id)
+            .and_then(|o| o["name"].as_str())
+            .or(d.spec["fileName"].as_str())
+            .unwrap_or_default();
+        Ok(json!({
+            "datasetId": d.id,
+            "rowId": r,
+            "columnId": col,
+            "source": {
+                "fileId": file_id,
+                "fileName": file_name,
+                "locator": format!("line {loc}, field {}", plan["sourceIndex"].as_u64().unwrap_or(0) + 1),
+                "rawText": raw_text,
+            },
+            "parse": {
+                "type": plan["type"]["value"],
+                "method": parse_method(&plan),
+                "nullMarker": marker,
+                "ok": raw.is_none(),
+            },
+            "history": history,
+            "current": current,
+        }))
+    }
+}
+
 /// Applies a step as a job (applyStep): validated against the dataset as it stands, recorded with
 /// its description (and, for a conversion, its method), then applied by the reducer. Result:
 /// StepResult.

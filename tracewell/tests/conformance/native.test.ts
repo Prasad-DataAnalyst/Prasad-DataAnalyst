@@ -754,6 +754,42 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     await sameOutput('filter reverted');
   });
 
+  it('explains cells the same way: source text, parsing, history and current value', async () => {
+    const explain = async (
+      fixture: string,
+      rowId: number,
+      column: (cols: { id: string; name: string }[]) => string,
+    ) => {
+      const { nat, ref } = pairs.get(fixture) as { nat: string; ref: string };
+      const columnId = column((await reference.getSchema(ref)).columns);
+      const shape = (x: Awaited<ReturnType<EngineClient['explainCell']>>) => ({
+        ...x,
+        datasetId: '',
+        source: { ...x.source },
+        history: x.history.map(({ seq: _s, at: _a, ...rest }) => rest),
+      });
+      const [a, b] = [
+        await native.client.explainCell(nat, rowId, columnId),
+        await reference.explainCell(ref, rowId, columnId),
+      ];
+      expect(shape(a), `${fixture} row ${rowId} ${columnId}`).toEqual(shape(b));
+      return a;
+    };
+    const named = (start: string) => (cols: { id: string; name: string }[]) =>
+      cols.find((c) => c.name.startsWith(start))?.id as string;
+    // A converted value (Pressure, converted to kPa in place): the step is in its history, with the method.
+    const converted = await explain('csv_well_daily_golden.csv', 0, named('Pressure'));
+    expect(converted.history.some((h) => h.action === 'step.apply' && h.method !== undefined)).toBe(true);
+    // A clean value, read again from the original file.
+    expect((await explain('csv_well_daily_golden.csv', 5, named('Oil'))).source.rawText).not.toBeNull();
+    // A null marker, edited twice and reverted.
+    await explain('csv_null_markers.csv', 1, named('Pressure'));
+    // A date that did not parse, then corrected.
+    expect((await explain('csv_dates_ambiguous_and_mixed.csv', 2, named('logged'))).parse.ok).toBe(false);
+    // An excluded row.
+    await explain('csv_duplicates_rows_and_keys.csv', 0, (cols) => cols[0]?.id as string);
+  });
+
   it('saves a project file that the TypeScript engine opens with every check passing', async () => {
     // A second check run of d1: its saved results stand in for both runs when the file is opened.
     await native.client.awaitJob<CheckSummary>(await native.client.runChecks('d1'));

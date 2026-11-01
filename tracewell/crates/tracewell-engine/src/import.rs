@@ -398,6 +398,70 @@ fn read_file(
     Ok((std::mem::take(&mut table.notes), digest, size))
 }
 
+/// The text of one field of an original file, read again under the import's plan (lineage.ts
+/// sourceText): field `index` of the record that starts on line `loc`, or None when the record has
+/// no such field. Reading stops at that record.
+pub fn field_text(
+    source: &crate::project::OriginalSource,
+    plan: &CsvPlan,
+    loc: i64,
+    index: usize,
+) -> Result<Option<String>> {
+    use std::io::{Seek, SeekFrom};
+    let mut input: Box<dyn Read> = match source {
+        crate::project::OriginalSource::File(path) => Box::new(std::fs::File::open(path)?),
+        crate::project::OriginalSource::Entry {
+            archive,
+            offset,
+            size,
+        } => {
+            let mut f = std::fs::File::open(archive)?;
+            f.seek(SeekFrom::Start(*offset))?;
+            Box::new(f.take(*size))
+        }
+    };
+    let mut decoder = TextDecoder::new(&plan.encoding, plan.bom_length)?;
+    let mut table = TableReader::new(&TableLayout {
+        delimiter: plan.delimiter,
+        skip_lines: plan.skip_lines,
+        header_rows: plan.header_rows,
+        batch_rows: 1024,
+        keep_blank: false,
+    });
+    let find = |table: &mut TableReader| -> Option<Option<String>> {
+        for b in table.take_batches() {
+            if let Some(row) = (0..b.rows()).find(|&r| b.locs[r] == loc) {
+                return Some(
+                    (index < b.width)
+                        .then(|| b.cell(row, index))
+                        .flatten()
+                        .map(|t| String::from_utf8_lossy(t).into_owned()),
+                );
+            }
+        }
+        None
+    };
+    let mut buf = vec![0u8; 1 << 16];
+    let mut utf8 = Vec::with_capacity(3 << 16);
+    loop {
+        let n = input.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        utf8.clear();
+        decoder.decode(&buf[..n], &mut utf8);
+        table.push(&utf8)?;
+        if let Some(found) = find(&mut table) {
+            return Ok(found);
+        }
+    }
+    utf8.clear();
+    decoder.finish(&mut utf8);
+    table.push(&utf8)?;
+    table.finish()?;
+    Ok(find(&mut table).flatten())
+}
+
 /// Imports `path` as dataset `id`, calling `progress` with the bytes read so far.
 #[allow(clippy::too_many_arguments)]
 pub fn import_csv(

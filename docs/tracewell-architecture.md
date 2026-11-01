@@ -620,6 +620,8 @@ interface AuditEntry {
 
 The Properties panel shows this for the selected cell.
 
+**Native engine (slice 2).** The native engine answers `explainCell` the same way. The raw text of a failed parse or a null marker comes from the exceptions table; a value that parsed is stored typed only, so its text is read again from the original file (or from the project file's stored original) under the import's plan, stopping at the record. On a large file that read is as long as reading up to the row, as it is in the TypeScript engine.
+
 ### 9.4 Canonical encoding and digests (normative)
 
 The same encoding is used by every engine and by the Python oracles.
