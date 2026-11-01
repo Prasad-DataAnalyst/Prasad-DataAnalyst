@@ -116,6 +116,9 @@ pub struct ExportInput {
     pub workdir: PathBuf,
     pub target: Option<PathBuf>,
     pub threads: usize,
+    /// Whether reading the view in row order needs ORDER BY: a view that joins cell edits can
+    /// return rows out of order.
+    pub ordered: bool,
     /// CSV data files: an apostrophe in front of text a spreadsheet would run as a formula.
     pub neutralize: bool,
 }
@@ -219,14 +222,23 @@ fn per_column<T: Send>(
         .collect()
 }
 
+fn order_by(ordered: bool) -> &'static str {
+    if ordered { " ORDER BY __rid" } else { "" }
+}
+
 /// Streams one column of the view in row order.
 fn scan_column(
     conn: &Connection,
     view: &str,
+    ordered: bool,
     c: &OutColumn,
     mut f: impl FnMut(Cell),
 ) -> Result<()> {
-    let sql = format!("SELECT __rid, {} FROM {view}", quote_ident(&c.id));
+    let sql = format!(
+        "SELECT __rid, {} FROM {view}{}",
+        quote_ident(&c.id),
+        order_by(ordered)
+    );
     let mut last: i64 = -1;
     each_batch(conn, &sql, |batch| {
         let rids = batch.column(0).as_primitive::<Int64Type>();
@@ -255,13 +267,14 @@ fn scan_column(
 pub fn dataset_digest(
     conn: &Connection,
     view: &str,
+    ordered: bool,
     columns: &[OutColumn],
     rows: u64,
     threads: usize,
 ) -> Result<String> {
     let digests = per_column(conn, columns, threads, |conn, c| {
         let mut d = ColumnDigest::default();
-        scan_column(conn, view, c, |cell| d.push(&cell))?;
+        scan_column(conn, view, ordered, c, |cell| d.push(&cell))?;
         Ok(d.finish())
     })?;
     let summary = json!({
@@ -279,7 +292,7 @@ fn view_digests(conn: &Connection, input: &ExportInput) -> Result<Vec<ColumnDige
     per_column(conn, &input.columns, input.threads, |conn, c| {
         let mut exported = ColumnDigest::default();
         let mut view = (c.kind == Kind::String).then(ColumnDigest::default);
-        scan_column(conn, &input.view, c, |cell| {
+        scan_column(conn, &input.view, input.ordered, c, |cell| {
             if let Some(v) = view.as_mut() {
                 v.push(&cell);
             }
@@ -398,7 +411,12 @@ fn write_csv(
     out.write_all(&head)?;
     let kinds: Vec<Kind> = input.columns.iter().map(|c| c.kind).collect();
     let select: Vec<String> = input.columns.iter().map(|c| quote_ident(&c.id)).collect();
-    let sql = format!("SELECT {} FROM {}", select.join(", "), input.view);
+    let sql = format!(
+        "SELECT {} FROM {}{}",
+        select.join(", "),
+        input.view,
+        order_by(input.ordered)
+    );
     let workers = input.threads.max(1);
     let mut group: Vec<RecordBatch> = Vec::new();
     let flush = |group: &mut Vec<RecordBatch>, out: &mut BufWriter<File>| -> Result<()> {
@@ -464,17 +482,19 @@ fn write_parquet(conn: &Connection, input: &ExportInput, path: &Path) -> Result<
         })
         .collect();
     conn.execute_batch(&format!(
-        "SET TimeZone = 'UTC'; COPY (SELECT {} FROM {}) TO {} (FORMAT parquet, COMPRESSION snappy)",
+        "SET TimeZone = 'UTC'; COPY (SELECT {} FROM {}{}) TO {} (FORMAT parquet, COMPRESSION snappy)",
         select.join(", "),
         input.view,
+        order_by(input.ordered),
         quote_text(&path.to_string_lossy())
     ))
     .or_else(|_| {
         // A build without time zone support keeps TIMESTAMPTZ in UTC anyway.
         conn.execute_batch(&format!(
-            "COPY (SELECT {} FROM {}) TO {} (FORMAT parquet, COMPRESSION snappy)",
+            "COPY (SELECT {} FROM {}{}) TO {} (FORMAT parquet, COMPRESSION snappy)",
             select.join(", "),
             input.view,
+            order_by(input.ordered),
             quote_text(&path.to_string_lossy())
         ))
     })?;

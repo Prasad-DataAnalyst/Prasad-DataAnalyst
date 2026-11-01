@@ -17,7 +17,7 @@ use crate::rules::{Draft, RowSet, check_packs};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +52,8 @@ pub struct Dataset {
     /// Each rows.exclude entry still in force, with the rows it excluded, ascending. A row is
     /// excluded by exactly one entry.
     pub exclusions: Vec<(u64, Vec<u64>)>,
+    /// Cell edits by (column, row): the value and the entry that set it (the Overlay).
+    pub edits: BTreeMap<(String, u64), (Value, u64)>,
 }
 
 impl Dataset {
@@ -543,7 +545,7 @@ impl Engine {
                 "rowId": rid,
                 "locator": format!("line {loc}"),
                 "cells": cells,
-                "edited": vec![false; cols.len()],
+                "edited": cols.iter().map(|(id, _, _)| d.edits.contains_key(&(id.clone(), r))).collect::<Vec<_>>(),
                 "issue": issue,
             }));
         }
@@ -895,38 +897,140 @@ impl Engine {
     }
 }
 
-/// (Re)creates a dataset's views over its working Parquet files: `<view>__all` with every row, and
-/// `<view>`, which the grid, the checks, the exports and the digests read, without the excluded
-/// rows. The exceptions views follow the same split.
+/// The DuckDB type a column of the working Parquet file has, which an edits table repeats.
+fn sql_type(kind: Kind) -> &'static str {
+    match kind {
+        Kind::String => "VARCHAR",
+        Kind::Integer | Kind::Number => "DOUBLE",
+        Kind::Boolean => "BOOLEAN",
+        Kind::Date => "INTEGER",
+        Kind::DateTime => "BIGINT",
+    }
+}
+
+/// A cell value as a literal of the column's stored type: days for a date, milliseconds for a
+/// date and time. None when the value cannot be stored in the column.
+fn sql_literal(v: &Value, kind: Kind) -> Option<String> {
+    use crate::parse::{DateFormat, parse_date, parse_datetime};
+    if v.is_null() {
+        return Some("NULL".into());
+    }
+    Some(match kind {
+        Kind::String => quote_text(v.as_str()?),
+        Kind::Integer | Kind::Number => {
+            let x = v.as_f64().filter(|x| x.is_finite())?;
+            format!("CAST('{x:?}' AS DOUBLE)")
+        }
+        Kind::Boolean => if v.as_bool()? { "TRUE" } else { "FALSE" }.into(),
+        Kind::Date => parse_date(v["date"].as_str()?, DateFormat::Iso)?.to_string(),
+        Kind::DateTime => parse_datetime(v["datetime"].as_str()?, DateFormat::Iso)?.to_string(),
+    })
+}
+
+/// (Re)creates a dataset's views over its working Parquet files. `<view>__all` has every row with
+/// the cell edits applied, for looking rows up by ID; `<view>`, which the grid, the checks, the
+/// exports and the digests read, leaves the excluded rows out. Its exceptions view also leaves out
+/// edited cells, which keep no source text (checks.ts failedText); `<view>__all__exc` keeps every
+/// row's source text, as an occurrence shows it.
 fn install_views(conn: &Connection, d: &Dataset) -> Result<()> {
     let all = quote_ident(&d.all_view());
     let all_exc = quote_ident(&d.all_exceptions_view());
     let (view, exc) = (quote_ident(&d.view), quote_ident(&d.exceptions_view()));
-    let table_name = format!("{}__excluded", d.view);
-    let table = quote_ident(&table_name);
+    let excluded_name = format!("{}__excluded", d.view);
+    let (excluded, edited) = (
+        quote_ident(&excluded_name),
+        quote_ident(&format!("{}__edited", d.view)),
+    );
+    let rows = format!(
+        "read_parquet({})",
+        quote_text(&d.rows_file.to_string_lossy())
+    );
     conn.execute_batch(&format!(
-        "CREATE OR REPLACE VIEW {all} AS SELECT * FROM read_parquet({rows}); \
-         CREATE OR REPLACE VIEW {all_exc} AS SELECT * FROM read_parquet({excf}); \
-         CREATE OR REPLACE TABLE {table} (rid BIGINT);",
-        rows = quote_text(&d.rows_file.to_string_lossy()),
+        "CREATE OR REPLACE VIEW {all_exc} AS SELECT * FROM read_parquet({excf}); \
+         CREATE OR REPLACE TABLE {excluded} (rid BIGINT); \
+         CREATE OR REPLACE TABLE {edited} (rid BIGINT, col VARCHAR);",
         excf = quote_text(&d.exceptions_file.to_string_lossy()),
     ))?;
-    if d.excluded.count() == 0 {
+    if d.edits.is_empty() {
         conn.execute_batch(&format!(
-            "CREATE OR REPLACE VIEW {view} AS SELECT * FROM {all}; \
-             CREATE OR REPLACE VIEW {exc} AS SELECT * FROM {all_exc};"
+            "CREATE OR REPLACE VIEW {all} AS SELECT * FROM {rows};"
         ))?;
-        return Ok(());
+    } else {
+        let mut select = vec!["b.__rid".to_string(), "b.__loc".to_string()];
+        let mut joins = String::new();
+        for (i, (col, kind)) in d.columns.iter().enumerate() {
+            let q = quote_ident(col);
+            let edits: Vec<(u64, &Value)> = d
+                .edits
+                .range((col.clone(), 0)..=(col.clone(), u64::MAX))
+                .map(|((_, r), (v, _))| (*r, v))
+                .collect();
+            if edits.is_empty() {
+                select.push(format!("b.{q}"));
+                continue;
+            }
+            let table = quote_ident(&format!("{}__e{i}", d.view));
+            conn.execute_batch(&format!(
+                "CREATE OR REPLACE TABLE {table} (rid BIGINT, v {});",
+                sql_type(*kind)
+            ))?;
+            for chunk in edits.chunks(500) {
+                let mut values = Vec::with_capacity(chunk.len());
+                let mut keys = Vec::with_capacity(chunk.len());
+                for (r, v) in chunk {
+                    let lit = sql_literal(v, *kind).ok_or_else(|| {
+                        EngineError::internal(format!(
+                            "An edit of column {col} does not fit its type."
+                        ))
+                    })?;
+                    values.push(format!("({r}, {lit})"));
+                    keys.push(format!("({r}, {})", quote_text(col)));
+                }
+                conn.execute_batch(&format!(
+                    "INSERT INTO {table} VALUES {}; INSERT INTO {edited} VALUES {};",
+                    values.join(", "),
+                    keys.join(", ")
+                ))?;
+            }
+            joins.push_str(&format!(" LEFT JOIN {table} e{i} ON e{i}.rid = b.__rid"));
+            select.push(format!(
+                "CASE WHEN e{i}.rid IS NULL THEN b.{q} ELSE e{i}.v END AS {q}"
+            ));
+        }
+        conn.execute_batch(&format!(
+            "CREATE OR REPLACE VIEW {all} AS SELECT {} FROM {rows} b{joins};",
+            select.join(", ")
+        ))?;
     }
-    {
-        let mut app = conn.appender(&table_name)?;
+    if d.excluded.count() > 0 {
+        let mut app = conn.appender(&excluded_name)?;
         for r in d.excluded.iter() {
             app.append_row(duckdb::params![r as i64])?;
         }
     }
+    let mut keep_rows = Vec::new();
+    let mut keep_exc = Vec::new();
+    if d.excluded.count() > 0 {
+        keep_rows.push(format!("__rid NOT IN (SELECT rid FROM {excluded})"));
+        keep_exc.push(format!("e.rid NOT IN (SELECT rid FROM {excluded})"));
+    }
+    if !d.edits.is_empty() {
+        keep_exc.push(format!(
+            "NOT EXISTS (SELECT 1 FROM {edited} x WHERE x.rid = e.rid AND x.col = e.col)"
+        ));
+    }
+    let filter = |conds: &[String]| {
+        if conds.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conds.join(" AND "))
+        }
+    };
     conn.execute_batch(&format!(
-        "CREATE OR REPLACE VIEW {view} AS SELECT * FROM {all} WHERE __rid NOT IN (SELECT rid FROM {table}); \
-         CREATE OR REPLACE VIEW {exc} AS SELECT * FROM {all_exc} WHERE rid NOT IN (SELECT rid FROM {table});"
+        "CREATE OR REPLACE VIEW {view} AS SELECT * FROM {all}{}; \
+         CREATE OR REPLACE VIEW {exc} AS SELECT e.* FROM {all_exc} e{};",
+        filter(&keep_rows),
+        filter(&keep_exc),
     ))?;
     Ok(())
 }
@@ -1052,6 +1156,17 @@ fn apply_decision(
                 recheck(conn, d, area, seq)?;
             }
         }
+        "cell.edit" => {
+            let area = area_of(&p.project_area);
+            let d = dataset_mut(p, &id)?;
+            let row = e["target"]["rowId"].as_u64().unwrap_or(0);
+            let col = e["target"]["columnId"].as_str().unwrap_or("").to_string();
+            d.edits.insert((col, row), (e["new"].clone(), seq));
+            install_views(conn, d)?;
+            if !skip(&id, seq) {
+                recheck(conn, d, area, seq)?;
+            }
+        }
         "issue.comment" => {
             if skip(&id, seq) {
                 return Ok(());
@@ -1085,6 +1200,24 @@ fn apply_decision(
                 .unwrap_or("")
                 .to_string();
             match target["action"].as_str().unwrap_or("") {
+                "cell.edit" => {
+                    let area = area_of(&p.project_area);
+                    let d = dataset_mut(p, &tid)?;
+                    let row = target["target"]["rowId"].as_u64().unwrap_or(0);
+                    let col = target["target"]["columnId"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    if target["payload"]["previousEditSeq"].is_null() {
+                        d.edits.remove(&(col, row));
+                    } else {
+                        d.edits.insert((col, row), (target["old"].clone(), seq));
+                    }
+                    install_views(conn, d)?;
+                    if !skip(&tid, seq) {
+                        recheck(conn, d, area, seq)?;
+                    }
+                }
                 "issue.accept" => {
                     if skip(&tid, seq) {
                         return Ok(());
@@ -1220,11 +1353,150 @@ const REVERTIBLE: [&str; 6] = [
     "project.area",
 ];
 
+/// What a value of each type looks like, for the fix of a refused edit (decisions.ts EXAMPLES).
+fn example(typ: &str) -> &'static str {
+    match typ {
+        "string" => "any text",
+        "integer" => "a whole number such as 42",
+        "number" => "a number such as 1205.3",
+        "boolean" => "true or false",
+        "date" => "a date such as 2026-01-31",
+        "datetime" => "a date and time such as 2026-01-31T06:00:00Z",
+        _ => "a GeoJSON geometry",
+    }
+}
+
+/// A parsed cell as the protocol carries it.
+fn cell_json(c: &crate::parse::Cell) -> Value {
+    use crate::parse::Cell;
+    match c {
+        Cell::Null => Value::Null,
+        Cell::Text(s) => json!(s),
+        Cell::Number(x) => json!(x),
+        Cell::Bool(b) => json!(b),
+        Cell::Date(days) => json!({ "date": date_text(*days) }),
+        Cell::DateTime(ms) => json!({ "datetime": iso_from_millis(*ms) }),
+    }
+}
+
+/// An edit_cell decision as its cell.edit draft (editDraft): text is parsed with the column's
+/// parser, a value is checked against the column's type.
+fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, Value>> {
+    let reason = reason_of(&d["reason"])?;
+    let id = d["datasetId"].as_str().unwrap_or("");
+    let ds = p.datasets.iter().find(|x| x.id == id).ok_or_else(|| {
+        EngineError::not_found(
+            format!("There is no dataset {id} in this project."),
+            "Choose a listed dataset.",
+        )
+    })?;
+    let row = d["rowId"]
+        .as_f64()
+        .and_then(|r| row_id(r, ds.row_count))
+        .ok_or_else(|| {
+            EngineError::not_found(
+                format!("Dataset {} has no row {}.", ds.id, js_number(&d["rowId"])),
+                "Choose a row shown in the data grid.",
+            )
+        })?;
+    let col = d["columnId"].as_str().unwrap_or("");
+    let plan = ds.spec["columns"]
+        .as_array()
+        .and_then(|cs| cs.iter().find(|c| c["id"] == col))
+        .ok_or_else(|| {
+            EngineError::not_found(
+                format!("Dataset {} has no column {col}.", ds.id),
+                "Choose a listed column.",
+            )
+        })?;
+    let kind = ds
+        .columns
+        .iter()
+        .find(|(c, _)| c == col)
+        .map(|(_, k)| *k)
+        .ok_or_else(|| EngineError::internal(format!("Column {col} has no type.")))?;
+    let typ = plan["type"]["value"].as_str().unwrap_or("string");
+    let name = plan["name"].as_str().unwrap_or(col);
+    let value = if let Some(text) = d["value"]["text"].as_str() {
+        let csv = csv_plan(&ds.spec)?;
+        let parser = &csv
+            .columns
+            .iter()
+            .find(|c| c.id == col)
+            .ok_or_else(|| EngineError::internal(format!("Column {col} has no parser.")))?
+            .parser;
+        match parser.parse(Some(text)) {
+            crate::parse::Parsed::Value(cell, _) => cell_json(&cell),
+            crate::parse::Parsed::Failed(_) => {
+                return Err(EngineError::invalid(
+                    format!("\"{text}\" is not a valid {typ} value for {name}."),
+                    format!("Enter {}.", example(typ)),
+                ));
+            }
+        }
+    } else {
+        let v = d["value"]["value"].clone();
+        let fits = match kind {
+            _ if v.is_null() => true,
+            Kind::Integer => v
+                .as_f64()
+                .is_some_and(|x| x.fract() == 0.0 && x.abs() <= 9_007_199_254_740_991.0),
+            _ => {
+                sql_literal(&v, kind).is_some()
+                    && match kind {
+                        Kind::Date => v.as_object().is_some_and(|o| o.len() == 1),
+                        Kind::DateTime => v.as_object().is_some_and(|o| o.len() == 1),
+                        _ => true,
+                    }
+            }
+        };
+        if !fits {
+            return Err(EngineError::invalid(
+                format!("The value does not fit {name}, which holds {typ} values."),
+                format!("Enter {}.", example(typ)),
+            ));
+        }
+        v
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT __loc, {} FROM {} WHERE __rid = ?",
+        quote_ident(col),
+        quote_ident(&ds.all_view())
+    ))?;
+    let mut rows = stmt.query(duckdb::params![row as i64])?;
+    let (loc, old) = match rows.next()? {
+        Some(r) => (r.get::<_, i64>(0)?, Engine::cell(r, 1, kind)?),
+        None => {
+            return Err(EngineError::internal(format!(
+                "Row {row} of dataset {} is missing.",
+                ds.id
+            )));
+        }
+    };
+    let previous = ds.edits.get(&(col.to_string(), row)).map(|(_, by)| *by);
+    let mut target = json!({
+        "datasetId": ds.id,
+        "rowId": row,
+        "columnId": col,
+        "locator": format!("line {loc}, field {}", plan["sourceIndex"].as_u64().unwrap_or(0) + 1),
+    });
+    if let Some(issue) = d.get("issueId").filter(|v| !v.is_null()) {
+        target["issueId"] = issue.clone();
+    }
+    let mut e = draft("cell.edit", target);
+    e.insert("old".into(), old);
+    e.insert("new".into(), value);
+    e.insert("reason".into(), json!(reason));
+    e.insert("payload".into(), json!({ "previousEditSeq": previous }));
+    Ok(e)
+}
+
 /// Validates a decision and turns it into its audit draft, as decisions.ts does. Edits and
 /// detection overrides are refused until the native engine has steps and overrides.
-fn decision_draft(p: &Project, d: &Value) -> Result<Map<String, Value>> {
+fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, Value>> {
     let kind = d["kind"].as_str().unwrap_or("");
     let entry = match kind {
+        "edit_cell" => edit_draft(conn, p, d)?,
         "accept_issue" => {
             let reason = reason_of(&d["reason"])?;
             let (ds, st) = issue_of(p, &d["issueId"])?;
@@ -1398,6 +1670,30 @@ fn decision_draft(p: &Project, d: &Value) -> Result<Map<String, Value>> {
                     "Choose another entry.",
                 ));
             }
+            if action == "cell.edit" {
+                let key = (
+                    target["target"]["columnId"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    target["target"]["rowId"].as_u64().unwrap_or(0),
+                );
+                let current = p
+                    .datasets
+                    .iter()
+                    .find(|x| *dataset == x.id.as_str())
+                    .and_then(|x| x.edits.get(&key))
+                    .map(|(_, by)| *by);
+                if current != Some(seq) {
+                    return Err(EngineError::invalid(
+                        format!(
+                            "A later change (entry {}) replaced the value entry {seq} wrote.",
+                            current.map_or("unknown".to_string(), |s| s.to_string())
+                        ),
+                        "Revert the later change first, or edit the cell again.",
+                    ));
+                }
+            }
             let mut t = json!({ "seq": seq });
             if dataset.is_string() {
                 t["datasetId"] = dataset.clone();
@@ -1406,7 +1702,7 @@ fn decision_draft(p: &Project, d: &Value) -> Result<Map<String, Value>> {
             e.insert("reason".into(), json!(reason));
             e
         }
-        "edit_cell" | "override_detection" => {
+        "override_detection" => {
             return Err(EngineError::unsupported(format!("{kind} decisions")));
         }
         other => {
@@ -1427,7 +1723,7 @@ pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
-    let draft = decision_draft(engine.writable()?, d)?;
+    let draft = decision_draft(&engine.conn, engine.writable()?, d)?;
     let entry = engine.append(draft, None)?;
     let reverted = engine
         .project()?
@@ -1628,6 +1924,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         workdir: engine.workdir.join(&project_id),
         target,
         threads: engine.threads,
+        ordered: !d.edits.is_empty(),
         neutralize: req["neutralizeFormulas"] == true,
     };
     // In the order the TypeScript engine draws them, so seeded runs give the same IDs and times.
@@ -1794,6 +2091,8 @@ struct SavedDataset {
     rows: u64,
     /// Rows in the working view, which the digest covers.
     visible: u64,
+    /// Whether the view joins cell edits, so reading it in row order needs ORDER BY.
+    edited: bool,
     view: String,
     columns: Vec<crate::export::OutColumn>,
     rows_file: PathBuf,
@@ -1824,6 +2123,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             name: d.name.clone(),
             rows: d.row_count,
             visible: d.visible_rows(),
+            edited: !d.edits.is_empty(),
             view: quote_ident(&d.view),
             columns: out_columns(d),
             rows_file: d.rows_file.clone(),
@@ -1885,8 +2185,9 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             let mut digests = Vec::new();
             for d in &datasets {
                 progress("Computing the dataset digests", 0);
-                let sha =
-                    crate::export::dataset_digest(&conn, &d.view, &d.columns, d.visible, threads)?;
+                let sha = crate::export::dataset_digest(
+                    &conn, &d.view, d.edited, &d.columns, d.visible, threads,
+                )?;
                 digests.push(json!({ "id": d.id, "name": d.name, "rowCount": d.rows, "workingDigest": sha, "outputDigest": sha }));
                 if cancel.load(Ordering::Relaxed) {
                     return Err(cancelled());
@@ -2363,6 +2664,7 @@ fn commit_import(
         source_seq,
         excluded: RowSet::new(imported.row_count),
         exclusions: Vec::new(),
+        edits: BTreeMap::new(),
     };
     install_views(&engine.conn, &dataset)?;
     let summary = Engine::dataset_summary(&dataset);
@@ -2610,6 +2912,7 @@ impl Reopen<'_> {
             source_seq: seq,
             excluded: RowSet::new(restored.row_count),
             exclusions: Vec::new(),
+            edits: BTreeMap::new(),
         });
         if let Some(d) = p.datasets.last() {
             install_views(self.conn, d)?;
@@ -2855,8 +3158,8 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                                     CheckReplay::Superseded => {}
                                 })
                         }
-                        "issue.accept" | "rows.exclude" | "issue.comment" | "project.area"
-                        | "entry.revert" => {
+                        "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
+                        | "project.area" | "entry.revert" => {
                             let reverted = log.entries().iter().find(|x| {
                                 e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]
                             });
@@ -2902,7 +3205,7 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                     let saved: Vec<Value> = manifest["datasets"].as_array().cloned().unwrap_or_default();
                     for d in &p.datasets {
                         progress("Comparing the dataset digests", 0);
-                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), &out_columns(d), d.visible_rows(), threads)?;
+                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), !d.edits.is_empty(), &out_columns(d), d.visible_rows(), threads)?;
                         match saved.iter().find(|s| s["id"] == d.id.as_str()) {
                             None => bad.push(format!("the audit log builds dataset {}, which the manifest does not list", d.id)),
                             Some(s) if s["rowCount"].as_u64() != Some(d.row_count) => bad.push(format!("dataset {} has {} rows instead of the {} saved", d.id, d.row_count, s["rowCount"])),
