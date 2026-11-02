@@ -123,9 +123,9 @@ export interface ImportRequestOptions {
   columnOverrides?: ColumnOverride[];
   overrideReason?: string;
   /**
-   * The preview the user reviewed (protocol 0.2). An engine that plans imports itself (the
-   * TypeScript engine) plans again and gets the same result; an engine that executes plans (the
-   * native engine) imports exactly this plan, so detection is written once (decision D-12).
+   * The preview the user reviewed (protocol 0.2). Both engines plan the import again from the
+   * file and get the same result, since detection is deterministic; the native engine imported
+   * exactly this plan until it gained its own detection (decision D-12, revised).
    */
   preview?: ImportPreview;
   /**

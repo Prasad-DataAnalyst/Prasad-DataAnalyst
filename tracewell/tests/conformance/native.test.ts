@@ -8,7 +8,9 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuditLog } from '@tw/audit';
-import { PROTOCOL_VERSION, type EngineClient } from '@tw/engine-api';
+import { EngineClient, inProcessTransport, PROTOCOL_VERSION } from '@tw/engine-api';
+import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
+import { nodeFs } from '@tw/io/node';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
 import { readBack } from '@tw/export';
 import { readZip } from '@tw/io';
@@ -21,6 +23,7 @@ import {
   type Issue,
   type IssueOccurrence,
   type ImportPreview,
+  type MappingTemplate,
   type ProjectManifest,
   type Decision,
   type Recipe,
@@ -841,6 +844,202 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     expect(await list(native.client)).toEqual(await list(reference));
   });
 
+  it('previews delimited files the same way: detection, settings, templates and refusals', async () => {
+    const settle = (e: EngineClient, run: (e: EngineClient) => Promise<unknown>) =>
+      run(e).then(
+        (v) => v,
+        (err: { code: string; message: string }) => ({ code: err.code, message: err.message }),
+      );
+    const same = async (label: string, run: (e: EngineClient) => Promise<unknown>, a = native.client, b = reference) =>
+      expect(await settle(a, run), label).toEqual(await settle(b, run));
+
+    // Every fixture as detected, with the mapping template both engines now hold.
+    for (const name of CSV_FIXTURES) {
+      await same(name, (e) => e.sniff({ kind: 'path', path: fixturePath(name) }));
+    }
+
+    // Files longer than the first MiB the preview reads: the sample stops at the last whole line,
+    // a quoted field open at the cut is left out, the row count is estimated, and a character cut
+    // in two leaves the encoding assumed.
+    const folder = mkdtempSync(join(tmpdir(), 'tw-preview-'));
+    try {
+      const golden = readFileSync(fixturePath('csv_well_daily_golden.csv'), 'utf8').replace(/[^\t\n\r -~]/g, '');
+      const [head, ...rows] = golden.split('\n').filter((l) => l !== '');
+      const long = (n: number, tweak: (l: string, i: number) => string = (l) => l) =>
+        `${[head, ...Array.from({ length: n }, (_, i) => tweak(rows[i % rows.length] as string, i))].join('\n')}\n`;
+      const text = long(20_000);
+      const cut = 1_048_576;
+      const files: [string, string][] = [
+        ['long.csv', text],
+        [
+          'long_ragged.csv',
+          long(20_000, (l, i) =>
+            i % 700 === 3 ? `${l},extra` : i % 900 === 5 ? l.split(',').slice(0, 4).join(',') : l,
+          ),
+        ],
+        ['long_semicolon.txt', long(20_000, (l) => l.replace(/,/g, ';').replace(/\./g, ','))],
+        ['long_open_quote.csv', `${text.slice(0, cut - 40)}"open${'x'.repeat(100)}\n${text.slice(cut - 40)}`],
+        ['long_cut_character.csv', `${text.slice(0, cut - 1)}\u00e9${text.slice(cut - 1)}`],
+        ['long_crlf.dat', text.replace(/\n/g, '\r\n')],
+        ['units_row.csv', 'name,depth,rate\n,[m],(bbl/d)\nW1,100,2\nW2,200,3\n'],
+        ['title_block', 'Daily report\nExported 2025-12-01\n\na;b;c\n1,5;2.000,25;3\n4,5;5;6\n'],
+        ['single_quotes.csv', "x;y\n'a;b';c\n'd';e\n"],
+        ['no_delimiter.csv', 'only\none\ncolumn\n'],
+        ['empty.csv', ''],
+      ];
+      for (const [name, body] of files) {
+        const path = join(folder, name);
+        writeFileSync(path, body);
+        await same(name, (e) => e.sniff({ kind: 'path', path }));
+      }
+      // windows-1252 bytes in otherwise ASCII text.
+      const latin = join(folder, 'latin.csv');
+      writeFileSync(latin, Uint8Array.from([...Buffer.from('name,temp\nW1,20\nCaf'), 0xe9, ...Buffer.from(',21\n')]));
+      await same('latin.csv', (e) => e.sniff({ kind: 'path', path: latin }));
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+
+    // Settings chosen in the import settings are taken as given; invalid ones are refused alike.
+    const delimited = [
+      'csv_well_daily_golden.csv',
+      'csv_semicolon_decimalcomma_cp1252.csv',
+      'tsv_utf16le_bom.tsv',
+    ] as const;
+    for (const name of delimited) {
+      const file = { kind: 'path' as const, path: fixturePath(name) };
+      const { options } = (await reference.sniff(file, { template: null })).sniff;
+      if (options.format !== 'csv' && options.format !== 'tsv') throw new Error(`${name} is not delimited text`);
+      const changes: Partial<typeof options.csv>[] = [
+        {},
+        { delimiter: ';', headerRows: 2 },
+        { delimiter: '|', headerRows: 0, skipLines: 1 },
+        { decimalSeparator: ',', thousandsSeparator: '.' },
+        { encoding: 'windows-1252', bomLength: 0 },
+        { encoding: 'utf-16le', bomLength: 0 },
+        { decimalSeparator: ',', thousandsSeparator: ',' },
+      ];
+      for (const change of changes) {
+        const chosen = { ...options, csv: { ...options.csv, ...change } };
+        await same(`${name} ${JSON.stringify(change)}`, (e) => e.sniff(file, { options: chosen, template: null }));
+      }
+    }
+
+    // A file sent as bytes reads as the same file on disk.
+    const bytes = new Uint8Array(readFileSync(fixturePath('csv_null_markers.csv')));
+    await same('upload', (e) => e.sniff({ kind: 'bytes', name: 'upload.csv', bytes }));
+
+    // Templates: the one covering the most columns, then the newest; its changes are applied and
+    // credited to it; a chosen template that does not fit, or does not exist, is refused alike.
+    const goldenFile = { kind: 'path' as const, path: fixturePath('csv_well_daily_golden.csv') };
+    const plain = await reference.sniff(goldenFile, { template: null });
+    const columns: MappingTemplate['columns'] = plain.columns.map((c) => ({
+      sourceHeader: [...c.sourceHeader],
+      name: c.name,
+      type: c.type.value,
+      unit: c.unit.value,
+      role: c.role.value,
+      nullMarkers: [...c.nullMarkers.value],
+      ...(c.dateFormat === undefined ? {} : { dateFormat: c.dateFormat.value }),
+      ...(c.timezone === undefined ? {} : { timezone: c.timezone.value }),
+    }));
+    const changed = columns.map((c, i) => {
+      if (i === 0) return { ...c, name: 'Well' };
+      if (i === 1) return { ...c, dateFormat: 'dmy' as const, timezone: 'utc' as const };
+      if (i === 2) return { ...c, role: 'measure' as const };
+      if (i === 3) return { ...c, type: 'string' as const };
+      if (i === 4) return { ...c, unit: 'kPa' };
+      if (i === 5) return { ...c, unit: null };
+      if (i === 6) return { ...c, nullMarkers: ['-999.25', 'n/a'] };
+      return c;
+    });
+    const template = (
+      id: string,
+      name: string,
+      savedAt: string,
+      cols: MappingTemplate['columns'],
+    ): MappingTemplate => ({
+      id,
+      name,
+      savedFrom: { fileName: 'csv_well_daily_golden.csv', format: 'csv' },
+      columns: cols,
+      savedAt,
+      savedBy: 'Prasad',
+    });
+    const templates = [
+      template('mt_00000000000a', 'As detected', '2026-01-01T00:00:00.000Z', columns),
+      template('mt_00000000000b', 'Hand made', '2026-02-01T00:00:00.000Z', changed),
+      template('mt_00000000000c', 'Two columns', '2026-03-01T00:00:00.000Z', changed.slice(0, 2)),
+      template('mt_00000000000d', 'Not this file', '2026-03-01T00:00:00.000Z', [
+        { ...columns[0], sourceHeader: ['Nope'] } as MappingTemplate['columns'][number],
+      ]),
+      template(
+        'mt_00000000000e',
+        'Unknown unit',
+        '2025-01-01T00:00:00.000Z',
+        changed.map((c, i) => (i === 4 ? { ...c, unit: 'furlong' } : c)),
+      ),
+    ];
+    const home = mkdtempSync(join(tmpdir(), 'tw-templates-'));
+    const store = join(home, 'mapping-templates.json');
+    writeFileSync(store, JSON.stringify({ format: 'tracewell-mapping-templates', version: 1, templates }));
+    const withStore = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad', '--templates', store]);
+    const lite = new EngineClient(
+      inProcessTransport(
+        new LocalEngine({
+          appVersion: '0.1.0',
+          owner: 'Prasad',
+          clock: fixedClock(START),
+          ids: seededIds(1),
+          fs: nodeFs(),
+          templates: { load: () => Promise.resolve(structuredClone(templates)), save: () => Promise.resolve() },
+        }),
+      ),
+    );
+    try {
+      const choices: (string | null | undefined)[] = [
+        undefined,
+        null,
+        'mt_00000000000a',
+        'mt_00000000000c',
+        'mt_00000000000d',
+        'mt_00000000000e',
+        'mt_ffffffffffff',
+      ];
+      for (const choice of choices) {
+        const o = choice === undefined ? {} : { template: choice as never };
+        await same(`template ${String(choice)}`, (e) => e.sniff(goldenFile, o), withStore.client, lite);
+      }
+      const matched = await withStore.client.sniff(goldenFile);
+      expect(matched.template?.name).toBe('Hand made');
+      expect(matched.columns[0]?.name).toBe('Well');
+      expect(matched.columns[4]?.unit).toMatchObject({ value: 'kPa', method: 'mapping-template' });
+      expect(matched.crs).toBeNull();
+      const other = { kind: 'path' as const, path: fixturePath('csv_pipe_delimited.csv') };
+      await same('no template fits', (e) => e.sniff(other), withStore.client, lite);
+
+      // Imports plan themselves and choose the same template; one that changes columns is refused.
+      await withStore.client.newProject({ name: 'Templates', profile: { ...PROFILE } });
+      await lite.newProject({ name: 'Templates', profile: { ...PROFILE } });
+      await expect(withStore.client.importFile(goldenFile)).rejects.toMatchObject({ code: 'PROTOCOL_MISMATCH' });
+      for (const choice of [null, 'mt_00000000000a']) {
+        const o = { template: choice as never };
+        const nat = await withStore.client.awaitJob<DatasetSummary>(await withStore.client.importFile(goldenFile, o));
+        const ref = await lite.awaitJob<DatasetSummary>(await lite.importFile(goldenFile, o));
+        expect(await withStore.client.getSchema(nat.id)).toEqual(await lite.getSchema(ref.id));
+        expect(digests(await allRows(withStore.client, nat.id), nat.columnCount)).toEqual(
+          digests(await allRows(lite, ref.id), ref.columnCount),
+        );
+      }
+      const audit = async (e: EngineClient) => (await e.listAudit({})).items.map(content);
+      expect(await audit(withStore.client)).toEqual(await audit(lite));
+    } finally {
+      stopNative(withStore);
+      lite.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('saves, plans and runs recipes the same way, with the same deltas and refusals', async () => {
     const golden = pairs.get('csv_well_daily_golden.csv') as { nat: string; ref: string };
     const dates = pairs.get('csv_dates_ambiguous_and_mixed.csv') as { nat: string; ref: string };
@@ -1239,18 +1438,17 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
   });
 
   it('refuses what it does not support yet with a reason and a fix', async () => {
-    await expect(
-      native.client.sniff({ kind: 'path', path: fixturePath('csv_pipe_delimited.csv') }),
-    ).rejects.toMatchObject({
+    await expect(native.client.sniff({ kind: 'path', path: fixturePath('xlsx_date1904.xlsx') })).rejects.toMatchObject({
       code: 'PROTOCOL_MISMATCH',
       fix: expect.any(String),
     });
+    // Changed import settings are recorded as decisions, which the native import cannot write yet.
+    const pipe = { kind: 'path' as const, path: fixturePath('csv_pipe_delimited.csv') };
+    const { options } = (await reference.sniff(pipe, { template: null })).sniff;
+    if (options.format !== 'csv') throw new Error('The pipe-delimited fixture is not read as CSV.');
     await expect(
-      native.client.importFile({ kind: 'path', path: fixturePath('csv_pipe_delimited.csv') }),
-    ).rejects.toMatchObject({
-      code: 'INVALID_INPUT',
-      fix: expect.stringContaining('Preview'),
-    });
+      native.client.importFile(pipe, { options: { ...options, csv: { ...options.csv, headerRows: 2 } } }),
+    ).rejects.toMatchObject({ code: 'PROTOCOL_MISMATCH', message: expect.stringContaining('changed import settings') });
   });
 });
 

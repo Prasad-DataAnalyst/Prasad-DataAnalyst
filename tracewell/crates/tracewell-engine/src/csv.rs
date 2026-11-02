@@ -185,6 +185,41 @@ impl TableReader {
         self.header.first().map(|(fields, _)| fields.as_slice())
     }
 
+    /// Every header row read so far, at the table's width (TableAssembler.header).
+    pub fn header_rows(&self) -> Vec<Vec<String>> {
+        let width = if self.started {
+            self.width
+        } else {
+            let named = self
+                .header
+                .iter()
+                .map(|(row, _)| row.iter().rposition(|f| !f.is_empty()).map_or(0, |i| i + 1))
+                .max()
+                .unwrap_or(0);
+            self.header
+                .first()
+                .map_or(0, |(row, _)| row.len().max(named))
+        };
+        self.header
+            .iter()
+            .map(|(row, _)| {
+                let mut out: Vec<String> = row.iter().take(width).cloned().collect();
+                out.resize(width, String::new());
+                out
+            })
+            .collect()
+    }
+
+    /// Every batch so far, the one being filled included, for a sample read only partly.
+    pub fn take_all(&mut self) -> Vec<RowBatch> {
+        let mut out = std::mem::take(&mut self.full);
+        if self.batch.rows() > 0 {
+            let next = RowBatch::new(self.width, self.batch_rows);
+            out.push(std::mem::replace(&mut self.batch, next));
+        }
+        out
+    }
+
     /// Batches completed so far.
     pub fn take_batches(&mut self) -> Vec<RowBatch> {
         std::mem::take(&mut self.full)

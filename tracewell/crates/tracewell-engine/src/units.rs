@@ -350,6 +350,483 @@ pub fn registry_version() -> String {
         .unwrap_or_default()
 }
 
+// ---------------------------------------------------------------------------------------------
+// The unit a column header names (header.ts parseHeaderUnit, reference.ts referenceNote)
+
+/// What a header says: the column name and, when it names one, the unit as a detection.
+pub struct HeaderUnit {
+    pub name: String,
+    pub unit: Option<Value>,
+}
+
+/// A detection as detection() builds it: assumed unless the confidence is high.
+fn detected(value: &str, confidence: &str, method: &str, evidence: String) -> Value {
+    serde_json::json!({
+        "value": value,
+        "confidence": confidence,
+        "assumed": confidence != "high",
+        "source": "detected",
+        "method": method,
+        "evidence": evidence,
+    })
+}
+
+const WORDS_NOT_UNITS: [&str; 10] = [
+    "min", "in", "hp", "mw", "meter", "meters", "second", "day", "hour", "minute",
+];
+const OPENING: &str = "([{\u{ff08}\u{ff3b}\u{ff5b}";
+const CLOSING: &str = ")]}\u{ff09}\u{ff3d}\u{ff5d}";
+const MAX_UNIT_TEXT: usize = 64;
+
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+fn is_separator(c: char) -> bool {
+    is_js_space(c) || "_,;:/|\u{2013}\u{2014}-".contains(c)
+}
+
+fn strip_trailing(text: &str) -> &str {
+    text.trim_end_matches(is_separator)
+}
+
+fn is_letter(c: char) -> bool {
+    static LETTER: OnceLock<regex::Regex> = OnceLock::new();
+    let re = LETTER.get_or_init(|| regex::Regex::new(r"^\p{L}$").expect("letter pattern"));
+    let mut buf = [0u8; 4];
+    re.is_match(c.encode_utf8(&mut buf))
+}
+
+/// The last `n` characters of a text.
+fn last_chars(text: &str, n: usize) -> &str {
+    let count = text.chars().count();
+    match text.char_indices().nth(count.saturating_sub(n)) {
+        Some((i, _)) if count > n => &text[i..],
+        _ => text,
+    }
+}
+
+/// A trailing ' in' left before a unit ('Rate in m3/d') belongs to the unit, except after 'shut'.
+fn drop_dangling_in(text: &str) -> String {
+    let tail: Vec<char> = last_chars(text, 3).chars().collect();
+    let dangling = tail.len() == 3
+        && is_js_space(tail[0])
+        && tail[1].eq_ignore_ascii_case(&'i')
+        && tail[2].eq_ignore_ascii_case(&'n');
+    if !dangling {
+        return text.to_string();
+    }
+    let cut: String = {
+        let n = text.chars().count();
+        text.chars().take(n - 2).collect()
+    };
+    let before = strip_trailing(&cut).to_string();
+    let five: Vec<char> = last_chars(&before, 5).chars().collect();
+    let lower: String = five.iter().collect::<String>().to_lowercase();
+    let shut = lower.ends_with("shut")
+        && (five.len() == 4 || five.len() >= 5 && !is_letter(five[five.len() - 5]));
+    if shut { text.to_string() } else { before }
+}
+
+fn clean_name(text: &str, before_suffix: bool) -> String {
+    let stripped = strip_trailing(text);
+    let name = if before_suffix {
+        drop_dangling_in(stripped)
+    } else {
+        stripped.to_string()
+    };
+    js_trim(&name).to_string()
+}
+
+fn is_single_letter(raw: &str) -> bool {
+    let n = normalize_unit_text(raw);
+    let mut chars = n.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if is_letter(c))
+}
+
+fn is_word_not_unit(raw: &str) -> bool {
+    WORDS_NOT_UNITS.contains(&normalize_unit_text(raw).to_lowercase().as_str())
+}
+
+fn quoted(raw: &str, unit: &Unit) -> String {
+    if raw == unit.code {
+        format!("\"{raw}\"")
+    } else {
+        format!("\"{raw}\" ({})", unit.code)
+    }
+}
+
+fn pressure_words(word: &str) -> Option<&'static str> {
+    Some(match word {
+        "absolute" | "abs" => "pressure_abs",
+        "gauge" | "gage" => "pressure_gauge",
+        "differential" | "difference" | "diff" | "delta" | "δ" | "dp" | "δp" => "pressure_diff",
+        _ => return None,
+    })
+}
+
+fn temperature_words(word: &str) -> Option<&'static str> {
+    Some(match word {
+        "differential" | "difference" | "diff" | "delta" | "δ" | "dt" | "δt" => {
+            "temperature_diff"
+        }
+        _ => return None,
+    })
+}
+
+/// The quantities a header states in words, each with the first word that states it.
+fn stated_quantities(
+    header: &str,
+    words: fn(&str) -> Option<&'static str>,
+    pressure: bool,
+) -> Vec<(&'static str, String)> {
+    static SPLIT: OnceLock<regex::Regex> = OnceLock::new();
+    static GAUGE: OnceLock<regex::Regex> = OnceLock::new();
+    let split = SPLIT.get_or_init(|| regex::Regex::new(r"[^\p{L}\p{N}]+").expect("split pattern"));
+    let mut stated: Vec<(&'static str, String)> = Vec::new();
+    let text = header.replace('\u{2206}', "\u{394}");
+    for word in split.split(&text) {
+        if let Some(q) = words(&word.to_lowercase())
+            && !stated.iter().any(|(s, _)| *s == q)
+        {
+            stated.push((q, word.to_string()));
+        }
+    }
+    if pressure {
+        let gauge = GAUGE.get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)[(\[{\x{ff08}\x{ff3b}\x{ff5b}]\s*g\s*[)\]}\x{ff09}\x{ff3d}\x{ff5d}]",
+            )
+            .expect("gauge pattern")
+        });
+        if let Some(m) = gauge.find(header)
+            && !stated.iter().any(|(s, _)| *s == "pressure_gauge")
+        {
+            stated.push(("pressure_gauge", m.as_str().to_string()));
+        }
+    }
+    stated
+}
+
+fn either(codes: &[String]) -> String {
+    match codes.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => codes.first().cloned().unwrap_or_default(),
+    }
+}
+
+fn suggestion(unit: &Unit, quantity: &str) -> String {
+    let candidates: Vec<&Unit> = all_units().filter(|u| u.quantity == quantity).collect();
+    let same_scale: Vec<&&Unit> = candidates
+        .iter()
+        .filter(|u| u.factor == unit.factor)
+        .collect();
+    let twin = same_scale
+        .iter()
+        .find(|u| u.code.contains(&unit.code))
+        .or(same_scale.first());
+    match twin {
+        Some(u) => u.code.clone(),
+        None => either(
+            &candidates
+                .iter()
+                .map(|u| u.code.clone())
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
+/// Reads the quantity a word in a header names.
+type QuantityWords = fn(&str) -> Option<&'static str>;
+
+/// Whether the header leaves the unit's reference in doubt, and what to add to the evidence.
+fn reference_note(header: &str, raw: &str, unit: &Unit) -> (bool, String) {
+    let (words, pressure): (Option<QuantityWords>, bool) = match unit.quantity.as_str() {
+        "pressure_abs" | "pressure_gauge" | "pressure_diff" => (Some(pressure_words), true),
+        "temperature" | "temperature_diff" => (Some(temperature_words), false),
+        _ => (None, false),
+    };
+    let stated = words.map_or_else(Vec::new, |w| stated_quantities(header, w, pressure));
+    if let Some((q, word)) = stated.first()
+        && !stated.iter().any(|(s, _)| *s == unit.quantity)
+    {
+        let wanted = quantity_label(q);
+        return (
+            true,
+            format!(
+                " The header also says \"{word}\", which points to {wanted}, while {} measures {}. If the values are {wanted}, set the unit to {}.",
+                unit.code,
+                quantity_label(&unit.quantity),
+                suggestion(unit, q)
+            ),
+        );
+    }
+    let gauge = if unit.code == "psi" {
+        Some("psig")
+    } else if unit.code == "bar" && lookup_key(raw) == "bar" {
+        Some("barg")
+    } else {
+        None
+    };
+    let Some(gauge) = gauge else {
+        return (false, String::new());
+    };
+    if let Some((_, absolute)) = stated.iter().find(|(q, _)| *q == "pressure_abs") {
+        return (
+            false,
+            format!(
+                " The header says \"{absolute}\", so \"{raw}\" is read as an absolute pressure."
+            ),
+        );
+    }
+    (
+        true,
+        format!(
+            " \"{raw}\" does not say whether the pressure is gauge or absolute, so it is read as absolute. If the readings are gauge, set the unit to {gauge}."
+        ),
+    )
+}
+
+fn found(
+    header: &str,
+    raw: &str,
+    name: String,
+    unit: &Unit,
+    confidence: &str,
+    method: &str,
+    evidence: String,
+) -> HeaderUnit {
+    let (doubt, note) = reference_note(header, raw, unit);
+    let confidence = if doubt && confidence == "high" {
+        "medium"
+    } else {
+        confidence
+    };
+    HeaderUnit {
+        name,
+        unit: Some(detected(&unit.code, confidence, method, evidence + &note)),
+    }
+}
+
+fn unit_text(raw: &str) -> Option<&'static Unit> {
+    if utf16_len(raw) > MAX_UNIT_TEXT {
+        None
+    } else {
+        find_unit(raw)
+    }
+}
+
+/// Bracketed groups at the top level, as (start, end, content) in characters.
+fn bracket_groups(chars: &[char]) -> Vec<(usize, usize, String)> {
+    let mut groups = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    for (i, ch) in chars.iter().enumerate() {
+        if OPENING.contains(*ch) {
+            open.push(i);
+        }
+        if !CLOSING.contains(*ch) {
+            continue;
+        }
+        if let Some(start) = open.pop()
+            && open.is_empty()
+        {
+            groups.push((start, i + 1, chars[start + 1..i].iter().collect()));
+        }
+    }
+    groups
+}
+
+fn from_brackets(text: &str) -> Option<HeaderUnit> {
+    let chars: Vec<char> = text.chars().collect();
+    let units: Vec<((usize, usize), String, &Unit)> = bracket_groups(&chars)
+        .into_iter()
+        .filter_map(|(start, end, content)| {
+            let raw = js_trim(&content).to_string();
+            unit_text(&raw).map(|u| ((start, end), raw, u))
+        })
+        .collect();
+    let ((start, end), raw, unit) = units.last()?;
+    let before: String = chars[..*start].iter().collect();
+    let after_text: String = chars[*end..].iter().collect();
+    let after = js_trim(&after_text);
+    let glue = if after.starts_with([',', ';', ':', '.']) {
+        ""
+    } else {
+        " "
+    };
+    let name = clean_name(
+        &format!("{}{glue}{after}", clean_name(&before, false)),
+        false,
+    );
+    let name = if name.is_empty() {
+        text.to_string()
+    } else {
+        name
+    };
+    let mut others: Vec<String> = Vec::new();
+    for (_, _, u) in &units {
+        if u.code != unit.code && !others.contains(&u.code) {
+            others.push(u.code.clone());
+        }
+    }
+    let evidence = format!(
+        "The header \"{text}\" gives the unit {} in brackets.",
+        quoted(raw, unit)
+    );
+    if others.is_empty() {
+        return Some(found(
+            text,
+            raw,
+            name,
+            unit,
+            "high",
+            "header-brackets",
+            evidence,
+        ));
+    }
+    let conflict = format!(
+        " Another bracket also names {}, so the last one is taken as a guess.",
+        others.join(", ")
+    );
+    Some(found(
+        text,
+        raw,
+        name,
+        unit,
+        "medium",
+        "header-brackets",
+        evidence + &conflict,
+    ))
+}
+
+fn suffix_unit(raw: &str) -> Option<&'static Unit> {
+    if is_word_not_unit(raw) {
+        return None;
+    }
+    find_unit(raw).or_else(|| {
+        raw.contains('_')
+            .then(|| find_unit(&raw.replace('_', "/")))
+            .flatten()
+    })
+}
+
+/// Runs of characters that are not white space or one of `stops`, as (start byte, text).
+fn tokens<'a>(text: &'a str, stops: &str) -> Vec<(usize, &'a str)> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        let stop = is_js_space(c) || stops.contains(c);
+        match (stop, start) {
+            (true, Some(s)) => {
+                out.push((s, &text[s..i]));
+                start = None;
+            }
+            (false, None) => start = Some(i),
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push((s, &text[s..]));
+    }
+    out
+}
+
+fn from_suffix(text: &str) -> Option<HeaderUnit> {
+    let toks = tokens(text, "_,;");
+    for i in 1..toks.len() {
+        let start = toks[i].0;
+        if utf16_len(&text[start..]) > MAX_UNIT_TEXT {
+            continue;
+        }
+        let raw = js_trim(&text[start..]);
+        let Some(unit) = suffix_unit(raw) else {
+            continue;
+        };
+        let name = clean_name(&text[..start], true);
+        if name.is_empty() {
+            continue;
+        }
+        let single = is_single_letter(raw);
+        let guess = if single {
+            " A single letter is often not a unit, so this is a guess."
+        } else {
+            ""
+        };
+        if toks[i - 1].1 == "/" {
+            let evidence = format!(
+                "The header \"{text}\" gives the unit {} after \" / \", as a units row does.{guess}",
+                quoted(raw, unit)
+            );
+            return Some(found(
+                text,
+                raw,
+                name,
+                unit,
+                if single { "medium" } else { "high" },
+                "header-unit-row",
+                evidence,
+            ));
+        }
+        let evidence = format!(
+            "The header \"{text}\" ends with {}, read as its unit.{guess}",
+            quoted(raw, unit)
+        );
+        return Some(if single {
+            found(
+                text,
+                raw,
+                text.to_string(),
+                unit,
+                "low",
+                "header-suffix",
+                evidence,
+            )
+        } else {
+            found(text, raw, name, unit, "medium", "header-suffix", evidence)
+        });
+    }
+    None
+}
+
+fn from_word(text: &str) -> Option<HeaderUnit> {
+    let stops = "_,;()[]{}\u{ff08}\u{ff09}\u{ff3b}\u{ff3d}\u{ff5b}\u{ff5d}";
+    for (_, word) in tokens(text, stops).into_iter().rev() {
+        if utf16_len(word) > MAX_UNIT_TEXT || is_single_letter(word) || is_word_not_unit(word) {
+            continue;
+        }
+        let Some(unit) = find_unit(word) else {
+            continue;
+        };
+        let evidence = format!(
+            "The header \"{text}\" contains the word {}, which may be its unit.",
+            quoted(word, unit)
+        );
+        return Some(found(
+            text,
+            word,
+            text.to_string(),
+            unit,
+            "low",
+            "header-word",
+            evidence,
+        ));
+    }
+    None
+}
+
+/// The column name and unit a header gives (parseHeaderUnit): a unit in brackets, then a unit
+/// suffix, then a unit word anywhere, each with its evidence.
+pub fn parse_header_unit(header: &str) -> HeaderUnit {
+    let text = js_trim(header);
+    from_brackets(text)
+        .or_else(|| from_suffix(text))
+        .or_else(|| from_word(text))
+        .unwrap_or(HeaderUnit {
+            name: text.to_string(),
+            unit: None,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

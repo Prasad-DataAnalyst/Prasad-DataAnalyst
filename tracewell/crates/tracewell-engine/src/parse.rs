@@ -266,18 +266,21 @@ pub fn parse_number(text: &str, decimal: char, thousands: &str) -> Option<f64> {
     Some(if value == 0.0 { 0.0 } else { value })
 }
 
-struct TimeOfDay {
+pub struct TimeOfDay {
     ms: i64,
     offset_minutes: i64,
-    zoned: bool,
+    pub zoned: bool,
+    /// The zone is written Z, UTC or GMT rather than as an offset.
+    pub utc: bool,
 }
 
-struct DateParts {
-    family: u8, // 0 iso, 1 ymd-slash, 2 day-month
-    year: i64,
-    first: i64,
-    second: i64,
-    time: Option<TimeOfDay>,
+/// A date's parts as written (dates.ts DateParts).
+pub struct DateParts {
+    pub family: u8, // 0 iso, 1 ymd-slash, 2 day-month
+    pub year: i64,
+    pub first: i64,
+    pub second: i64,
+    pub time: Option<TimeOfDay>,
 }
 
 fn take_digits(s: &str, min: usize, max: usize) -> Option<(i64, &str)> {
@@ -340,12 +343,12 @@ fn time_suffix(rest: &str) -> Option<Option<TimeOfDay>> {
         s = s[2..].trim_start();
     }
     let s = s.trim_end();
+    let utc = s.eq_ignore_ascii_case("z")
+        || s.eq_ignore_ascii_case("utc")
+        || s.eq_ignore_ascii_case("gmt");
     let (zoned, offset_minutes) = if s.is_empty() {
         (false, 0)
-    } else if s.eq_ignore_ascii_case("z")
-        || s.eq_ignore_ascii_case("utc")
-        || s.eq_ignore_ascii_case("gmt")
-    {
+    } else if utc {
         (true, 0)
     } else {
         let sign = match s.as_bytes()[0] {
@@ -375,10 +378,11 @@ fn time_suffix(rest: &str) -> Option<Option<TimeOfDay>> {
         ms: ((hour24 * 60 + minute) * 60 + second) * 1000 + milli,
         offset_minutes,
         zoned,
+        utc,
     }))
 }
 
-fn date_parts(text: &str) -> Option<DateParts> {
+pub fn date_parts(text: &str) -> Option<DateParts> {
     let t = js_trim(text);
     if t.chars().count() > MAX_DATE_TEXT {
         return None;
@@ -440,7 +444,7 @@ fn valid_day(y: i64, m: i64, d: i64) -> bool {
     (1..=9999).contains(&y) && d >= 1 && d <= dim
 }
 
-fn month_day(p: &DateParts, f: DateFormat) -> Option<(i64, i64)> {
+pub fn month_day(p: &DateParts, f: DateFormat) -> Option<(i64, i64)> {
     let wanted = match f {
         DateFormat::Dmy | DateFormat::Mdy => 2,
         DateFormat::Iso => 0,

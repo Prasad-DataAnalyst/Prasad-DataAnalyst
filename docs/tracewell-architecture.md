@@ -84,6 +84,21 @@ Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 
 **Consequences.** Both engines write identical `source.add` payloads for the same file and plan, so their audit logs mean the same thing. Parity work moves to execution: reading every format under a plan, check primitives as SQL, steps as SQL views, and exports.
 
+**Revised for engine parity (delimited text).** Connecting the user interface to the native engine (section 17) needs that engine to answer `sniff` itself, or the desktop edition would carry two engines. Detection for CSV and TSV is therefore ported to Rust (`detect.rs` and `sniff.rs` in the crate), with the TypeScript code as the reference. Every evidence text, confidence and tie-break is the same, and lengths are counted in UTF-16 code units and white space matched as JavaScript does.
+
+- **Parity checks.** The conformance suite compares the two previews over:
+  - the messy-file library;
+  - generated files longer than the 1 MiB sample, with ragged rows, a quoted field open at the cut, and a character cut in two;
+  - title blocks, units rows, single quotes and windows-1252 bytes;
+  - settings chosen by the user, including invalid ones, which both refuse with the same message;
+  - mapping templates that rename, retype, re-unit and re-role columns.
+
+  A one-off differential run over 302 generated variants of the library, each with 13 sets of settings, found no differences.
+- **Imports plan themselves.** The native engine now plans an import again from the file, as the TypeScript engine does, so a preview sent with `importFile` is no longer needed. A mapping template is applied by the engine's own choice, never trusted from a preview.
+- **Refusals.** The native engine refuses, rather than imports differently, what it cannot record yet: changed import settings, column overrides, and templates that change columns. The TypeScript engine records all three as `detection.override` decisions.
+- **Scope.** Workbooks, JSON, GeoJSON and Parquet are still planned only in TypeScript.
+- **Cost.** This revision accepts the divergence risk this decision first avoided; the parity checks above are how it is held.
+
 ### 3.2 Decision D-13 (slice 2): one project file, with optional caches
 
 **Context.** A project is rebuilt by replaying its audit log over its original files (section 11). For a 10 GB file that means importing it again on every open, minutes of work. Section 4.3 left open whether large projects should be a stored ZIP64 `.twp` or a project folder exported to `.twp`; NFR-11 budgets disk at 3× the data size, and FR-PRJ-02 asks for a single portable file.

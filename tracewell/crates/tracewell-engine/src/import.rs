@@ -88,6 +88,30 @@ fn date_format(t: Option<&str>) -> DateFormat {
     }
 }
 
+/// The parser of one column plan (makeParser): its type, null markers, decimal separator and date
+/// format, with the file's decimal and thousands separators as defaults.
+pub fn column_parser(c: &Value, decimal: char, thousands: &str) -> Result<ColumnParser> {
+    let kind = kind_of(c["type"]["value"].as_str().unwrap_or("string"))?;
+    let markers = c["nullMarkers"]["value"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.as_str().map(String::from))
+        .collect();
+    let col_decimal = c["decimalSeparator"]["value"]
+        .as_str()
+        .and_then(|s| s.chars().next())
+        .unwrap_or(decimal);
+    let fmt = date_format(c["dateFormat"]["value"].as_str());
+    Ok(ColumnParser::new(
+        kind,
+        markers,
+        col_decimal,
+        thousands.to_string(),
+        fmt,
+    ))
+}
+
 /// The CSV plan of an ImportSpec, or why this engine cannot follow it yet.
 pub fn csv_plan(spec: &Value) -> Result<CsvPlan> {
     let options = &spec["options"];
@@ -125,22 +149,11 @@ pub fn csv_plan(spec: &Value) -> Result<CsvPlan> {
     let thousands = text(csv, "thousandsSeparator").unwrap_or("").to_string();
     let mut columns = Vec::new();
     for c in spec["columns"].as_array().into_iter().flatten() {
-        let kind = kind_of(c["type"]["value"].as_str().unwrap_or("string"))?;
-        let markers = c["nullMarkers"]["value"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| m.as_str().map(String::from))
-            .collect();
-        let col_decimal = c["decimalSeparator"]["value"]
-            .as_str()
-            .and_then(|s| s.chars().next())
-            .unwrap_or(decimal);
-        let fmt = date_format(c["dateFormat"]["value"].as_str());
+        let parser = column_parser(c, decimal, &thousands)?;
         columns.push(ColumnSpec {
             id: c["id"].as_str().unwrap_or_default().to_string(),
-            kind,
-            parser: ColumnParser::new(kind, markers, col_decimal, thousands.clone(), fmt),
+            kind: parser.kind,
+            parser,
         });
     }
     Ok(CsvPlan {

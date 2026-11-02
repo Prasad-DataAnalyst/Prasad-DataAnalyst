@@ -1545,7 +1545,7 @@ fn example(typ: &str) -> &'static str {
 }
 
 /// A parsed cell as the protocol carries it.
-fn cell_json(c: &crate::parse::Cell) -> Value {
+pub fn cell_json(c: &crate::parse::Cell) -> Value {
     use crate::parse::Cell;
     match c {
         Cell::Null => Value::Null,
@@ -2117,7 +2117,7 @@ fn valid_template(t: &Value) -> bool {
         && t["savedBy"].is_string()
 }
 
-fn utf16_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn utf16_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
@@ -2170,6 +2170,67 @@ impl Engine {
             )
         });
         Ok(Value::from(list))
+    }
+
+    /// The mapping template for a file's detected columns (templateFor): the chosen one, refused
+    /// when it does not fit; none when the choice is null; or the one that fits when none is given.
+    fn template_for(&self, plans: &[Value], choice: Option<&Value>) -> Result<Option<Value>> {
+        use crate::sniff::{apply_template, match_template};
+        let templates = match choice {
+            Some(Value::Null) => return Ok(None),
+            _ => self.load_templates(),
+        };
+        let Some(id) = choice else {
+            return Ok(match_template(&templates, plans).and_then(|t| apply_template(t, plans)));
+        };
+        let shown = id.as_str().map_or_else(|| id.to_string(), String::from);
+        let chosen = templates.iter().find(|t| &t["id"] == id).ok_or_else(|| {
+            EngineError::not_found(
+                format!("There is no mapping template {shown}."),
+                "Choose a template from the list, or import without one.",
+            )
+        })?;
+        let applied = apply_template(chosen, plans).ok_or_else(|| {
+            EngineError::invalid(
+                format!(
+                    "The mapping template \"{}\" does not fit this file: some of its columns are not in it.",
+                    chosen["name"].as_str().unwrap_or("")
+                ),
+                "Import without the template, or choose one saved from a file with the same columns.",
+            )
+        })?;
+        Ok(Some(applied))
+    }
+
+    /// The import preview of a file (sniff): its options, columns, sample rows and assumptions,
+    /// read as the mapping template that fits it says, or the chosen one, or none.
+    pub fn sniff(&self, msg: &Incoming, file: &Value, o: &Value) -> Result<Value> {
+        use crate::sniff::{Source, credit_template, preview, sniff_source};
+        let (path, name) = input_path(self, msg, file)?;
+        let size = std::fs::metadata(&path)?.len();
+        let src = Source {
+            path: &path,
+            name: &name,
+            size,
+        };
+        let sniffed = sniff_source(&src, &o["options"])?;
+        let budget = self.memory_limit;
+        let mut detected = preview(&src, &sniffed, &[], budget)?;
+        let plans = detected["columns"].as_array().cloned().unwrap_or_default();
+        let Some(applied) = self.template_for(&plans, o.get("template"))? else {
+            detected["template"] = Value::Null;
+            return Ok(detected);
+        };
+        let overrides = applied["overrides"].as_array().cloned().unwrap_or_default();
+        let mut shown = if overrides.is_empty() {
+            detected
+        } else {
+            preview(&src, &sniffed, &overrides, budget)?
+        };
+        let columns = shown["columns"].as_array().cloned().unwrap_or_default();
+        shown["columns"] = Value::from(credit_template(columns, &applied));
+        shown["template"] = applied;
+        Ok(shown)
     }
 
     /// Saves how a dataset's columns are read as a template (saveMappingTemplate): the columns
@@ -3517,7 +3578,7 @@ fn rule_packs_of(log: &AuditLog) -> Vec<Value> {
 }
 
 /// A reader's note as JSON, as the TypeScript IngestNote holds it.
-fn note_json(n: &Note) -> Value {
+pub fn note_json(n: &Note) -> Value {
     let mut v = json!({ "code": n.code, "message": n.message });
     if let Some(at) = n.src_loc {
         v["srcLoc"] = json!(at);
@@ -3956,19 +4017,31 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
     let project_id = engine.writable()?.id.clone();
-    let preview = &o["preview"];
-    if preview.is_null() {
-        return Err(EngineError::invalid(
-            "The native engine imports the plan of a reviewed preview, and none was given.",
-            "Preview the file first and pass the preview with the import.",
-        ));
-    }
+    // As in the TypeScript engine, the import plans the file again rather than trusting a preview
+    // sent with it: detection is deterministic, so the plan is the one the user reviewed.
+    let (path, name) = input_path(&engine, msg, file)?;
+    let src = crate::sniff::Source {
+        path: &path,
+        name: &name,
+        size: std::fs::metadata(&path)?.len(),
+    };
+    let sniffed = crate::sniff::sniff_source(&src, &Value::Null)?;
+    let planned = crate::sniff::preview(&src, &sniffed, &[], engine.memory_limit)?;
     if !o["columnOverrides"].as_array().is_none_or(Vec::is_empty)
-        || (!o["options"].is_null() && o["options"] != preview["sniff"]["options"])
+        || (!o["options"].is_null() && o["options"] != planned["sniff"]["options"])
     {
         return Err(EngineError::unsupported("changed import settings"));
     }
-    let (path, name) = input_path(&engine, msg, file)?;
+    let plans = planned["columns"].as_array().cloned().unwrap_or_default();
+    if engine
+        .template_for(&plans, o.get("template"))?
+        .is_some_and(|t| !t["overrides"].as_array().is_none_or(Vec::is_empty))
+    {
+        return Err(EngineError::unsupported(
+            "imports read through a mapping template that changes columns",
+        ));
+    }
+    let preview = &planned;
     let mut spec = json!({
         "fileName": name,
         "options": preview["sniff"]["options"],
