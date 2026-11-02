@@ -790,6 +790,53 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     await explain('csv_duplicates_rows_and_keys.csv', 0, (cols) => cols[0]?.id as string);
   });
 
+  it('keeps mapping templates the same way, in a store that outlives the engine', async () => {
+    const golden = pairs.get('csv_well_daily_golden.csv') as { nat: string; ref: string };
+    const nulls = pairs.get('csv_null_markers.csv') as { nat: string; ref: string };
+    const list = async (e: EngineClient) => (await e.listMappingTemplates()).map((t) => ({ ...t, savedAt: '' }));
+    const save = async (name: string, on: { nat: string; ref: string }) => {
+      const [a, b] = [
+        await native.client.saveMappingTemplate({ datasetId: on.nat, name }),
+        await reference.saveMappingTemplate({ datasetId: on.ref, name }),
+      ];
+      expect({ ...a, savedAt: '' }, name).toEqual({ ...b, savedAt: '' });
+    };
+    const refused = async (run: (e: EngineClient, d: { nat: string; ref: string }) => Promise<unknown>) => {
+      const out: unknown[] = [];
+      for (const e of [native.client, reference]) {
+        out.push(
+          await run(e, golden).then(
+            () => 'accepted',
+            (err: { code: string; message: string }) => [err.code, err.message],
+          ),
+        );
+      }
+      expect(out[0]).toEqual(out[1]);
+      expect(out[0]).not.toBe('accepted');
+    };
+    await save('  Daily wells  ', golden);
+    await save('Null markers', nulls);
+    await save('Daily wells', golden);
+    expect(await list(native.client)).toEqual(await list(reference));
+    expect((await list(native.client)).map((t) => t.name)).toEqual(['Daily wells', 'Null markers']);
+    await refused((e, d) => e.saveMappingTemplate({ datasetId: e === native.client ? d.nat : d.ref, name: '   ' }));
+    await refused((e, d) =>
+      e.saveMappingTemplate({ datasetId: e === native.client ? d.nat : d.ref, name: 'x'.repeat(201) }),
+    );
+    await refused((e) => e.deleteMappingTemplate('mt_000000000000'));
+    // A new engine on the same store sees the templates.
+    const again = startNative(['--templates', join(native.workdir, 'mapping-templates.json')]);
+    try {
+      expect(await list(again.client)).toEqual(await list(native.client));
+    } finally {
+      stopNative(again);
+    }
+    const id = (await native.client.listMappingTemplates())[0]?.id as string;
+    await native.client.deleteMappingTemplate(id);
+    await reference.deleteMappingTemplate(id);
+    expect(await list(native.client)).toEqual(await list(reference));
+  });
+
   it('saves a project file that the TypeScript engine opens with every check passing', async () => {
     // A second check run of d1: its saved results stand in for both runs when the file is opened.
     await native.client.awaitJob<CheckSummary>(await native.client.runChecks('d1'));
@@ -969,8 +1016,28 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   });
 
+  it('lists the same rule packs and units', async () => {
+    expect(await native.client.listRulePacks()).toEqual(await reference.listRulePacks());
+    for (const q of [
+      undefined,
+      { quantity: 'pressure_abs' as const },
+      { compatibleWith: 'psia' },
+      { compatibleWith: 'bbl/d', quantity: 'volume_rate' as const },
+    ]) {
+      expect(await native.client.listUnits(q), JSON.stringify(q)).toEqual(await reference.listUnits(q));
+    }
+    const refusal = async (e: EngineClient) =>
+      e.listUnits({ compatibleWith: 'furlong' }).then(
+        () => 'accepted',
+        (err: { code: string; message: string }) => [err.code, err.message],
+      );
+    expect(await refusal(native.client)).toEqual(await refusal(reference));
+  });
+
   it('refuses what it does not support yet with a reason and a fix', async () => {
-    await expect(native.client.listRulePacks()).rejects.toMatchObject({
+    await expect(
+      native.client.sniff({ kind: 'path', path: fixturePath('csv_pipe_delimited.csv') }),
+    ).rejects.toMatchObject({
       code: 'PROTOCOL_MISMATCH',
       fix: expect.any(String),
     });

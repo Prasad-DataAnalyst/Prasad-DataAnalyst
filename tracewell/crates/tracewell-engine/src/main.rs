@@ -2,8 +2,10 @@
 //! frames), with DuckDB and Parquet underneath for files beyond browser memory.
 //!
 //!   tracewell-engine serve [--workdir DIR] [--memory-limit BYTES] [--threads N] [--owner NAME]
-//!                          [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
+//!                          [--templates FILE] [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
 //!
+//! The templates file keeps the user's mapping templates; by default it is
+//! tracewell/mapping-templates.json in the user's configuration directory.
 //! The owner is the registered owner of this copy; every export manifest records it.
 //! The memory limit is the budget of the whole process (default half the machine's RAM); DuckDB
 //! gets a share of it (memory.rs).
@@ -47,6 +49,7 @@ struct Args {
     clock_step: i64,
     seed: Option<u32>,
     owner: String,
+    templates: Option<PathBuf>,
 }
 
 fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
@@ -59,6 +62,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
         seed: None,
         // The product's owner, as the TypeScript build takes it from package.json's author.
         owner: env!("CARGO_PKG_AUTHORS").to_string(),
+        templates: None,
     };
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
@@ -85,6 +89,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
             }
             "--seed" => a.seed = Some(value()?.parse().map_err(|_| "--seed takes a number")?),
             "--owner" => a.owner = value()?,
+            "--templates" => a.templates = Some(PathBuf::from(value()?)),
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -133,7 +138,7 @@ fn open(args: &Args) -> Result<Engine> {
         || std::thread::available_parallelism().map_or(1, |n| n.get()),
         |t| t.max(1) as usize,
     );
-    Ok(Engine::new(
+    let mut engine = Engine::new(
         conn,
         args.workdir.clone(),
         clock,
@@ -141,7 +146,26 @@ fn open(args: &Args) -> Result<Engine> {
         limit,
         threads,
         args.owner.clone(),
-    ))
+    );
+    engine.templates = args
+        .templates
+        .clone()
+        .unwrap_or_else(|| default_templates(&args.workdir));
+    Ok(engine)
+}
+
+/// The user's configuration directory (XDG on Linux, ~/.config otherwise), or the working
+/// folder when there is no home to keep it in.
+fn default_templates(workdir: &std::path::Path) -> PathBuf {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+    match config {
+        Some(dir) => dir.join("tracewell").join("mapping-templates.json"),
+        None => workdir.join("mapping-templates.json"),
+    }
 }
 
 fn param(params: &[Value], i: usize) -> &Value {
@@ -184,6 +208,11 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "getSchema" => e.schema(param(params, 0), param(params, 1)),
         "previewStep" => e.preview_step(param(params, 0), param(params, 1)),
         "explainCell" => e.explain_cell(param(params, 0), param(params, 1), param(params, 2)),
+        "listRulePacks" => e.list_rule_packs(),
+        "listUnits" => e.list_units(param(params, 0)),
+        "listMappingTemplates" => e.list_mapping_templates(),
+        "saveMappingTemplate" => e.save_mapping_template(param(params, 0)),
+        "deleteMappingTemplate" => e.delete_mapping_template(param(params, 0)),
         "getRows" => e.rows(param(params, 0)),
         "getColumnStats" => e.column_stats(param(params, 0), param(params, 1)),
         "listAudit" => e.list_audit(param(params, 0)),

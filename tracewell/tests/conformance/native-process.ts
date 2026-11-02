@@ -25,7 +25,9 @@ export interface NativeProcess {
 /** Starts the engine with `args` after `serve --workdir`; a temporary work folder unless one is given. */
 export function startNative(args: string[], workdir?: string): NativeProcess {
   const dir = workdir ?? mkdtempSync(join(tmpdir(), 'tw-native-'));
-  const child = spawn(NATIVE_BINARY, ['serve', '--workdir', dir, ...args]);
+  // Mapping templates stay in the working folder, so tests never touch the user's own store.
+  const templates = args.includes('--templates') ? [] : ['--templates', join(dir, 'mapping-templates.json')];
+  const child = spawn(NATIVE_BINARY, ['serve', '--workdir', dir, ...templates, ...args]);
   child.stderr.on('data', (d: Buffer) => process.stderr.write(`[native] ${d.toString()}`));
   const client = new EngineClient(
     stdioTransport({

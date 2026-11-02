@@ -21,6 +21,7 @@ pub struct Unit {
     pub convention: Option<String>,
     /// Where the factor comes from, cited with every conversion.
     pub source: String,
+    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,6 +56,7 @@ fn registry() -> &'static Registry {
                 offset: u["toSI"]["offset"].as_f64().unwrap_or(0.0),
                 convention: u["convention"].as_str().map(String::from),
                 source: u["source"].as_str().unwrap_or_default().to_string(),
+                label: u["label"].as_str().unwrap_or_default().to_string(),
             };
             order.push(unit.code.clone());
             let names = std::iter::once(&u["code"])

@@ -223,6 +223,9 @@ pub struct Engine {
     pub job_bytes: HashMap<String, Vec<u8>>,
     cancels: HashMap<String, Arc<AtomicBool>>,
     next_job: u64,
+    /// The file that keeps the user's mapping templates (FR-IMP-06), beside the engine rather than
+    /// in a project.
+    pub templates: PathBuf,
 }
 
 /// What every thread shares: the engine behind a lock, and the output stream behind another, so
@@ -325,6 +328,7 @@ impl Engine {
             job_bytes: HashMap::new(),
             cancels: HashMap::new(),
             next_job: 1,
+            templates: PathBuf::from("mapping-templates.json"),
         }
     }
 
@@ -2021,6 +2025,223 @@ impl Engine {
             "sample": sample,
             "resultingRows": resulting,
         }))
+    }
+}
+
+impl Engine {
+    /// The rule packs the checks run (listRulePacks), as shipped.
+    pub fn list_rule_packs(&self) -> Result<Value> {
+        [crate::rules::GENERIC_DQ_JSON, crate::rules::SYSTEM_JSON]
+            .iter()
+            .map(|text| {
+                serde_json::from_str::<Value>(text)
+                    .map_err(|_| EngineError::internal("A built-in rule pack is not JSON."))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Value::from)
+    }
+
+    /// The units of the registry (listUnits): of one quantity, or those a unit converts to
+    /// without crossing a convention.
+    pub fn list_units(&self, q: &Value) -> Result<Value> {
+        use crate::units::{all_units, get_unit, same_family};
+        let mut units: Vec<&crate::units::Unit> = all_units().collect();
+        if let Some(code) = q["compatibleWith"].as_str() {
+            let u = get_unit(code).ok_or_else(|| {
+                EngineError::new(
+                    "UNIT_UNKNOWN",
+                    format!("The unit '{code}' is not in the unit registry."),
+                    "Choose a unit from the list.",
+                )
+            })?;
+            units.retain(|v| same_family(&u.quantity, &v.quantity) && v.convention == u.convention);
+        }
+        if let Some(quantity) = q["quantity"].as_str() {
+            units.retain(|v| v.quantity == quantity);
+        }
+        Ok(Value::from(
+            units
+                .iter()
+                .map(|u| json!({ "code": u.code, "label": u.label, "quantity": u.quantity, "convention": u.convention }))
+                .collect::<Vec<_>>(),
+        ))
+    }
+}
+
+const TEMPLATE_FORMAT: &str = "tracewell-mapping-templates";
+
+fn strings(v: &Value) -> bool {
+    v.as_array().is_some_and(|a| a.iter().all(Value::is_string))
+}
+
+/// Whether a stored template has the shape schemas.mappingTemplate requires; one that does not
+/// is left out rather than trusted.
+fn valid_template(t: &Value) -> bool {
+    let column = |c: &Value| {
+        strings(&c["sourceHeader"])
+            && c["name"].is_string()
+            && c["type"].is_string()
+            && (c["unit"].is_string() || c["unit"].is_null())
+            && c["role"].is_string()
+            && strings(&c["nullMarkers"])
+            && c.get("dateFormat").is_none_or(Value::is_string)
+            && c.get("timezone").is_none_or(Value::is_string)
+    };
+    t["id"].as_str().is_some_and(|id| id.starts_with("mt_"))
+        && t["name"].as_str().is_some_and(|n| !n.is_empty())
+        && t["savedFrom"]["fileName"].is_string()
+        && t["savedFrom"]["format"].is_string()
+        && t["columns"]
+            .as_array()
+            .is_some_and(|cs| cs.iter().all(column))
+        && t["savedAt"].is_string()
+        && t["savedBy"].is_string()
+}
+
+fn utf16_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    a.encode_utf16().cmp(b.encode_utf16())
+}
+
+impl Engine {
+    /// The valid templates in the store; a missing or unreadable store holds none.
+    fn load_templates(&self) -> Vec<Value> {
+        let Ok(text) = std::fs::read_to_string(&self.templates) else {
+            return Vec::new();
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+            return Vec::new();
+        };
+        if doc["format"] != TEMPLATE_FORMAT {
+            return Vec::new();
+        }
+        doc["templates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| valid_template(t))
+            .cloned()
+            .collect()
+    }
+
+    fn store_templates(&self, templates: &[Value]) -> Result<()> {
+        if let Some(dir) = self
+            .templates
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(dir)?;
+        }
+        let doc = json!({ "format": TEMPLATE_FORMAT, "version": 1, "templates": templates });
+        let text = serde_json::to_string_pretty(&doc)
+            .map_err(|_| EngineError::internal("The mapping templates could not be written."))?;
+        // Written whole, then renamed over the old file, so a crash never leaves half a store.
+        let tmp = self.templates.with_extension("json.tmp");
+        std::fs::write(&tmp, format!("{text}\n"))?;
+        std::fs::rename(&tmp, &self.templates)?;
+        Ok(())
+    }
+
+    /// The user's mapping templates, by name (listMappingTemplates).
+    pub fn list_mapping_templates(&self) -> Result<Value> {
+        let mut list = self.load_templates();
+        list.sort_by(|a, b| {
+            utf16_cmp(
+                a["name"].as_str().unwrap_or(""),
+                b["name"].as_str().unwrap_or(""),
+            )
+        });
+        Ok(Value::from(list))
+    }
+
+    /// Saves how a dataset's columns are read as a template (saveMappingTemplate): the columns
+    /// read from the source, by header text, with their settings; a template of the same name is
+    /// replaced.
+    pub fn save_mapping_template(&mut self, o: &Value) -> Result<Value> {
+        use unicode_normalization::UnicodeNormalization;
+        let d = self.dataset(&o["datasetId"])?;
+        let name: String = o["name"]
+            .as_str()
+            .unwrap_or("")
+            .nfc()
+            .collect::<String>()
+            .trim_matches(crate::units::is_js_space)
+            .to_string();
+        if name.is_empty() || name.encode_utf16().count() > 200 {
+            return Err(EngineError::invalid(
+                "A mapping template name must be text of 1 to 200 characters.",
+                "Type a name for the template.",
+            ));
+        }
+        let stages = d.stages()?;
+        let columns: Vec<Value> = stages
+            .working
+            .iter()
+            .filter(|c| c.derived_from().is_none() && c.schema["type"]["value"] != "geometry")
+            .map(|c| {
+                let s = &c.schema;
+                let mut t = json!({
+                    "sourceHeader": s["sourceHeader"],
+                    "name": s["name"],
+                    "type": s["type"]["value"],
+                    "unit": s["unit"]["value"],
+                    "role": s["role"]["value"],
+                    "nullMarkers": s["nullMarkers"]["value"],
+                });
+                for k in ["dateFormat", "timezone"] {
+                    if let Some(v) = s.get(k) {
+                        t[k] = v["value"].clone();
+                    }
+                }
+                t
+            })
+            .collect();
+        if columns.is_empty() {
+            return Err(EngineError::invalid(
+                format!(
+                    "{} has no columns read from its source file, so there is nothing to save.",
+                    d.name
+                ),
+                "Save a template from a dataset imported from a file.",
+            ));
+        }
+        let template = json!({
+            "id": format!("mt_{}", &sha256_hex(name.as_bytes())[..12]),
+            "name": name,
+            "savedFrom": { "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
+            "columns": columns,
+            "savedAt": self.clock.now_iso(),
+            "savedBy": self.project()?.profile["name"],
+        });
+        if !valid_template(&template) {
+            return Err(EngineError::internal(format!(
+                "The mapping template \"{name}\" could not be saved: it is not valid."
+            )));
+        }
+        let mut kept: Vec<Value> = self
+            .load_templates()
+            .into_iter()
+            .filter(|t| t["id"] != template["id"])
+            .collect();
+        kept.push(template.clone());
+        self.store_templates(&kept)?;
+        Ok(template)
+    }
+
+    /// Deletes a mapping template (deleteMappingTemplate).
+    pub fn delete_mapping_template(&mut self, id: &Value) -> Result<Value> {
+        let templates = self.load_templates();
+        if !templates.iter().any(|t| t["id"] == *id) {
+            return Err(EngineError::not_found(
+                format!(
+                    "There is no mapping template {}.",
+                    id.as_str().map_or_else(|| id.to_string(), String::from)
+                ),
+                "Choose a template from the list.",
+            ));
+        }
+        let kept: Vec<Value> = templates.into_iter().filter(|t| t["id"] != *id).collect();
+        self.store_templates(&kept)?;
+        Ok(Value::Null)
     }
 }
 
