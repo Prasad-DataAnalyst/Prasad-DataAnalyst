@@ -230,6 +230,8 @@ pub struct Engine {
     pub templates: PathBuf,
     /// Bytes the current call hands back with its answer, under `bytes` (a saved recipe).
     pub reply_bytes: Option<Vec<u8>>,
+    /// This session's recovery journal (FR-PRJ-03); nothing is journalled without one.
+    pub journal: Option<crate::recovery::Journal>,
 }
 
 /// What every thread shares: the engine behind a lock, and the output stream behind another, so
@@ -334,6 +336,7 @@ impl Engine {
             next_job: 1,
             templates: PathBuf::from("mapping-templates.json"),
             reply_bytes: None,
+            journal: None,
         }
     }
 
@@ -454,6 +457,7 @@ impl Engine {
             p.created_at = entry["at"].as_str().unwrap_or_default().into();
         }
         std::fs::create_dir_all(self.workdir.join(&id))?;
+        self.journal_now();
         self.summary()
     }
 
@@ -990,10 +994,10 @@ impl Engine {
     pub fn cancel_job(&mut self, id: &Value) -> Result<Value> {
         let id = id.as_str().unwrap_or("");
         self.job_outcome(&json!(id))?;
-        if self.jobs.get(id).map(|o| o["state"] == "running") == Some(true) {
-            if let Some(flag) = self.cancels.get(id) {
-                flag.store(true, Ordering::Relaxed);
-            }
+        if self.jobs.get(id).map(|o| o["state"] == "running") == Some(true)
+            && let Some(flag) = self.cancels.get(id)
+        {
+            flag.store(true, Ordering::Relaxed);
         }
         Ok(Value::Null)
     }
@@ -2260,6 +2264,261 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// Writes the recovery journal after a change: the audit log as it now stands and where each
+    /// original is. A read-only project records nothing new, so it has nothing to journal. A
+    /// failed write is said once on standard error and tried again after the next change.
+    pub fn journal_now(&mut self) {
+        let Some(p) = self.project.as_ref().filter(|p| !p.read_only) else {
+            return;
+        };
+        let originals: Vec<(Value, crate::project::OriginalSource, bool)> = p
+            .originals
+            .iter()
+            .filter_map(|o| {
+                let source = p.original_paths.get(o["fileId"].as_str()?)?.clone();
+                // Uploads live in this session's working folder, which may not outlive it, and a
+                // recovered upload in the old journal, which goes once recovered.
+                let copy = matches!(&source, crate::project::OriginalSource::File(path)
+                    if path.starts_with(&self.workdir) || self.journal.as_ref().is_some_and(|j| j.holds(path)));
+                Some((o.clone(), source, copy))
+            })
+            .collect();
+        let (id, name, jsonl) = (p.id.clone(), p.name.clone(), p.log.to_jsonl());
+        if let Some(j) = self.journal.as_mut()
+            && let Err(e) = j.write(&id, &name, &jsonl, &originals)
+        {
+            eprintln!(
+                "Unsaved work could not be journalled for recovery: {}",
+                e.message
+            );
+        }
+    }
+
+    /// Work an earlier session left unsaved (recoveryInfo): the latest journal of a session that
+    /// has ended, when it holds audit entries after the project's last save. Journals with nothing
+    /// unsaved are deleted.
+    pub fn recovery_info(&mut self) -> Result<Value> {
+        let Some(j) = self.journal.as_mut() else {
+            return Ok(Value::Null);
+        };
+        while let Some(found) = j.find_orphan() {
+            let (log, _) = AuditLog::from_jsonl(&found.project_id, &found.audit_jsonl);
+            let entries = log.entries();
+            let last_save = entries.iter().rposition(|e| e["action"] == "project.save");
+            let unsaved = entries[last_save.map_or(0, |i| i + 1)..]
+                .iter()
+                .filter(|e| e["action"] != "project.create")
+                .count();
+            if unsaved > 0 {
+                return Ok(json!({
+                    "projectId": found.project_id,
+                    "name": found.name,
+                    "updatedAt": found.updated_at,
+                    "entries": entries.len(),
+                    "unsaved": unsaved,
+                }));
+            }
+            j.drop_orphan();
+        }
+        Ok(Value::Null)
+    }
+
+    /// Deletes the unsaved work recoveryInfo found (discardRecovery).
+    pub fn discard_recovery(&mut self) -> Result<Value> {
+        if let Some(j) = self.journal.as_mut()
+            && j.find_orphan().is_some()
+        {
+            j.drop_orphan();
+        }
+        Ok(Value::Null)
+    }
+}
+
+/// Rebuilds the unsaved project of a session that ended (recoverProject) and makes it this
+/// session's own, journalled again before the old journal is deleted. Each original is checked
+/// against its SHA-256, the audit chain is verified and the log replayed; any failure opens the
+/// project read-only. Result: ProjectOpenReport.
+pub fn recover_project(shared: &Arc<Shared>) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let (job, cancel) = engine.start_job();
+    drop(engine);
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let outcome = (|| -> Result<Value> {
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            let found = engine
+                .journal
+                .as_mut()
+                .and_then(|j| j.find_orphan())
+                .ok_or_else(|| {
+                    EngineError::not_found(
+                        "There is no unsaved work to recover.",
+                        "Start a new project or open one.",
+                    )
+                })?;
+            let fail = |id: &str, detail: String, rule: &str, target: Option<&str>| {
+                crate::project::integrity(id, false, detail, Some(rule), target)
+            };
+            let mut checks = Vec::new();
+            for (info, source) in &found.originals {
+                let name = info["name"].as_str().unwrap_or("");
+                let id = info["fileId"].as_str().unwrap_or("");
+                match crate::project::hash_source(source) {
+                    Ok(sha) if sha == id => {}
+                    Ok(_) => checks.push(fail(
+                        "original-checksum",
+                        format!("The recovered copy of {name} does not match its SHA-256."),
+                        "TW-PRJ-001",
+                        Some(id),
+                    )),
+                    Err(_) => checks.push(fail(
+                        "original-checksum",
+                        format!("The original file {name} can no longer be read."),
+                        "TW-PRJ-001",
+                        Some(id),
+                    )),
+                }
+            }
+            if checks.is_empty() {
+                checks.push(crate::project::integrity(
+                    "original-checksum",
+                    true,
+                    format!(
+                        "All {} original files match their SHA-256.",
+                        found.originals.len()
+                    ),
+                    None,
+                    None,
+                ));
+            }
+            let (log, bad_line) = AuditLog::from_jsonl(&found.project_id, &found.audit_jsonl);
+            let chain = log.verify();
+            checks.push(if bad_line.is_none() && chain["ok"] == true {
+                crate::project::integrity(
+                    "audit-chain",
+                    true,
+                    format!(
+                        "All {} recovered audit entries verify, each linked to the one before.",
+                        log.entries().len()
+                    ),
+                    None,
+                    None,
+                )
+            } else {
+                let at = chain["brokenAt"]
+                    .as_u64()
+                    .map_or(String::new(), |s| format!(" at entry {s}"));
+                fail(
+                    "audit-chain",
+                    format!(
+                        "The recovered audit chain is broken{at}: {}.",
+                        chain["reason"]
+                            .as_str()
+                            .unwrap_or("an entry does not verify")
+                    ),
+                    "TW-PRJ-002",
+                    None,
+                )
+            });
+            let conn = engine.conn.try_clone()?;
+            let workdir = engine.workdir.clone();
+            let threads = engine.threads;
+            let mut p = Project {
+                id: found.project_id.clone(),
+                name: String::new(),
+                created_at: String::new(),
+                profile: Value::Null,
+                unit_system: "SI".into(),
+                log: AuditLog::new(&found.project_id),
+                datasets: Vec::new(),
+                originals: Vec::new(),
+                next_dataset: 1,
+                exports: Vec::new(),
+                original_paths: HashMap::new(),
+                last_saved_at: None,
+                read_only: false,
+                project_area: Value::Null,
+                reverted: HashSet::new(),
+                next_step: 1,
+            };
+            let archive = PathBuf::new();
+            let mut reopen = Reopen {
+                conn: &conn,
+                archive: &archive,
+                workdir: &workdir,
+                threads,
+                cancel: &cancel,
+                seqs: log
+                    .entries()
+                    .iter()
+                    .filter_map(|e| e["seq"].as_u64())
+                    .collect(),
+                issue_caches: HashMap::new(),
+                journal: Some(
+                    found
+                        .originals
+                        .iter()
+                        .map(|(info, source)| {
+                            (
+                                info["fileId"].as_str().unwrap_or("").to_string(),
+                                source.clone(),
+                            )
+                        })
+                        .collect(),
+                ),
+            };
+            let read = crate::project::TwpRead {
+                entries: Vec::new(),
+                manifest: None,
+                audit_jsonl: None,
+                checks: Vec::new(),
+                verified: HashSet::new(),
+            };
+            drop(engine);
+            let replayed = reopen.replay(&mut p, &log, &read, &Value::Null, &mut |_, _| ())?;
+            checks.push(match &replayed.stopped {
+                None => crate::project::integrity("replay-digest", true, format!("All {} datasets were rebuilt from the original files and the recovered audit log.", p.datasets.len()), None, None),
+                Some(why) => fail("replay-digest", format!("Rebuilding the project stopped at audit {why}"), "TW-PRJ-003", None),
+            });
+            if p.name.is_empty() {
+                p.name = found.name.clone();
+            }
+            let read_only = checks.iter().any(|c| c["ok"] == false);
+            p.read_only = read_only;
+            p.log = log;
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            engine.project = Some(p);
+            engine.journal_now();
+            if let Some(j) = engine.journal.as_mut() {
+                j.drop_orphan();
+            }
+            let summary = engine.summary()?;
+            Ok(json!({ "project": summary, "readOnly": read_only, "checks": checks }))
+        })();
+        finish_job(
+            &shared,
+            &job_id,
+            outcome,
+            &[
+                "project", "datasets", "schema", "issues", "audit", "steps", "exports",
+            ],
+            "",
+        );
+    });
+    Ok(json!({ "jobId": job, "kind": "open" }))
+}
+
 /// How a column's text was parsed, in words (lineage.ts parseMethod).
 fn parse_method(c: &Value) -> String {
     let typ = c["type"]["value"].as_str().unwrap_or("string");
@@ -2935,6 +3194,7 @@ pub fn remove_step(
         .as_mut()
         .ok_or_else(|| EngineError::internal("The project disappeared while removing the step."))?;
     apply_decision(conn, p, &appended, None, &|_, _| false)?;
+    engine.journal_now();
     drop(engine);
     shared.event(json!({ "type": "project.changed", "what": ["project", "steps", "schema", "datasets", "issues", "audit"], "datasetId": dataset_id }));
     Ok(appended)
@@ -2962,6 +3222,7 @@ pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
         .as_mut()
         .ok_or_else(|| EngineError::internal("The project disappeared during the decision."))?;
     apply_decision(conn, p, &entry, reverted.as_ref(), &|_, _| false)?;
+    engine.journal_now();
     drop(engine);
     crate::memory::release();
     let mut event = json!({ "type": "project.changed", "what": ["project", "datasets", "schema", "issues", "audit", "steps"] });
@@ -3223,10 +3484,10 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
                 }
                 Ok(out.result)
             });
-        if outcome.is_err() {
-            if let Some(t) = &input.target {
-                let _ = std::fs::remove_file(t);
-            }
+        if outcome.is_err()
+            && let Some(t) = &input.target
+        {
+            let _ = std::fs::remove_file(t);
         }
         finish_job(
             &shared,
@@ -3599,6 +3860,8 @@ fn finish_job(
     };
     match outcome {
         Ok(result) => {
+            // Journalled before the job is done, so a client that sees it done can rely on it.
+            engine.journal_now();
             engine.jobs.insert(
                 job_id.to_string(),
                 json!({ "state": "done", "result": result }),
@@ -3786,6 +4049,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         };
         match outcome {
             Ok(result) => {
+                engine.journal_now();
                 engine.jobs.insert(
                     job_id.clone(),
                     json!({ "state": "done", "result": result.clone() }),
@@ -3889,10 +4153,10 @@ fn commit_import(
         .map(|c| (c.id.clone(), c.kind))
         .collect();
     let mut notes = imported.notes;
-    if let Some(note) = assumed_encoding_note(&spec) {
-        if !notes.iter().any(|n| n.code == "TW-IMP-004") {
-            notes.insert(0, note);
-        }
+    if let Some(note) = assumed_encoding_note(&spec)
+        && !notes.iter().any(|n| n.code == "TW-IMP-004")
+    {
+        notes.insert(0, note);
     }
     let mut dataset = Dataset {
         id: dataset_id,
@@ -4009,6 +4273,15 @@ fn restore_cache(
     }))
 }
 
+/// What a replay did: where it stopped, and how many datasets and check results came from caches.
+#[derive(Default)]
+struct Replayed {
+    stopped: Option<String>,
+    from_cache: usize,
+    checks_restored: usize,
+    checks_ran: usize,
+}
+
 struct Reopen<'a> {
     conn: &'a Connection,
     archive: &'a Path,
@@ -4017,6 +4290,9 @@ struct Reopen<'a> {
     cancel: &'a AtomicBool,
     /// The seq of every entry in the log.
     seqs: HashSet<u64>,
+    /// When rebuilding from a recovery journal: where each original is, by file ID. The project
+    /// file's originals and caches are used otherwise.
+    journal: Option<HashMap<String, crate::project::OriginalSource>>,
     /// Per dataset with a usable issues cache: the entry after which its issues are as the cache
     /// holds them, and the issues until they are installed there.
     issue_caches: HashMap<String, (u64, Option<Vec<IssueState>>)>,
@@ -4031,6 +4307,107 @@ enum CheckReplay {
 }
 
 impl Reopen<'_> {
+    /// Replays the log onto the project (applyEntry for each entry), restoring datasets and issues
+    /// from caches where the project file has usable ones. Stops at the first entry it cannot
+    /// replay.
+    fn replay(
+        &mut self,
+        p: &mut Project,
+        log: &AuditLog,
+        read: &crate::project::TwpRead,
+        manifest: &Value,
+        progress: &mut dyn FnMut(&str, u64),
+    ) -> Result<Replayed> {
+        let mut out = Replayed::default();
+        for e in log.entries() {
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err(EngineError::new(
+                    "CANCELLED",
+                    "Opening the project was cancelled.",
+                    "Open it again when you are ready.",
+                ));
+            }
+            let at = e["seq"].clone();
+            let step = match e["action"].as_str().unwrap_or("") {
+                "project.create" => {
+                    p.name = e["new"]["name"].as_str().unwrap_or(&p.name).to_string();
+                    p.unit_system = e["new"]["unitSystem"].as_str().unwrap_or("SI").to_string();
+                    p.created_at = e["at"].as_str().unwrap_or_default().to_string();
+                    p.profile = e["payload"]["profile"].clone();
+                    Ok(())
+                }
+                "source.add" => {
+                    progress("Restoring the datasets", 0);
+                    self.source_add(p, read, manifest, e, progress)
+                        .map(|cached| {
+                            if cached {
+                                out.from_cache += 1;
+                            }
+                            if let Some(d) = p.datasets.last() {
+                                progress("Restoring the saved check results", 0);
+                                if let Some((after, issues)) = self.load_issues(read, manifest, d) {
+                                    self.issue_caches
+                                        .insert(d.id.clone(), (after, Some(issues)));
+                                }
+                            }
+                        })
+                }
+                "detection.assume" => {
+                    let id = e["target"]["datasetId"].as_str().unwrap_or("");
+                    if let Some(d) = p.datasets.iter_mut().find(|d| d.id == id) {
+                        d.assumptions = e["payload"]["assumptions"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default();
+                    }
+                    Ok(())
+                }
+                "check.run" => self.check_run(p, e, progress).map(|how| match how {
+                    CheckReplay::Ran => out.checks_ran += 1,
+                    CheckReplay::Superseded => {}
+                }),
+                "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
+                | "project.area" | "entry.revert" | "step.apply" | "step.remove"
+                | "recipe.apply" => {
+                    let reverted = log
+                        .entries()
+                        .iter()
+                        .find(|x| e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]);
+                    apply_decision(self.conn, p, e, reverted, &|id, seq| self.cached(id, seq))
+                }
+                "export.create" => {
+                    p.exports.push(e["payload"]["record"].clone());
+                    Ok(())
+                }
+                "project.save" => {
+                    p.last_saved_at = e["at"].as_str().map(String::from);
+                    Ok(())
+                }
+                other => Err(EngineError::unsupported(format!(
+                    "replaying {other} entries"
+                ))),
+            };
+            if let Err(err) = step {
+                out.stopped = Some(format!("entry {at}: {}", err.message));
+                break;
+            }
+            // Issues caches that hold the issues as this entry left them.
+            let seq = e["seq"].as_u64().unwrap_or(0);
+            for (id, (after, issues)) in self.issue_caches.iter_mut() {
+                if *after != seq {
+                    continue;
+                }
+                if let (Some(issues), Some(d)) =
+                    (issues.take(), p.datasets.iter_mut().find(|d| d.id == *id))
+                {
+                    d.issues = issues;
+                    out.checks_restored += 1;
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Rebuilds a dataset from its source.add entry: from its caches, or by importing its original
     /// again under the recorded plan. Returns the dataset and whether a cache was used.
     fn source_add(
@@ -4046,60 +4423,75 @@ impl Reopen<'_> {
         let spec = e["payload"]["spec"].clone();
         let plan = csv_plan(&spec)?;
         let file_id = spec["fileId"].as_str().unwrap_or("").to_string();
-        let original = manifest["originals"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|o| o["fileId"] == file_id.as_str())
-            .and_then(|o| {
-                read.entries
-                    .iter()
-                    .find(|x| Some(x.name.as_str()) == o["path"].as_str())
-            })
-            .cloned()
-            .ok_or_else(|| {
-                EngineError::new(
-                    "PROJECT_INVALID",
-                    format!("The original file {} is missing.", spec["fileName"]),
-                    "Open the project from a complete .twp file.",
-                )
-            })?;
         let dir = self.workdir.join(&p.id);
         std::fs::create_dir_all(&dir)?;
-        let cached = restore_cache(
-            self.conn,
-            self.archive,
-            read,
-            manifest,
-            &dataset_id,
-            seq,
-            &dir,
-        )?;
-        let used_cache = cached.is_some();
-        let source = if original.method == 0 {
-            crate::project::OriginalSource::Entry {
-                archive: self.archive.to_path_buf(),
-                offset: original.data_offset,
-                size: original.size,
-            }
-        } else {
-            let uploads = self.workdir.join("uploads");
-            std::fs::create_dir_all(&uploads)?;
-            let path = uploads.join(&file_id);
-            extract(self.archive, &original, &path)?;
-            crate::project::OriginalSource::File(path)
+        let missing = || {
+            EngineError::new(
+                "PROJECT_INVALID",
+                format!("The original file {} is missing.", spec["fileName"]),
+                "Open the project from a complete .twp file.",
+            )
         };
+        let (source, cached) = match &self.journal {
+            Some(originals) => (originals.get(&file_id).cloned().ok_or_else(missing)?, None),
+            None => {
+                let original = manifest["originals"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|o| o["fileId"] == file_id.as_str())
+                    .and_then(|o| {
+                        read.entries
+                            .iter()
+                            .find(|x| Some(x.name.as_str()) == o["path"].as_str())
+                    })
+                    .cloned()
+                    .ok_or_else(missing)?;
+                let cached = restore_cache(
+                    self.conn,
+                    self.archive,
+                    read,
+                    manifest,
+                    &dataset_id,
+                    seq,
+                    &dir,
+                )?;
+                let source = if original.method == 0 {
+                    crate::project::OriginalSource::Entry {
+                        archive: self.archive.to_path_buf(),
+                        offset: original.data_offset,
+                        size: original.size,
+                    }
+                } else {
+                    let uploads = self.workdir.join("uploads");
+                    std::fs::create_dir_all(&uploads)?;
+                    let path = uploads.join(&file_id);
+                    extract(self.archive, &original, &path)?;
+                    crate::project::OriginalSource::File(path)
+                };
+                (source, cached)
+            }
+        };
+        let used_cache = cached.is_some();
         let restored = match cached {
             Some(r) => r,
             None => {
                 // Imported again from the original under the plan the log recorded.
                 let path = match &source {
                     crate::project::OriginalSource::File(path) => path.clone(),
-                    crate::project::OriginalSource::Entry { .. } => {
+                    crate::project::OriginalSource::Entry {
+                        archive,
+                        offset,
+                        size,
+                    } => {
+                        // A stored original is its bytes at an offset of the archive.
                         let uploads = self.workdir.join("uploads");
                         std::fs::create_dir_all(&uploads)?;
                         let path = uploads.join(&file_id);
-                        extract(self.archive, &original, &path)?;
+                        let mut input = std::fs::File::open(archive)?;
+                        std::io::Seek::seek(&mut input, std::io::SeekFrom::Start(*offset))?;
+                        let mut out = std::fs::File::create(&path)?;
+                        std::io::copy(&mut std::io::Read::take(input, *size), &mut out)?;
                         path
                     }
                 };
@@ -4120,10 +4512,10 @@ impl Reopen<'_> {
                     quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", imported.view)),
                 ))?;
                 let mut notes = imported.notes;
-                if let Some(note) = assumed_encoding_note(&spec) {
-                    if !notes.iter().any(|n| n.code == "TW-IMP-004") {
-                        notes.insert(0, note);
-                    }
+                if let Some(note) = assumed_encoding_note(&spec)
+                    && !notes.iter().any(|n| n.code == "TW-IMP-004")
+                {
+                    notes.insert(0, note);
                 }
                 Restored {
                     rows_file: dir.join(format!("{job}.parquet")),
@@ -4348,110 +4740,22 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                     .filter_map(|e| e["seq"].as_u64())
                     .collect(),
                 issue_caches: HashMap::new(),
+                journal: None,
             };
-            let mut stopped: Option<String> = None;
-            let mut from_cache = 0;
-            let (mut checks_restored, mut checks_ran) = (0, 0);
-            if read.manifest.is_none() || text.is_none() {
-                stopped = Some("the manifest or the audit log could not be read".into());
-            } else {
-                for e in log.entries() {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err(EngineError::new(
-                            "CANCELLED",
-                            "Opening the project was cancelled.",
-                            "Open it again when you are ready.",
-                        ));
-                    }
-                    let at = e["seq"].clone();
-                    let step = match e["action"].as_str().unwrap_or("") {
-                        "project.create" => {
-                            p.name = e["new"]["name"].as_str().unwrap_or(&p.name).to_string();
-                            p.unit_system =
-                                e["new"]["unitSystem"].as_str().unwrap_or("SI").to_string();
-                            p.created_at = e["at"].as_str().unwrap_or_default().to_string();
-                            p.profile = e["payload"]["profile"].clone();
-                            Ok(())
-                        }
-                        "source.add" => {
-                            progress("Restoring the datasets", 0);
-                            reopen
-                                .source_add(&mut p, &read, &manifest, e, &mut progress)
-                                .map(|cached| {
-                                    if cached {
-                                        from_cache += 1;
-                                    }
-                                    if let Some(d) = p.datasets.last() {
-                                        progress("Restoring the saved check results", 0);
-                                        if let Some((after, issues)) =
-                                            reopen.load_issues(&read, &manifest, d)
-                                        {
-                                            reopen
-                                                .issue_caches
-                                                .insert(d.id.clone(), (after, Some(issues)));
-                                        }
-                                    }
-                                })
-                        }
-                        "detection.assume" => {
-                            let id = e["target"]["datasetId"].as_str().unwrap_or("");
-                            if let Some(d) = p.datasets.iter_mut().find(|d| d.id == id) {
-                                d.assumptions = e["payload"]["assumptions"]
-                                    .as_array()
-                                    .cloned()
-                                    .unwrap_or_default();
-                            }
-                            Ok(())
-                        }
-                        "check.run" => {
-                            reopen
-                                .check_run(&mut p, e, &mut progress)
-                                .map(|how| match how {
-                                    CheckReplay::Ran => checks_ran += 1,
-                                    CheckReplay::Superseded => {}
-                                })
-                        }
-                        "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
-                        | "project.area" | "entry.revert" | "step.apply" | "step.remove"
-                        | "recipe.apply" => {
-                            let reverted = log.entries().iter().find(|x| {
-                                e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]
-                            });
-                            apply_decision(&conn, &mut p, e, reverted, &|id, seq| {
-                                reopen.cached(id, seq)
-                            })
-                        }
-                        "export.create" => {
-                            p.exports.push(e["payload"]["record"].clone());
-                            Ok(())
-                        }
-                        "project.save" => {
-                            p.last_saved_at = e["at"].as_str().map(String::from);
-                            Ok(())
-                        }
-                        other => Err(EngineError::unsupported(format!(
-                            "replaying {other} entries"
-                        ))),
-                    };
-                    if let Err(err) = step {
-                        stopped = Some(format!("entry {at}: {}", err.message));
-                        break;
-                    }
-                    // Issues caches that hold the issues as this entry left them.
-                    let seq = e["seq"].as_u64().unwrap_or(0);
-                    for (id, (after, issues)) in reopen.issue_caches.iter_mut() {
-                        if *after != seq {
-                            continue;
-                        }
-                        if let (Some(issues), Some(d)) =
-                            (issues.take(), p.datasets.iter_mut().find(|d| d.id == *id))
-                        {
-                            d.issues = issues;
-                            checks_restored += 1;
-                        }
-                    }
+            let replayed = if read.manifest.is_none() || text.is_none() {
+                Replayed {
+                    stopped: Some("the manifest or the audit log could not be read".into()),
+                    ..Replayed::default()
                 }
-            }
+            } else {
+                reopen.replay(&mut p, &log, &read, &manifest, &mut progress)?
+            };
+            let (stopped, from_cache, checks_restored, checks_ran) = (
+                replayed.stopped,
+                replayed.from_cache,
+                replayed.checks_restored,
+                replayed.checks_ran,
+            );
             checks.push(match &stopped {
                 Some(why) => fail("replay-digest", format!("Rebuilding the project stopped at {why}"), "TW-PRJ-003"),
                 None => {

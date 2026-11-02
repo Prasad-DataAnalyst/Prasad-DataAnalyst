@@ -4,7 +4,8 @@
  * audit format and on every value it imports. The suite runs when the engine has been built with
  * `npm run build:native`; without the binary it is skipped and says so.
  */
-import { readFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuditLog } from '@tw/audit';
 import { PROTOCOL_VERSION, type EngineClient } from '@tw/engine-api';
@@ -1123,6 +1124,118 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         (err: { code: string; message: string }) => [err.code, err.message],
       );
     expect(await refusal(native.client)).toEqual(await refusal(reference));
+  });
+
+  it('recovers unsaved work after a crash, only from an engine that has ended', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-recovery-'));
+    const home = mkdtempSync(join(tmpdir(), 'tw-userfiles-'));
+    const args = ['--fixed-clock', START, '--seed', '1', '--threads', '2', '--owner', 'Prasad', '--recovery', folder];
+    const crash = async (n: NativeProcess) => {
+      const gone = new Promise((r) => n.child.once('exit', r));
+      n.child.kill('SIGKILL');
+      await gone;
+      rmSync(n.workdir, { recursive: true, force: true });
+    };
+    try {
+      // A file on the user's disk (named by the journal) and an upload (copied into it).
+      const disk = join(home, 'golden.csv');
+      copyFileSync(fixturePath('csv_well_daily_golden.csv'), disk);
+      const a = startNative(args);
+      await a.client.newProject({ name: 'Unsaved', profile: { ...PROFILE } });
+      const onDisk = { kind: 'path' as const, path: disk };
+      const d1 = await a.client.awaitJob<DatasetSummary>(
+        await a.client.importFile(onDisk, { preview: await reference.sniff(onDisk) }),
+      );
+      const upload = {
+        kind: 'bytes' as const,
+        bytes: readFileSync(fixturePath('csv_null_markers.csv')),
+        name: 'csv_null_markers.csv',
+      };
+      await a.client.awaitJob<DatasetSummary>(
+        await a.client.importFile(upload, { preview: await reference.sniff(upload) }),
+      );
+      await a.client.awaitJob<CheckSummary>(await a.client.runChecks(d1.id));
+      await a.client.decide({ kind: 'exclude_rows', datasetId: d1.id, rows: [0, 1], reason: 'Commissioning rows' });
+      const pressure = (await a.client.getSchema(d1.id)).columns.find((c) => c.name === 'Pressure')?.id as string;
+      await a.client.awaitJob<StepResult>(
+        await a.client.applyStep(
+          d1.id,
+          { kind: 'convert_unit', columnId: pressure, toUnit: 'kPa', mode: 'replace' },
+          'Report in kPa',
+        ),
+      );
+      const state = async (e: EngineClient) => {
+        const p = await e.getProject();
+        const rows = [];
+        for (const d of p.datasets) rows.push(await allRows(e, d.id));
+        return {
+          audit: await allAudit(e),
+          issues: (await e.listIssues({ limit: 1000 })).items,
+          datasets: p.datasets,
+          rows,
+        };
+      };
+      const before = await state(a.client);
+      // While the engine runs, its work is not offered to another.
+      const watcher = startNative(args);
+      expect(await watcher.client.recoveryInfo()).toBeNull();
+      stopNative(watcher);
+      await crash(a);
+
+      const b = startNative(args);
+      expect(await b.client.recoveryInfo()).toMatchObject({
+        name: 'Unsaved',
+        entries: before.audit.length,
+        unsaved: before.audit.length - 1,
+      });
+      const report = await b.client.awaitJob<ProjectOpenReport>(await b.client.recoverProject());
+      expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(report.readOnly).toBe(false);
+      expect(await state(b.client)).toEqual(before);
+      // The recovered work is the new engine's own now.
+      const other = startNative(args);
+      expect(await other.client.recoveryInfo()).toBeNull();
+      stopNative(other);
+
+      // If the original on disk changed, the recovered project opens read-only, saying which.
+      await crash(b);
+      writeFileSync(disk, 'well_id\nchanged\n');
+      const c = startNative(args);
+      const damaged = await c.client.awaitJob<ProjectOpenReport>(await c.client.recoverProject());
+      expect(damaged.readOnly).toBe(true);
+      // The changed file fails its checksum (the upload's copy does not), and the replay of it stops.
+      expect(damaged.checks.filter((x) => !x.ok && x.id === 'original-checksum').map((x) => x.target)).toEqual([
+        d1.source.fileId,
+      ]);
+      expect(await c.client.recoveryInfo()).toBeNull();
+      stopNative(c);
+
+      // Saved work is not offered; unsaved work (an import and its assumptions) can be discarded.
+      const saved = startNative(args);
+      await saved.client.newProject({ name: 'Saved', profile: { ...PROFILE } });
+      await saved.client.awaitJob<DatasetSummary>(
+        await saved.client.importFile(upload, { preview: await reference.sniff(upload) }),
+      );
+      await saved.client.awaitJob<SaveResult>(
+        await saved.client.saveProject({ kind: 'path', path: join(folder, 'saved.twp') }),
+      );
+      await crash(saved);
+      const unsaved = startNative(args);
+      expect(await unsaved.client.recoveryInfo()).toBeNull();
+      await unsaved.client.newProject({ name: 'Draft', profile: { ...PROFILE } });
+      await unsaved.client.awaitJob<DatasetSummary>(
+        await unsaved.client.importFile(upload, { preview: await reference.sniff(upload) }),
+      );
+      await crash(unsaved);
+      const last = startNative(args);
+      expect(await last.client.recoveryInfo()).toMatchObject({ name: 'Draft', unsaved: 2 });
+      await last.client.discardRecovery();
+      expect(await last.client.recoveryInfo()).toBeNull();
+      stopNative(last);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('refuses what it does not support yet with a reason and a fix', async () => {

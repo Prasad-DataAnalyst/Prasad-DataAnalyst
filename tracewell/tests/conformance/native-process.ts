@@ -27,7 +27,9 @@ export function startNative(args: string[], workdir?: string): NativeProcess {
   const dir = workdir ?? mkdtempSync(join(tmpdir(), 'tw-native-'));
   // Mapping templates stay in the working folder, so tests never touch the user's own store.
   const templates = args.includes('--templates') ? [] : ['--templates', join(dir, 'mapping-templates.json')];
-  const child = spawn(NATIVE_BINARY, ['serve', '--workdir', dir, ...templates, ...args]);
+  // And so does the recovery journal, unless a test shares one between engines.
+  const recovery = args.includes('--recovery') ? [] : ['--recovery', join(dir, 'recovery')];
+  const child = spawn(NATIVE_BINARY, ['serve', '--workdir', dir, ...templates, ...recovery, ...args]);
   child.stderr.on('data', (d: Buffer) => process.stderr.write(`[native] ${d.toString()}`));
   const client = new EngineClient(
     stdioTransport({

@@ -302,10 +302,10 @@ pub fn matches(l: &Listed, q: &Value, root: &dyn Fn(&str) -> String) -> bool {
     if !q["ruleId"].is_null() && q["ruleId"] != i["ruleId"] {
         return false;
     }
-    if let Some(states) = q["delta"].as_array().filter(|a| !a.is_empty()) {
-        if !states.contains(&i["delta"]["state"]) {
-            return false;
-        }
+    if let Some(states) = q["delta"].as_array().filter(|a| !a.is_empty())
+        && !states.contains(&i["delta"]["state"])
+    {
+        return false;
     }
     if let Some(col) = q["columnId"].as_str() {
         // A converted column and its source are the same column for the filter.

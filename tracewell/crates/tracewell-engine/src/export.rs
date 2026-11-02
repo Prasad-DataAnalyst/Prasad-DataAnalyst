@@ -518,10 +518,11 @@ pub struct Expected<'a> {
 fn parse_header(h: &str) -> (String, Option<String>) {
     if let Some(open) = h.rfind(" [") {
         let unit = &h[open + 2..];
-        if let Some(u) = unit.strip_suffix(']') {
-            if !u.is_empty() && !u.contains(['[', ']']) {
-                return (h[..open].to_string(), Some(u.to_string()));
-            }
+        if let Some(u) = unit.strip_suffix(']')
+            && !u.is_empty()
+            && !u.contains(['[', ']'])
+        {
+            return (h[..open].to_string(), Some(u.to_string()));
         }
     }
     (h.to_string(), None)

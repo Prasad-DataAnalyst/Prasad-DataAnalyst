@@ -982,10 +982,11 @@ impl CheckCtx<'_> {
                 if x.is_null(i) || !x.value(i).is_finite() {
                     continue;
                 }
-                if let Some((centre_rid, centre, med, mad)) = win.push(rid, x.value(i)) {
-                    if mad > 0.0 && (centre - med).abs() > k * MAD_SCALE * mad {
-                        rows.insert(centre_rid);
-                    }
+                if let Some((centre_rid, centre, med, mad)) = win.push(rid, x.value(i))
+                    && mad > 0.0
+                    && (centre - med).abs() > k * MAD_SCALE * mad
+                {
+                    rows.insert(centre_rid);
                 }
             }
         })?;
@@ -1218,10 +1219,10 @@ impl CheckCtx<'_> {
                 if types.as_ref().is_some_and(|t| !t.contains(&c.typ.as_str())) {
                     return false;
                 }
-                if let Some(q) = &quantities {
-                    if c.quantity.as_deref().is_none_or(|cq| !q.contains(&cq)) {
-                        return false;
-                    }
+                if let Some(q) = &quantities
+                    && c.quantity.as_deref().is_none_or(|cq| !q.contains(&cq))
+                {
+                    return false;
                 }
                 all || roles.is_some() || types.is_some() || quantities.is_some()
             })

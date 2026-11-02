@@ -185,10 +185,10 @@ impl RowSet {
                 None => current = Some([r, r]),
             }
         }
-        if let Some(range) = current {
-            if ranges.len() < max {
-                ranges.push(range);
-            }
+        if let Some(range) = current
+            && ranges.len() < max
+        {
+            ranges.push(range);
         }
         json!({ "count": self.count(), "ranges": ranges })
     }
@@ -269,7 +269,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 /// The bytes of standard padded base64, or None when the text is not that.
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let t = text.as_bytes();
-    if t.len() % 4 != 0 {
+    if !t.len().is_multiple_of(4) {
         return None;
     }
     let value = |c: u8| BASE64.iter().position(|&x| x == c).map(|i| i as u32);

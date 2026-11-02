@@ -48,7 +48,7 @@ Run from this folder:
 
 `node scripts/test-all.mjs --skip-e2e` runs every stage except Playwright, and `--skip-native` leaves
 out the Rust stage on a machine without Rust (the native parity suite is then skipped and says so).
-The native engine needs Rust 1.85 or later; its first build compiles DuckDB and takes about 15 minutes.
+The native engine needs Rust 1.89 or later; its first build compiles DuckDB and takes about 15 minutes.
 
 ## Layout
 

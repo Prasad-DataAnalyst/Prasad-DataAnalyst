@@ -95,12 +95,11 @@ impl ColumnParser {
             return Parsed::Value(Cell::Null, Some(m.clone()));
         }
         // A numeric marker also matches the same number written differently ('-999.250').
-        if !self.numeric_markers.is_empty() {
-            if let Some(v) = parse_number(raw, self.decimal, "") {
-                if let Some((_, m)) = self.numeric_markers.iter().find(|(x, _)| *x == v) {
-                    return Parsed::Value(Cell::Null, Some(m.clone()));
-                }
-            }
+        if !self.numeric_markers.is_empty()
+            && let Some(v) = parse_number(raw, self.decimal, "")
+            && let Some((_, m)) = self.numeric_markers.iter().find(|(x, _)| *x == v)
+        {
+            return Parsed::Value(Cell::Null, Some(m.clone()));
         }
         let value = match self.kind {
             Kind::String => Some(Cell::Text(raw.to_string())),
@@ -491,10 +490,10 @@ pub fn parse_date(text: &str, f: DateFormat) -> Option<i64> {
     }
     let p = date_parts(text)?;
     let (m, d) = month_day(&p, f)?;
-    if let Some(t) = &p.time {
-        if t.ms != 0 || t.zoned {
-            return None;
-        }
+    if let Some(t) = &p.time
+        && (t.ms != 0 || t.zoned)
+    {
+        return None;
     }
     Some(days_from_civil(p.year, m, d))
 }

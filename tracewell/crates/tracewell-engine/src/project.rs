@@ -503,10 +503,8 @@ pub fn integrity(
     target: Option<&str>,
 ) -> Value {
     let mut c = json!({ "id": id, "ok": ok, "detail": detail });
-    if !ok {
-        if let Some(r) = rule {
-            c["ruleId"] = json!(r);
-        }
+    if !ok && let Some(r) = rule {
+        c["ruleId"] = json!(r);
     }
     if let Some(t) = target {
         c["target"] = json!(t);

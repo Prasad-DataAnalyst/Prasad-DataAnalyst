@@ -2,7 +2,7 @@
 name = "tracewell-engine"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "Tracewell native engine: the engine protocol over stdio, with DuckDB and Parquet for files beyond browser memory"
 license = "Apache-2.0"
 authors = ["Prasad (Prasad-DataAnalyst)"]

@@ -2,10 +2,13 @@
 //! frames), with DuckDB and Parquet underneath for files beyond browser memory.
 //!
 //!   tracewell-engine serve [--workdir DIR] [--memory-limit BYTES] [--threads N] [--owner NAME]
-//!                          [--templates FILE] [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
+//!                          [--templates FILE] [--recovery DIR]
+//!                          [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
 //!
 //! The templates file keeps the user's mapping templates; by default it is
-//! tracewell/mapping-templates.json in the user's configuration directory.
+//! tracewell/mapping-templates.json in the user's configuration directory. The recovery folder
+//! keeps each session's journal of unsaved work; by default it is tracewell/recovery in the
+//! user's state directory.
 //! The owner is the registered owner of this copy; every export manifest records it.
 //! The memory limit is the budget of the whole process (default half the machine's RAM); DuckDB
 //! gets a share of it (memory.rs).
@@ -26,6 +29,7 @@ mod memory;
 mod parse;
 mod project;
 mod recipes;
+mod recovery;
 mod rules;
 mod steps;
 mod stream;
@@ -51,6 +55,7 @@ struct Args {
     seed: Option<u32>,
     owner: String,
     templates: Option<PathBuf>,
+    recovery: Option<PathBuf>,
 }
 
 fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
@@ -64,6 +69,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
         // The product's owner, as the TypeScript build takes it from package.json's author.
         owner: env!("CARGO_PKG_AUTHORS").to_string(),
         templates: None,
+        recovery: None,
     };
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
@@ -91,6 +97,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
             "--seed" => a.seed = Some(value()?.parse().map_err(|_| "--seed takes a number")?),
             "--owner" => a.owner = value()?,
             "--templates" => a.templates = Some(PathBuf::from(value()?)),
+            "--recovery" => a.recovery = Some(PathBuf::from(value()?)),
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -152,7 +159,31 @@ fn open(args: &Args) -> Result<Engine> {
         .templates
         .clone()
         .unwrap_or_else(|| default_templates(&args.workdir));
+    let recovery = args
+        .recovery
+        .clone()
+        .unwrap_or_else(|| default_recovery(&args.workdir));
+    // Without a journal the engine still works; it only cannot offer recovery.
+    engine.journal = recovery::Journal::open(&recovery)
+        .map_err(|e| eprintln!("tracewell-engine: no recovery journal: {}", e.message))
+        .ok();
     Ok(engine)
+}
+
+/// The user's state directory (XDG on Linux, ~/.local/state otherwise; LOCALAPPDATA on
+/// Windows), or the working folder when there is no home to keep it in.
+fn default_recovery(workdir: &std::path::Path) -> PathBuf {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
+        });
+    match state {
+        Some(dir) => dir.join("tracewell").join("recovery"),
+        None => workdir.join("recovery"),
+    }
 }
 
 /// The user's configuration directory (XDG on Linux, ~/.config otherwise), or the working
@@ -192,6 +223,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     if method == "decide" {
         return engine::decide(shared, param(params, 0));
     }
+    if method == "recoverProject" {
+        return engine::recover_project(shared);
+    }
     if method == "planRecipe" {
         return engine::plan_recipe(shared, msg, param(params, 0), param(params, 1));
     }
@@ -227,6 +261,8 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "saveMappingTemplate" => e.save_mapping_template(param(params, 0)),
         "deleteMappingTemplate" => e.delete_mapping_template(param(params, 0)),
         "saveRecipe" => e.save_recipe(param(params, 0)),
+        "recoveryInfo" => e.recovery_info(),
+        "discardRecovery" => e.discard_recovery(),
         "getRows" => e.rows(param(params, 0)),
         "getColumnStats" => e.column_stats(param(params, 0), param(params, 1)),
         "listAudit" => e.list_audit(param(params, 0)),
