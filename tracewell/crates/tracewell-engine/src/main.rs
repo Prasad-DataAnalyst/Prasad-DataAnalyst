@@ -25,6 +25,7 @@ mod issues;
 mod memory;
 mod parse;
 mod project;
+mod recipes;
 mod rules;
 mod steps;
 mod stream;
@@ -191,6 +192,18 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     if method == "decide" {
         return engine::decide(shared, param(params, 0));
     }
+    if method == "planRecipe" {
+        return engine::plan_recipe(shared, msg, param(params, 0), param(params, 1));
+    }
+    if method == "applyRecipe" {
+        return engine::apply_recipe(
+            shared,
+            msg,
+            param(params, 0),
+            param(params, 1),
+            param(params, 2),
+        );
+    }
     if method == "applyStep" {
         return engine::apply_step(shared, param(params, 0), param(params, 1), param(params, 2));
     }
@@ -213,6 +226,7 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "listMappingTemplates" => e.list_mapping_templates(),
         "saveMappingTemplate" => e.save_mapping_template(param(params, 0)),
         "deleteMappingTemplate" => e.delete_mapping_template(param(params, 0)),
+        "saveRecipe" => e.save_recipe(param(params, 0)),
         "getRows" => e.rows(param(params, 0)),
         "getColumnStats" => e.column_stats(param(params, 0), param(params, 1)),
         "listAudit" => e.list_audit(param(params, 0)),
@@ -253,8 +267,14 @@ fn serve(args: Args) -> io::Result<()> {
                 shared.engine.lock().ok()?.job_bytes.get(job).cloned()
             })
             .flatten();
-        match bytes {
-            Some(b) => {
+        // Bytes a call itself hands back (a saved recipe) go under value.bytes.
+        let own = shared
+            .engine
+            .lock()
+            .ok()
+            .and_then(|mut e| e.reply_bytes.take());
+        match (bytes, own) {
+            (Some(b), _) => {
                 let framed = framing::with_bytes(
                     &reply,
                     |v, marker| v["value"]["result"]["bytes"] = marker,
@@ -262,7 +282,12 @@ fn serve(args: Args) -> io::Result<()> {
                 );
                 shared.send_framed(&framed, &[&b]);
             }
-            None => shared.send(&reply),
+            (None, Some(b)) if reply["ok"] == true => {
+                let framed =
+                    framing::with_bytes(&reply, |v, marker| v["value"]["bytes"] = marker, b.len());
+                shared.send_framed(&framed, &[&b]);
+            }
+            _ => shared.send(&reply),
         }
     }
     Ok(())

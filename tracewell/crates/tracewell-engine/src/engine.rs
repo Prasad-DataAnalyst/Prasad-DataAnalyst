@@ -59,6 +59,8 @@ pub struct Dataset {
     pub steps: Vec<Value>,
     /// Rows in the output view, counted when the views are installed.
     pub output_rows: u64,
+    /// The recipe last run on the dataset (FR-RCP-02): id, name, version, baseline and export.
+    pub recipe: Value,
 }
 
 impl Dataset {
@@ -226,6 +228,8 @@ pub struct Engine {
     /// The file that keeps the user's mapping templates (FR-IMP-06), beside the engine rather than
     /// in a project.
     pub templates: PathBuf,
+    /// Bytes the current call hands back with its answer, under `bytes` (a saved recipe).
+    pub reply_bytes: Option<Vec<u8>>,
 }
 
 /// What every thread shares: the engine behind a lock, and the output stream behind another, so
@@ -329,6 +333,7 @@ impl Engine {
             cancels: HashMap::new(),
             next_job: 1,
             templates: PathBuf::from("mapping-templates.json"),
+            reply_bytes: None,
         }
     }
 
@@ -751,26 +756,26 @@ impl Engine {
             if !q["datasetId"].is_null() && q["datasetId"] != d.id.as_str() {
                 continue;
             }
+            let namer = column_namer(d);
+            let stages = d.stages().ok();
+            let root = |c: &str| {
+                stages
+                    .as_ref()
+                    .map_or_else(|| c.to_string(), |s| root_of(s, c))
+            };
+            let baseline = d.recipe["baseline"]["issues"].as_array();
             for st in &d.issues {
-                let names = st
-                    .draft
-                    .columns
-                    .iter()
-                    .map(|id| {
-                        d.spec["columns"]
-                            .as_array()
-                            .and_then(|cs| cs.iter().find(|c| c["id"] == id.as_str()))
-                            .and_then(|c| c["name"].as_str())
-                            .unwrap_or(id)
-                            .to_string()
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let columns: Vec<String> = st.draft.columns.iter().map(|c| namer(c)).collect();
+                let mut issue = to_issue(st, &d.excluded);
+                // After a recipe run, each issue says whether it is new or changed since its baseline.
+                if let Some(baseline) = baseline {
+                    issue["delta"] = crate::recipes::delta_of(&issue, &columns, baseline);
+                }
                 let listed = Listed {
-                    issue: to_issue(st, &d.excluded),
-                    names,
+                    issue,
+                    names: columns.join(", "),
                 };
-                if matches(&listed, q) {
+                if matches(&listed, q, &root) {
                     list.push(listed);
                 }
             }
@@ -1316,6 +1321,16 @@ fn apply_decision(
             if convert && !skip(&id, seq) {
                 recheck(conn, d, area, seq)?;
             }
+        }
+        "recipe.apply" => {
+            let r = &e["payload"]["recipe"];
+            dataset_mut(p, &id)?.recipe = json!({
+                "id": r["id"],
+                "name": r["name"],
+                "version": r["version"],
+                "baseline": r["baseline"],
+                "export": r["export"],
+            });
         }
         "issue.comment" => {
             if skip(&id, seq) {
@@ -2432,6 +2447,364 @@ impl Engine {
     }
 }
 
+/// Validates a step against the dataset as it stands, records it with its description (and a
+/// conversion's method) and applies it (commitStep). Returns the step, its entry, the description
+/// and the method.
+fn commit_step(
+    engine: &mut Engine,
+    dataset_id: &str,
+    input: &Value,
+    reason: &str,
+) -> Result<(Value, Value, String, Option<crate::steps::Method>)> {
+    let p = engine.writable()?;
+    let step_id = format!("s{}", p.next_step);
+    let d = engine.dataset(&json!(dataset_id))?;
+    let stages = d.stages()?;
+    crate::steps::validate(input, &stages)?;
+    let convert = input["kind"] == "convert_unit";
+    let seen = if convert {
+        &stages.working
+    } else {
+        &stages.output
+    };
+    let method = if convert {
+        Some(crate::steps::conversion_for(input, seen)?)
+    } else {
+        None
+    };
+    let description = crate::steps::describe(input, seen);
+    let mut target = json!({ "datasetId": dataset_id, "stepId": step_id });
+    if convert {
+        target["columnId"] = input["columnId"].clone();
+    }
+    let mut entry = draft("step.apply", target);
+    entry.insert("new".into(), input.clone());
+    entry.insert("reason".into(), json!(reason));
+    if let Some(m) = &method {
+        entry.insert("method".into(), m.to_json());
+    }
+    entry.insert("payload".into(), json!({ "description": description }));
+    let appended = engine.append(entry, None)?;
+    let Engine { conn, project, .. } = &mut *engine;
+    let p = project
+        .as_mut()
+        .ok_or_else(|| EngineError::internal("The project disappeared during the step."))?;
+    apply_decision(conn, p, &appended, None, &|_, _| false)?;
+    let step = dataset_mut(p, dataset_id)?
+        .steps
+        .iter()
+        .find(|st| st["id"] == step_id.as_str())
+        .cloned()
+        .ok_or_else(|| EngineError::internal(format!("Step {step_id} was not applied.")))?;
+    Ok((step, appended, description, method))
+}
+
+/// The column names of a dataset's working view, for issue keys and baselines (columnNamer).
+fn column_namer(d: &Dataset) -> impl Fn(&str) -> String + use<> {
+    let names: Vec<(String, String)> = d
+        .stages()
+        .map(|s| s.every)
+        .unwrap_or_else(|_| d.base_columns())
+        .iter()
+        .map(|c| {
+            (
+                c.id().to_string(),
+                c.schema["name"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    move |id: &str| {
+        names
+            .iter()
+            .find(|(c, _)| c == id)
+            .map_or_else(|| id.to_string(), |(_, n)| n.clone())
+    }
+}
+
+/// The rule packs this engine checks with, as references.
+fn builtin_packs() -> Vec<Value> {
+    check_packs().iter().map(|p| p.reference()).collect()
+}
+
+impl Engine {
+    /// A recipe of a dataset's steps, checks and issues (saveRecipe); the .twr bytes go back with
+    /// the answer.
+    pub fn save_recipe(&mut self, o: &Value) -> Result<Value> {
+        use unicode_normalization::UnicodeNormalization;
+        let p = self.project()?;
+        let d = self.dataset(&o["datasetId"])?;
+        let name: String = o["name"]
+            .as_str()
+            .unwrap_or("")
+            .nfc()
+            .collect::<String>()
+            .trim_matches(crate::units::is_js_space)
+            .to_string();
+        if name.is_empty() || name.encode_utf16().count() > 200 {
+            return Err(EngineError::invalid(
+                "A recipe name must be text of 1 to 200 characters.",
+                "Type a name for the recipe.",
+            ));
+        }
+        let exported = o.get("export").cloned().unwrap_or(Value::Null);
+        if !exported.is_null() {
+            let known = crate::export::profile_statuses()
+                .iter()
+                .any(|s| s["profile"]["id"] == exported["profile"]);
+            if !known || !exported["neutralizeFormulas"].is_boolean() {
+                return Err(EngineError::invalid(
+                    format!(
+                        "The export profile {} does not exist.",
+                        exported["profile"]
+                            .as_str()
+                            .map_or_else(|| exported["profile"].to_string(), String::from)
+                    ),
+                    "Choose a listed export profile, or none.",
+                ));
+            }
+        }
+        if !d.checked() && d.steps.is_empty() && exported.is_null() {
+            return Err(EngineError::invalid(
+                format!(
+                    "{} has not been checked and has no steps, so a recipe of it would do nothing.",
+                    d.name
+                ),
+                "Run checks or apply a step first, then save the recipe.",
+            ));
+        }
+        let issues: Vec<Value> = d
+            .issues
+            .iter()
+            .map(|st| to_issue(st, &d.excluded))
+            .collect();
+        let version = if d.recipe["name"] == name.as_str() {
+            d.recipe["version"].as_u64().unwrap_or(0) + 1
+        } else {
+            1
+        };
+        let base = d.base_columns();
+        let namer = column_namer(d);
+        let (dataset_name, steps, packs, rows) = (
+            d.name.clone(),
+            d.steps.clone(),
+            d.check_packs.clone(),
+            d.row_count,
+        );
+        let export = if exported.is_null() {
+            Value::Null
+        } else {
+            json!({ "profile": exported["profile"], "neutralizeFormulas": exported["neutralizeFormulas"] })
+        };
+        let saved_by = p.profile["name"].clone();
+        let version_text = self.version.clone();
+        let at = self.clock.now_iso();
+        let src = crate::recipes::Source {
+            dataset_name: &dataset_name,
+            base: &base,
+            steps: &steps,
+            check_packs: &packs,
+            row_count: rows,
+            issues: &issues,
+            name: &namer,
+        };
+        let recipe =
+            crate::recipes::build(&src, &name, version, &at, &saved_by, &version_text, export)?;
+        self.reply_bytes = Some(crate::recipes::bytes(&recipe));
+        Ok(json!({ "recipe": recipe, "fileName": crate::recipes::file_name(&recipe) }))
+    }
+
+    /// How a recipe would map onto a dataset (planRecipe).
+    pub fn plan_recipe(&self, dataset: &Value, bytes: &[u8], file_name: &str) -> Result<Value> {
+        let d = self.dataset(dataset)?;
+        let recipe = crate::recipes::parse(bytes, file_name)?;
+        Ok(crate::recipes::plan(
+            &recipe,
+            &d.id,
+            &d.name,
+            &d.base_columns(),
+            &d.steps,
+            &builtin_packs(),
+        )
+        .0)
+    }
+}
+
+/// The contents of a file passed to a call, and its name.
+fn input_bytes(engine: &Engine, msg: &Incoming, file: &Value) -> Result<(Vec<u8>, String)> {
+    let (path, name) = input_path(engine, msg, file)?;
+    Ok((std::fs::read(path)?, name))
+}
+
+/// planRecipe, reading the recipe file the call passes.
+pub fn plan_recipe(
+    shared: &Arc<Shared>,
+    msg: &Incoming,
+    dataset: &Value,
+    file: &Value,
+) -> Result<Value> {
+    let engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let (bytes, name) = input_bytes(&engine, msg, file)?;
+    engine.plan_recipe(dataset, &bytes, &name)
+}
+
+/// Runs a recipe as a job (applyRecipe): it is recorded, its steps are applied and its checks run,
+/// each as its own audit entry with the user's reason, then the issues are compared with the
+/// recipe's baseline. A recipe that does not fit is refused before anything is recorded.
+/// Result: RecipeRun.
+pub fn apply_recipe(
+    shared: &Arc<Shared>,
+    msg: &Incoming,
+    dataset: &Value,
+    file: &Value,
+    reason: &Value,
+) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let text = reason_of(reason)?;
+    engine.writable()?;
+    let dataset_id = engine.dataset(dataset)?.id.clone();
+    let (bytes, file_name) = input_bytes(&engine, msg, file)?;
+    let (job, cancel) = engine.start_job();
+    drop(engine);
+    let shared = shared.clone();
+    let job_id = job.clone();
+    std::thread::spawn(move || {
+        let outcome = (|| -> Result<Value> {
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            engine.writable()?;
+            let recipe = crate::recipes::parse(&bytes, &file_name)?;
+            let d = engine.dataset(&json!(dataset_id))?;
+            let (plan, steps) = crate::recipes::plan(
+                &recipe,
+                &d.id,
+                &d.name,
+                &d.base_columns(),
+                &d.steps,
+                &builtin_packs(),
+            );
+            if plan["fits"] != true {
+                return Err(EngineError::invalid(
+                    format!(
+                        "The recipe \"{}\" does not fit {}: {}",
+                        recipe["name"].as_str().unwrap_or(""),
+                        d.name,
+                        plan["problems"][0].as_str().unwrap_or("")
+                    ),
+                    "Set the dataset up as the recipe expects (column names, types and units), or choose another recipe.",
+                ));
+            }
+            let mut entry = draft("recipe.apply", json!({ "datasetId": dataset_id }));
+            entry.insert("reason".into(), json!(text));
+            entry.insert(
+                "payload".into(),
+                json!({ "recipe": recipe, "columns": plan["columns"] }),
+            );
+            let appended = engine.append(entry, None)?;
+            {
+                let Engine { conn, project, .. } = &mut *engine;
+                let p = project.as_mut().ok_or_else(|| {
+                    EngineError::internal("The project disappeared during the recipe.")
+                })?;
+                apply_decision(conn, p, &appended, None, &|_, _| false)?;
+            }
+            let label = format!(
+                "Recipe \"{}\" v{}: {text}",
+                recipe["name"].as_str().unwrap_or(""),
+                recipe["version"]
+            );
+            let mut step_ids = Vec::new();
+            for input in &steps {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(EngineError::new(
+                        "CANCELLED",
+                        "The recipe was cancelled.",
+                        "Run the recipe again when you are ready.",
+                    ));
+                }
+                let (step, _, _, _) = commit_step(&mut engine, &dataset_id, input, &label)?;
+                step_ids.push(step["id"].clone());
+            }
+            let checked = !recipe["check"].is_null();
+            if checked {
+                let area = area_of(&engine.project()?.project_area);
+                let drafts = check_drafts(
+                    &engine.conn,
+                    engine.dataset(&json!(dataset_id))?,
+                    area,
+                    &cancel,
+                )?;
+                let packs = builtin_packs();
+                let mut run = draft("check.run", json!({ "datasetId": dataset_id }));
+                run.insert("payload".into(), json!({ "packs": packs }));
+                let seq = engine.append(run, None)?["seq"].as_u64().unwrap_or(0);
+                let p = engine.project.as_mut().ok_or_else(|| {
+                    EngineError::internal("The project disappeared during the recipe.")
+                })?;
+                let d = dataset_mut(p, &dataset_id)?;
+                let n = d.row_count;
+                merge_check_run(&mut d.issues, drafts, seq, n);
+                d.check_packs = packs;
+            }
+            let d = engine.dataset(&json!(dataset_id))?;
+            let mut result = json!({
+                "datasetId": dataset_id,
+                "recipeId": recipe["id"],
+                "name": recipe["name"],
+                "version": recipe["version"],
+                "steps": step_ids,
+                "checked": checked,
+                "delta": null,
+                "export": recipe["export"],
+            });
+            let baseline = recipe["baseline"]["issues"].as_array().cloned();
+            if let (Some(baseline), true) = (baseline, checked) {
+                let namer = column_namer(d);
+                let issues: Vec<Value> = d
+                    .issues
+                    .iter()
+                    .map(|st| to_issue(st, &d.excluded))
+                    .collect();
+                let states: Vec<Value> = issues
+                    .iter()
+                    .map(|i| {
+                        let names: Vec<String> = i["columns"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|c| namer(c.as_str().unwrap_or("")))
+                            .collect();
+                        crate::recipes::delta_of(i, &names, &baseline)["state"].clone()
+                    })
+                    .collect();
+                let count = |s: &str| states.iter().filter(|x| *x == s).count();
+                result["delta"] = json!({
+                    "new": count("new"),
+                    "changed": count("changed"),
+                    "unchanged": count("unchanged"),
+                    "resolved": crate::recipes::resolved_since(&crate::recipes::baseline_of(&issues, &namer), &baseline),
+                });
+            }
+            Ok(result)
+        })();
+        finish_job(
+            &shared,
+            &job_id,
+            outcome,
+            &["project", "steps", "schema", "datasets", "issues", "audit"],
+            &dataset_id,
+        );
+    });
+    Ok(json!({ "jobId": job, "kind": "recipe" }))
+}
+
 /// Applies a step as a job (applyStep): validated against the dataset as it stands, recorded with
 /// its description (and, for a conversion, its method), then applied by the reducer. Result:
 /// StepResult.
@@ -2462,47 +2835,13 @@ pub fn apply_step(
                 .engine
                 .lock()
                 .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
-            let p = engine.writable()?;
-            let d = engine.dataset(&json!(dataset_id))?;
-            let stages = d.stages()?;
-            crate::steps::validate(&input, &stages)?;
-            let convert = input["kind"] == "convert_unit";
-            let seen = if convert {
-                &stages.working
-            } else {
-                &stages.output
-            };
-            let method = if convert {
-                Some(crate::steps::conversion_for(&input, seen)?)
-            } else {
-                None
-            };
-            let description = crate::steps::describe(&input, seen);
-            let step_id = format!("s{}", p.next_step);
-            let mut target = json!({ "datasetId": dataset_id, "stepId": step_id });
-            if convert {
-                target["columnId"] = input["columnId"].clone();
-            }
-            let mut entry = draft("step.apply", target);
-            entry.insert("new".into(), input.clone());
-            entry.insert("reason".into(), json!(text));
-            if let Some(m) = &method {
-                entry.insert("method".into(), m.to_json());
-            }
-            entry.insert("payload".into(), json!({ "description": description }));
-            let appended = engine.append(entry, None)?;
+            let (step, appended, description, method) =
+                commit_step(&mut engine, &dataset_id, &input, &text)?;
             let Engine { conn, project, .. } = &mut *engine;
             let p = project
                 .as_mut()
                 .ok_or_else(|| EngineError::internal("The project disappeared during the step."))?;
-            apply_decision(conn, p, &appended, None, &|_, _| false)?;
             let d = dataset_mut(p, &dataset_id)?;
-            let step = d
-                .steps
-                .iter()
-                .find(|st| st["id"] == step_id.as_str())
-                .cloned()
-                .ok_or_else(|| EngineError::internal(format!("Step {step_id} was not applied.")))?;
             let mut result = json!({
                 "step": step,
                 "audit": appended,
@@ -3574,6 +3913,7 @@ fn commit_import(
         edits: BTreeMap::new(),
         steps: Vec::new(),
         output_rows: imported.row_count,
+        recipe: Value::Null,
     };
     install_views(&engine.conn, &mut dataset)?;
     let summary = Engine::dataset_summary(&dataset);
@@ -3824,6 +4164,7 @@ impl Reopen<'_> {
             edits: BTreeMap::new(),
             steps: Vec::new(),
             output_rows: restored.row_count,
+            recipe: Value::Null,
         });
         if let Some(d) = p.datasets.last_mut() {
             install_views(self.conn, d)?;
@@ -4071,7 +4412,8 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                                 })
                         }
                         "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
-                        | "project.area" | "entry.revert" | "step.apply" | "step.remove" => {
+                        | "project.area" | "entry.revert" | "step.apply" | "step.remove"
+                        | "recipe.apply" => {
                             let reverted = log.entries().iter().find(|x| {
                                 e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]
                             });

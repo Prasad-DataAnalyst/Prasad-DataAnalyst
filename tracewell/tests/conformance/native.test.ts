@@ -22,6 +22,9 @@ import {
   type ImportPreview,
   type ProjectManifest,
   type Decision,
+  type Recipe,
+  type RecipePlan,
+  type RecipeRun,
   type ProjectOpenReport,
   type SaveResult,
   type StepInput,
@@ -835,6 +838,94 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     await native.client.deleteMappingTemplate(id);
     await reference.deleteMappingTemplate(id);
     expect(await list(native.client)).toEqual(await list(reference));
+  });
+
+  it('saves, plans and runs recipes the same way, with the same deltas and refusals', async () => {
+    const golden = pairs.get('csv_well_daily_golden.csv') as { nat: string; ref: string };
+    const dates = pairs.get('csv_dates_ambiguous_and_mixed.csv') as { nat: string; ref: string };
+    // The second import of the golden file (from the statistics test) is the recipe's new data.
+    const second = async (e: EngineClient, first: string) =>
+      (await e.getProject()).datasets
+        .filter((d) => d.source.fileName === 'csv_well_daily_golden.csv' && d.id !== first)
+        .at(-1)?.id as string;
+    const next = { nat: await second(native.client, golden.nat), ref: await second(reference, golden.ref) };
+    const strip = (r: Recipe) => ({ ...r, savedAt: '' });
+    const refused = async (run: (e: EngineClient, side: 'nat' | 'ref') => Promise<unknown>) => {
+      const out: unknown[] = [];
+      for (const [e, side] of [
+        [native.client, 'nat'],
+        [reference, 'ref'],
+      ] as const) {
+        out.push(
+          await run(e, side).then(
+            () => 'accepted',
+            (err: { code: string; message: string }) => [err.code, err.message],
+          ),
+        );
+      }
+      expect(out[0]).toEqual(out[1]);
+      expect(out[0]).not.toBe('accepted');
+    };
+    const options = { name: 'Monthly wells', export: { profile: 'parquet' as const, neutralizeFormulas: false } };
+    const [a, b] = [
+      await native.client.saveRecipe({ datasetId: golden.nat, ...options }),
+      await reference.saveRecipe({ datasetId: golden.ref, ...options }),
+    ];
+    expect({ ...strip(a.recipe), fileName: a.fileName }).toEqual({ ...strip(b.recipe), fileName: b.fileName });
+    expect(JSON.parse(new TextDecoder().decode(a.bytes))).toEqual(a.recipe);
+    const file = (r: { bytes: Uint8Array; fileName: string }) => ({
+      kind: 'bytes' as const,
+      bytes: r.bytes,
+      name: r.fileName,
+    });
+
+    // The plan: on new data it fits; on a dataset without those columns it does not.
+    const plan = async (on: { nat: string; ref: string }) => {
+      const [x, y] = [await native.client.planRecipe(on.nat, file(a)), await reference.planRecipe(on.ref, file(b))];
+      const shape = (pl: RecipePlan) => ({ ...pl, recipe: strip(pl.recipe), datasetId: '' });
+      expect(shape(x)).toEqual(shape(y));
+      return x;
+    };
+    expect((await plan(next)).fits).toBe(true);
+    expect((await plan(dates)).fits).toBe(false);
+
+    // Run on the new data: the same steps, checks and comparison with the baseline.
+    const run = async (e: EngineClient, datasetId: string, f: ReturnType<typeof file>) =>
+      e.awaitJob<RecipeRun>(await e.applyRecipe(datasetId, f, 'December figures from the historian'));
+    const [x, y] = [await run(native.client, next.nat, file(a)), await run(reference, next.ref, file(b))];
+    expect({ ...x, datasetId: '' }).toEqual({ ...y, datasetId: '' });
+    await samePair(next.nat, next.ref, 'recipe run');
+    for (const delta of [['new'], ['changed'], ['unchanged'], ['new', 'changed']] as const) {
+      const list = async (e: EngineClient, datasetId: string) =>
+        (await e.listIssues({ datasetId, delta: [...delta], limit: 1000 })).items.map(comparableIssue);
+      expect(await list(native.client, next.nat), delta.join()).toEqual(await list(reference, next.ref));
+    }
+    // Saved again from the dataset it ran on: the next version.
+    const again = await native.client.saveRecipe({ datasetId: next.nat, ...options });
+    const againRef = await reference.saveRecipe({ datasetId: next.ref, ...options });
+    expect(strip(again.recipe)).toEqual(strip(againRef.recipe));
+    expect(again.recipe.version).toBe(2);
+
+    await refused((e, side) => e.saveRecipe({ datasetId: golden[side], name: '  ', export: null }));
+    await refused((e, side) =>
+      e.saveRecipe({
+        datasetId: golden[side],
+        name: 'X',
+        export: { profile: 'pdf' as never, neutralizeFormulas: false },
+      }),
+    );
+    await refused((e, side) =>
+      e.planRecipe(golden[side], { kind: 'bytes', bytes: new TextEncoder().encode('{nope'), name: 'bad.twr' }),
+    );
+    const tampered = { ...a.recipe, name: 'Weekly wells' };
+    await refused((e, side) =>
+      e.planRecipe(golden[side], {
+        kind: 'bytes',
+        bytes: new TextEncoder().encode(JSON.stringify(tampered)),
+        name: 'w.twr',
+      }),
+    );
+    await refused(async (e, side) => run(e, dates[side], file(side === 'nat' ? a : b)));
   });
 
   it('saves a project file that the TypeScript engine opens with every check passing', async () => {

@@ -289,7 +289,7 @@ pub struct Listed {
 }
 
 /// Whether an issue passes the query's filters (queries.ts matches).
-pub fn matches(l: &Listed, q: &Value) -> bool {
+pub fn matches(l: &Listed, q: &Value, root: &dyn Fn(&str) -> String) -> bool {
     let i = &l.issue;
     let in_list = |key: &str, field: &str| {
         q[key]
@@ -302,10 +302,19 @@ pub fn matches(l: &Listed, q: &Value) -> bool {
     if !q["ruleId"].is_null() && q["ruleId"] != i["ruleId"] {
         return false;
     }
+    if let Some(states) = q["delta"].as_array().filter(|a| !a.is_empty()) {
+        if !states.contains(&i["delta"]["state"]) {
+            return false;
+        }
+    }
     if let Some(col) = q["columnId"].as_str() {
-        let has = i["columns"]
-            .as_array()
-            .is_some_and(|cs| cs.iter().any(|c| c.as_str() == Some(col)));
+        // A converted column and its source are the same column for the filter.
+        let wanted = root(col);
+        let has = i["columns"].as_array().is_some_and(|cs| {
+            cs.iter()
+                .filter_map(Value::as_str)
+                .any(|c| c == col || root(c) == wanted)
+        });
         if !has {
             return false;
         }
