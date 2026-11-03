@@ -2027,3 +2027,25 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
         "exceedsBudget": exceeds,
     }))
 }
+
+/// The import spec of a file read with these options (previewSource's spec), for an override
+/// that changes how the whole file is read.
+pub fn plan_spec(src: &Source, options: &Value) -> Result<Value> {
+    let s = sniff_source(src, options)?;
+    let p = preview(src, &s, &[], u64::MAX)?;
+    let name = src.name.rsplit(['/', '\\']).next().unwrap_or(src.name);
+    let stem = match name.rfind('.') {
+        Some(i) if i > 0 => &name[..i],
+        _ => name,
+    }
+    .trim();
+    Ok(json!({
+        "fileName": src.name,
+        "size": src.size,
+        "options": p["sniff"]["options"],
+        "columns": p["columns"],
+        "detections": p["sniff"]["detections"],
+        "crs": p["crs"],
+        "datasetName": if stem.is_empty() { "dataset" } else { stem },
+    }))
+}

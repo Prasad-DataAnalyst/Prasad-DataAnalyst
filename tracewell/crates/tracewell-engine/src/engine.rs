@@ -12,6 +12,7 @@ use crate::import::{CsvPlan, EXCEPTIONS_SUFFIX, csv_plan, import_csv, quote_iden
 use crate::issues::{
     IssueState, Listed, matches, merge_check_run, occurrence_state, open_rows, sort, to_issue,
 };
+use crate::overrides::{Outcome, ReadEnv, original_file, override_of};
 use crate::parse::Kind;
 use crate::rules::{Draft, RowSet, check_packs};
 use crate::steps::{StageColumn, Stages};
@@ -61,6 +62,9 @@ pub struct Dataset {
     pub output_rows: u64,
     /// The recipe last run on the dataset (FR-RCP-02): id, name, version, baseline and export.
     pub recipe: Value,
+    /// An override has read the original again, so the working files no longer hold what the
+    /// `source.add` entry imported, and a project file keeps no cache of them.
+    pub reread: bool,
 }
 
 impl Dataset {
@@ -338,6 +342,68 @@ impl Engine {
             reply_bytes: None,
             journal: None,
         }
+    }
+
+    /// Validates a decision, appends its entry and applies it. An override reads the file again
+    /// before its entry is appended, so a file that cannot be read that way leaves no entry behind.
+    fn commit_decision(&mut self, d: &Value) -> Result<Value> {
+        let draft = decision_draft(&self.conn, self.writable()?, d)?;
+        let prepared = self.prepare_override(&draft)?;
+        let entry = self.append(draft, None)?;
+        let reverted = self
+            .project()?
+            .log
+            .entries()
+            .iter()
+            .find(|e| entry["action"] == "entry.revert" && e["seq"] == entry["target"]["seq"])
+            .cloned();
+        let Engine {
+            conn,
+            project,
+            workdir,
+            threads,
+            ..
+        } = self;
+        let p = project
+            .as_mut()
+            .ok_or_else(|| EngineError::internal("The project disappeared during the decision."))?;
+        let env = ReadEnv {
+            workdir,
+            threads: *threads,
+        };
+        apply_decision(
+            conn,
+            p,
+            &entry,
+            reverted.as_ref(),
+            &|_, _| false,
+            &env,
+            prepared,
+        )?;
+        Ok(entry)
+    }
+
+    /// What an override draft, or the revert of one, makes of its dataset, worked out before the
+    /// entry is appended (commitDraft); None for any other draft.
+    fn prepare_override(&self, draft: &Map<String, Value>) -> Result<Option<Outcome>> {
+        let p = self.project()?;
+        let e = Value::Object(draft.clone());
+        let reverted = if e["action"] == "entry.revert" {
+            p.log
+                .entries()
+                .iter()
+                .find(|x| x["seq"] == e["target"]["seq"])
+        } else {
+            None
+        };
+        if override_of(&e, reverted).is_none() {
+            return Ok(None);
+        }
+        let env = ReadEnv {
+            workdir: &self.workdir,
+            threads: self.threads,
+        };
+        override_outcome(&self.conn, p, &e, reverted, &env, p.log.head().0 + 1).map(Some)
     }
 
     fn project(&self) -> Result<&Project> {
@@ -1224,6 +1290,97 @@ fn author(actor: &Value) -> String {
     }
 }
 
+/// What an override entry, or the revert of one, makes of its dataset (overrideOutcome), read
+/// from the dataset's original. `seq` is the entry that applies it.
+fn override_outcome(
+    conn: &Connection,
+    p: &Project,
+    e: &Value,
+    reverted: Option<&Value>,
+    env: &ReadEnv,
+    seq: u64,
+) -> Result<Outcome> {
+    let (property, column, value) = override_of(e, reverted)
+        .ok_or_else(|| EngineError::internal("The entry is not a detection override."))?;
+    let source = reverted.unwrap_or(e);
+    let id = source["target"]["datasetId"].as_str().unwrap_or("");
+    let d = p.datasets.iter().find(|d| d.id == id).ok_or_else(|| {
+        EngineError::not_found(
+            format!("There is no dataset {id} in this project."),
+            "Choose a listed dataset.",
+        )
+    })?;
+    let file_id = d.spec["fileId"].as_str().unwrap_or_default();
+    let original = p.original_paths.get(file_id).ok_or_else(|| {
+        EngineError::new(
+            "PROJECT_INVALID",
+            format!("The original file of dataset {} is missing.", d.id),
+            "Open the project from a complete .twp file.",
+        )
+    })?;
+    let path = original_file(original, env.workdir, file_id)?;
+    let name = p
+        .originals
+        .iter()
+        .find(|o| o["fileId"] == file_id)
+        .and_then(|o| o["name"].as_str())
+        .or(d.spec["fileName"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    crate::overrides::outcome(
+        conn,
+        d,
+        &path,
+        &name,
+        env,
+        &env.workdir.join(&p.id),
+        &property,
+        column.as_deref(),
+        &value,
+        seq,
+    )
+}
+
+/// Installs what an override made of a dataset (reducer.ts install), then runs the checks again
+/// when `recheck_now` says so. A change of reading setting reads new rows, so the edits,
+/// exclusions and issues of the old ones go.
+fn install_override(
+    conn: &Connection,
+    d: &mut Dataset,
+    o: Outcome,
+    area: Option<[f64; 4]>,
+    seq: u64,
+    recheck_now: bool,
+) -> Result<()> {
+    d.spec = o.spec;
+    d.columns = o.columns;
+    d.assumptions = o.assumptions;
+    let mut replaced = Vec::new();
+    if let Some(r) = o.reread {
+        replaced.push(std::mem::replace(&mut d.rows_file, r.rows_file));
+        replaced.push(std::mem::replace(&mut d.exceptions_file, r.exceptions_file));
+        d.row_count = r.row_count;
+        d.notes = r.notes;
+        d.reread = true;
+    }
+    if o.rows_change {
+        d.edits.clear();
+        d.excluded = RowSet::new(d.row_count);
+        d.exclusions.clear();
+        d.issues.clear();
+    }
+    install_views(conn, d)?;
+    for f in replaced {
+        if f != d.rows_file && f != d.exceptions_file {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+    if recheck_now {
+        recheck(conn, d, area, seq)?;
+    }
+    Ok(())
+}
+
 /// Applies a decision entry to the project, as reducer.ts does: issue.accept, rows.exclude,
 /// issue.comment, project.area and entry.revert. `reverted` is the entry an entry.revert names.
 /// `skip(dataset, seq)` says where a saved issues cache stands in for the entry's effect on a
@@ -1234,6 +1391,8 @@ fn apply_decision(
     e: &Value,
     reverted: Option<&Value>,
     skip: &dyn Fn(&str, u64) -> bool,
+    env: &ReadEnv,
+    prepared: Option<Outcome>,
 ) -> Result<()> {
     let seq = e["seq"].as_u64().unwrap_or(0);
     let id = e["target"]["datasetId"].as_str().unwrap_or("").to_string();
@@ -1325,6 +1484,15 @@ fn apply_decision(
             if convert && !skip(&id, seq) {
                 recheck(conn, d, area, seq)?;
             }
+        }
+        "detection.override" => {
+            let area = area_of(&p.project_area);
+            let o = match prepared {
+                Some(o) => o,
+                None => override_outcome(conn, p, e, None, env, seq)?,
+            };
+            let d = dataset_mut(p, &id)?;
+            install_override(conn, d, o, area, seq, !skip(&id, seq))?;
         }
         "recipe.apply" => {
             let r = &e["payload"]["recipe"];
@@ -1443,6 +1611,15 @@ fn apply_decision(
                             recheck(conn, d, area, seq)?;
                         }
                     }
+                }
+                "detection.override" => {
+                    let area = area_of(&p.project_area);
+                    let o = match prepared {
+                        Some(o) => o,
+                        None => override_outcome(conn, p, e, Some(target), env, seq)?,
+                    };
+                    let d = dataset_mut(p, &tid)?;
+                    install_override(conn, d, o, area, seq, !skip(&tid, seq))?;
                 }
                 other => {
                     return Err(EngineError::unsupported(format!(
@@ -1882,6 +2059,14 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
                     )?;
                 }
             }
+            if action == "detection.override" {
+                let property = target["payload"]["property"].as_str().unwrap_or("");
+                if let Some(ds) = p.datasets.iter().find(|x| *dataset == x.id.as_str())
+                    && crate::overrides::changes_rows(property)
+                {
+                    crate::overrides::require_no_work(ds, property)?;
+                }
+            }
             if action == "cell.edit" {
                 let key = (
                     target["target"]["columnId"]
@@ -1915,7 +2100,28 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
             e
         }
         "override_detection" => {
-            return Err(EngineError::unsupported(format!("{kind} decisions")));
+            let reason = reason_of(&d["reason"])?;
+            let id = d["datasetId"].as_str().unwrap_or("");
+            let ds = p.datasets.iter().find(|x| x.id == id).ok_or_else(|| {
+                EngineError::not_found(
+                    format!("There is no dataset {id} in this project."),
+                    "Choose a listed dataset.",
+                )
+            })?;
+            let property = d["property"].as_str().unwrap_or("");
+            let value = d.get("value").cloned().unwrap_or(Value::Null);
+            crate::overrides::check_override_value(property, &value)?;
+            let old = crate::overrides::old_value(ds, property, d["columnId"].as_str())?;
+            let mut target = json!({ "datasetId": ds.id });
+            if let Some(c) = d.get("columnId") {
+                target["columnId"] = c.clone();
+            }
+            let mut e = draft("detection.override", target);
+            e.insert("old".into(), old);
+            e.insert("new".into(), value);
+            e.insert("reason".into(), json!(reason));
+            e.insert("payload".into(), json!({ "property": property }));
+            e
         }
         other => {
             return Err(EngineError::invalid(
@@ -2805,11 +3011,21 @@ fn commit_step(
     }
     entry.insert("payload".into(), json!({ "description": description }));
     let appended = engine.append(entry, None)?;
-    let Engine { conn, project, .. } = &mut *engine;
+    let Engine {
+        conn,
+        project,
+        workdir,
+        threads,
+        ..
+    } = &mut *engine;
     let p = project
         .as_mut()
         .ok_or_else(|| EngineError::internal("The project disappeared during the step."))?;
-    apply_decision(conn, p, &appended, None, &|_, _| false)?;
+    let env = ReadEnv {
+        workdir,
+        threads: *threads,
+    };
+    apply_decision(conn, p, &appended, None, &|_, _| false, &env, None)?;
     let step = dataset_mut(p, dataset_id)?
         .steps
         .iter()
@@ -3029,11 +3245,21 @@ pub fn apply_recipe(
             );
             let appended = engine.append(entry, None)?;
             {
-                let Engine { conn, project, .. } = &mut *engine;
+                let Engine {
+                    conn,
+                    project,
+                    workdir,
+                    threads,
+                    ..
+                } = &mut *engine;
                 let p = project.as_mut().ok_or_else(|| {
                     EngineError::internal("The project disappeared during the recipe.")
                 })?;
-                apply_decision(conn, p, &appended, None, &|_, _| false)?;
+                let env = ReadEnv {
+                    workdir,
+                    threads: *threads,
+                };
+                apply_decision(conn, p, &appended, None, &|_, _| false, &env, None)?;
             }
             let label = format!(
                 "Recipe \"{}\" v{}: {text}",
@@ -3250,11 +3476,21 @@ pub fn remove_step(
     entry.insert("old".into(), input);
     entry.insert("reason".into(), json!(text));
     let appended = engine.append(entry, None)?;
-    let Engine { conn, project, .. } = &mut *engine;
+    let Engine {
+        conn,
+        project,
+        workdir,
+        threads,
+        ..
+    } = &mut *engine;
     let p = project
         .as_mut()
         .ok_or_else(|| EngineError::internal("The project disappeared while removing the step."))?;
-    apply_decision(conn, p, &appended, None, &|_, _| false)?;
+    let env = ReadEnv {
+        workdir,
+        threads: *threads,
+    };
+    apply_decision(conn, p, &appended, None, &|_, _| false, &env, None)?;
     engine.journal_now();
     drop(engine);
     shared.event(json!({ "type": "project.changed", "what": ["project", "steps", "schema", "datasets", "issues", "audit"], "datasetId": dataset_id }));
@@ -3269,20 +3505,7 @@ pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
-    let draft = decision_draft(&engine.conn, engine.writable()?, d)?;
-    let entry = engine.append(draft, None)?;
-    let reverted = engine
-        .project()?
-        .log
-        .entries()
-        .iter()
-        .find(|e| entry["action"] == "entry.revert" && e["seq"] == entry["target"]["seq"])
-        .cloned();
-    let Engine { conn, project, .. } = &mut *engine;
-    let p = project
-        .as_mut()
-        .ok_or_else(|| EngineError::internal("The project disappeared during the decision."))?;
-    apply_decision(conn, p, &entry, reverted.as_ref(), &|_, _| false)?;
+    let entry = engine.commit_decision(d)?;
     engine.journal_now();
     drop(engine);
     crate::memory::release();
@@ -3649,6 +3872,8 @@ struct SavedDataset {
     rows_file: PathBuf,
     exceptions_file: PathBuf,
     source_seq: u64,
+    /// An override read the original again, so the working files are not the import's result.
+    reread: bool,
 }
 
 /**
@@ -3689,6 +3914,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             rows_file: d.rows_file.clone(),
             exceptions_file: d.exceptions_file.clone(),
             source_seq: d.source_seq,
+            reread: d.reread,
         })
         .collect();
     let originals: Vec<(Value, crate::project::OriginalSource)> = p
@@ -3835,8 +4061,11 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             manifest.insert("auditHead".into(), json!({ "seq": seq, "hash": hash }));
             let registry: Value =
                 serde_json::from_str(crate::units::REGISTRY_JSON).unwrap_or(Value::Null);
+            // A dataset an override read again is rebuilt from its original on open: its working
+            // files are not what its source.add entry imported, which is what a cache stands for.
             let caches = datasets
                 .iter()
+                .filter(|d| !d.reread)
                 .flat_map(|d| {
                     [("rows", &d.rows_file), ("exceptions", &d.exceptions_file)].map(|(kind, file)| {
                         (json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "kind": kind }), file.clone())
@@ -3845,6 +4074,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
                 .collect();
             let mut cache_bytes: Vec<(Value, Vec<u8>)> = datasets
                 .iter()
+                .filter(|d| !d.reread)
                 .map(|d| {
                     let record =
                         json!({ "datasetId": d.id, "sourceSeq": d.source_seq, "kind": "notes" });
@@ -3955,7 +4185,7 @@ fn finish_job(
 
 /// The TW-IMP-004 note for an assumed encoding, restated from the spec as the TypeScript ingest
 /// does, so an import replayed from a project raises it exactly as the first did.
-fn assumed_encoding_note(spec: &Value) -> Option<Note> {
+pub fn assumed_encoding_note(spec: &Value) -> Option<Note> {
     let d = &spec["detections"]["encoding"];
     if d["assumed"].as_bool() != Some(true) {
         return None;
@@ -4010,6 +4240,29 @@ fn input_path(engine: &Engine, msg: &Incoming, file: &Value) -> Result<(PathBuf,
     }
 }
 
+/// Column overrides as single changes, each column's in the order an import applies them
+/// (overrideList); a property left out is not changed, one set to null is.
+fn override_list(overrides: &Value) -> Vec<(Option<String>, String, Value)> {
+    overrides
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|o| {
+            crate::overrides::COLUMN_PROPERTIES
+                .iter()
+                .filter_map(move |p| {
+                    o.get(*p).map(|v| {
+                        (
+                            o["columnId"].as_str().map(String::from),
+                            p.to_string(),
+                            v.clone(),
+                        )
+                    })
+                })
+        })
+        .collect()
+}
+
 /// Starts an import job: the plan is the preview the user reviewed (SAD decision D-12), executed here.
 pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value) -> Result<Value> {
     let mut engine = shared
@@ -4025,21 +4278,82 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         name: &name,
         size: std::fs::metadata(&path)?.len(),
     };
-    let sniffed = crate::sniff::sniff_source(&src, &Value::Null)?;
-    let planned = crate::sniff::preview(&src, &sniffed, &[], engine.memory_limit)?;
-    if !o["columnOverrides"].as_array().is_none_or(Vec::is_empty)
-        || (!o["options"].is_null() && o["options"] != planned["sniff"]["options"])
-    {
-        return Err(EngineError::unsupported("changed import settings"));
-    }
-    let plans = planned["columns"].as_array().cloned().unwrap_or_default();
-    if engine
-        .template_for(&plans, o.get("template"))?
-        .is_some_and(|t| !t["overrides"].as_array().is_none_or(Vec::is_empty))
-    {
-        return Err(EngineError::unsupported(
-            "imports read through a mapping template that changes columns",
+    // Column overrides are checked before anything is read (overrideList, checkOverrideValue).
+    if !o["columnOverrides"].is_null() && !o["columnOverrides"].is_array() {
+        return Err(EngineError::invalid(
+            "Column overrides must be a list.",
+            "Pass a list of column overrides.",
         ));
+    }
+    let overrides = override_list(&o["columnOverrides"]);
+    for (_, property, value) in &overrides {
+        crate::overrides::check_override_value(property, value)?;
+    }
+    let budget = engine.memory_limit;
+    let planned = crate::sniff::preview(
+        &src,
+        &crate::sniff::sniff_source(&src, &Value::Null)?,
+        &[],
+        budget,
+    )?;
+    let chosen = if o["options"].is_null() {
+        planned.clone()
+    } else {
+        crate::sniff::preview(
+            &src,
+            &crate::sniff::sniff_source(&src, &o["options"])?,
+            &[],
+            budget,
+        )?
+    };
+    let chosen_plans = chosen["columns"].as_array().cloned().unwrap_or_default();
+    // The import reads the file as detected; the template's changes, the settings the user chose
+    // and their column overrides follow as detection.override entries, as in the TypeScript engine.
+    let mut decisions: Vec<(Option<String>, String, Value, String)> = Vec::new();
+    if let Some(t) = engine.template_for(&chosen_plans, o.get("template"))? {
+        let reason = format!(
+            "Mapping template \"{}\" ({}).",
+            t["name"].as_str().unwrap_or(""),
+            t["id"].as_str().unwrap_or("")
+        );
+        for (column, property, value) in override_list(&t["overrides"]) {
+            decisions.push((column, property, value, reason.clone()));
+        }
+    }
+    let (detected_csv, chosen_csv) = (
+        &planned["sniff"]["options"]["csv"],
+        &chosen["sniff"]["options"]["csv"],
+    );
+    let mut changes: Vec<(Option<String>, String, Value)> = crate::overrides::CSV_SETTINGS
+        .iter()
+        .filter(|p| {
+            matches!(
+                chosen["sniff"]["options"]["format"].as_str(),
+                Some("csv" | "tsv")
+            ) && detected_csv[**p] != chosen_csv[**p]
+        })
+        .map(|p| (None, p.to_string(), chosen_csv[*p].clone()))
+        .collect();
+    changes.extend(overrides.iter().cloned());
+    if !changes.is_empty() {
+        let reason = reason_of(&o["overrideReason"])?;
+        for (column, _, _) in &overrides {
+            if !chosen_plans
+                .iter()
+                .any(|c| c["id"].as_str() == column.as_deref())
+            {
+                return Err(EngineError::not_found(
+                    format!(
+                        "The file has no column {}.",
+                        column.as_deref().unwrap_or("undefined")
+                    ),
+                    "Choose a column shown in the preview.",
+                ));
+            }
+        }
+        for (column, property, value) in changes {
+            decisions.push((column, property, value, reason.clone()));
+        }
     }
     let preview = &planned;
     let mut spec = json!({
@@ -4104,7 +4418,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
                     "Run it again when you are ready.",
                 ));
             }
-            commit_import(
+            let summary = commit_import(
                 &shared,
                 &project_id,
                 spec.clone(),
@@ -4114,7 +4428,28 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
                 &job_id,
                 assumptions,
                 &path,
-            )
+            )?;
+            if decisions.is_empty() {
+                return Ok(summary);
+            }
+            let mut engine = shared
+                .engine
+                .lock()
+                .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+            for (column, property, value, reason) in decisions {
+                let mut d = json!({
+                    "kind": "override_detection",
+                    "datasetId": summary["id"],
+                    "property": property,
+                    "value": value,
+                    "reason": reason,
+                });
+                if let Some(c) = column {
+                    d["columnId"] = json!(c);
+                }
+                engine.commit_decision(&d)?;
+            }
+            Ok(Engine::dataset_summary(engine.dataset(&summary["id"])?))
         })();
         let mut engine = match shared.engine.lock() {
             Ok(e) => e,
@@ -4251,6 +4586,7 @@ fn commit_import(
         steps: Vec::new(),
         output_rows: imported.row_count,
         recipe: Value::Null,
+        reread: false,
     };
     install_views(&engine.conn, &mut dataset)?;
     let summary = Engine::dataset_summary(&dataset);
@@ -4441,12 +4777,24 @@ impl Reopen<'_> {
                 }),
                 "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
                 | "project.area" | "entry.revert" | "step.apply" | "step.remove"
-                | "recipe.apply" => {
+                | "recipe.apply" | "detection.override" => {
                     let reverted = log
                         .entries()
                         .iter()
                         .find(|x| e["action"] == "entry.revert" && x["seq"] == e["target"]["seq"]);
-                    apply_decision(self.conn, p, e, reverted, &|id, seq| self.cached(id, seq))
+                    let env = ReadEnv {
+                        workdir: self.workdir,
+                        threads: self.threads,
+                    };
+                    apply_decision(
+                        self.conn,
+                        p,
+                        e,
+                        reverted,
+                        &|id, seq| self.cached(id, seq),
+                        &env,
+                        None,
+                    )
                 }
                 "export.create" => {
                     p.exports.push(e["payload"]["record"].clone());
@@ -4630,6 +4978,7 @@ impl Reopen<'_> {
             steps: Vec::new(),
             output_rows: restored.row_count,
             recipe: Value::Null,
+            reread: false,
         });
         if let Some(d) = p.datasets.last_mut() {
             install_views(self.conn, d)?;

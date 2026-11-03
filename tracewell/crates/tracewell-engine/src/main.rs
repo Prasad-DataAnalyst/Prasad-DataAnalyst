@@ -27,6 +27,7 @@ mod framing;
 mod import;
 mod issues;
 mod memory;
+mod overrides;
 mod parse;
 mod project;
 mod recipes;

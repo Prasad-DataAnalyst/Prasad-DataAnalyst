@@ -23,6 +23,7 @@ import {
   type Issue,
   type IssueOccurrence,
   type ImportPreview,
+  type ImportRequestOptions,
   type MappingTemplate,
   type ProjectManifest,
   type Decision,
@@ -1018,12 +1019,10 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       const other = { kind: 'path' as const, path: fixturePath('csv_pipe_delimited.csv') };
       await same('no template fits', (e) => e.sniff(other), withStore.client, lite);
 
-      // Imports plan themselves and choose the same template; one that changes columns is refused.
+      // Imports plan themselves and choose the same template, whose changes become overrides.
       await withStore.client.newProject({ name: 'Templates', profile: { ...PROFILE } });
       await lite.newProject({ name: 'Templates', profile: { ...PROFILE } });
-      await expect(withStore.client.importFile(goldenFile)).rejects.toMatchObject({ code: 'PROTOCOL_MISMATCH' });
-      for (const choice of [null, 'mt_00000000000a']) {
-        const o = { template: choice as never };
+      for (const o of [{}, { template: null as never }, { template: 'mt_00000000000a' as never }]) {
         const nat = await withStore.client.awaitJob<DatasetSummary>(await withStore.client.importFile(goldenFile, o));
         const ref = await lite.awaitJob<DatasetSummary>(await lite.importFile(goldenFile, o));
         expect(await withStore.client.getSchema(nat.id)).toEqual(await lite.getSchema(ref.id));
@@ -1035,6 +1034,231 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(await audit(withStore.client)).toEqual(await audit(lite));
     } finally {
       stopNative(withStore);
+      lite.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('overrides detection the same way: columns, reading settings, imports, templates, reverts and refusals', async () => {
+    const golden = { kind: 'path' as const, path: fixturePath('csv_well_daily_golden.csv') };
+    const semicolon = { kind: 'path' as const, path: fixturePath('csv_semicolon_decimalcomma_cp1252.csv') };
+    // A template that renames the first column and reads pressure in kPa.
+    const plain = await reference.sniff(golden, { template: null });
+    const templates: MappingTemplate[] = [
+      {
+        id: 'mt_0000000000f1',
+        name: 'Field names',
+        savedFrom: { fileName: 'csv_well_daily_golden.csv', format: 'csv' },
+        columns: plain.columns.map((c, i) => ({
+          sourceHeader: [...c.sourceHeader],
+          name: i === 0 ? 'Well' : c.name,
+          type: c.type.value,
+          unit: i === 4 ? 'kPa' : c.unit.value,
+          role: c.role.value,
+          nullMarkers: [...c.nullMarkers.value],
+          ...(c.dateFormat === undefined ? {} : { dateFormat: c.dateFormat.value }),
+          ...(c.timezone === undefined ? {} : { timezone: c.timezone.value }),
+        })),
+        savedAt: '2026-01-01T00:00:00.000Z',
+        savedBy: 'Prasad',
+      },
+    ];
+    const home = mkdtempSync(join(tmpdir(), 'tw-overrides-'));
+    const store = join(home, 'mapping-templates.json');
+    writeFileSync(store, JSON.stringify({ format: 'tracewell-mapping-templates', version: 1, templates }));
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad', '--templates', store]);
+    const lite = new EngineClient(
+      inProcessTransport(
+        new LocalEngine({
+          appVersion: '0.1.0',
+          owner: 'Prasad',
+          clock: fixedClock(START),
+          ids: seededIds(1),
+          fs: nodeFs(),
+          templates: { load: () => Promise.resolve(structuredClone(templates)), save: () => Promise.resolve() },
+        }),
+      ),
+    );
+    const settle = (run: () => Promise<unknown>) =>
+      run().then(
+        (v) => v,
+        (err: { code: string; message: string }) => ({ code: err.code, message: err.message }),
+      );
+    const each = async (run: (e: EngineClient) => Promise<unknown>) => [
+      await settle(() => run(nat.client)),
+      await settle(() => run(lite)),
+    ];
+    /** Both engines show the same project: datasets, schemas, rows, issues, health and log. */
+    const agree = async (why: string) => {
+      await sameState(nat.client, lite);
+      for (const d of (await lite.getProject()).datasets) {
+        expect(await nat.client.getSchema(d.id), `${why}: schema of ${d.id}`).toEqual(await lite.getSchema(d.id));
+      }
+      expect((await allAudit(nat.client)).map(content), `${why}: log`).toEqual((await allAudit(lite)).map(content));
+    };
+    // Entries are compared without when they were written, which each engine's clock decides.
+    const timeless = (v: unknown) =>
+      Array.isArray(v)
+        ? v.map((x: unknown) => (typeof x === 'object' && x !== null && 'hash' in x ? content(x as AuditEntry) : x))
+        : v;
+    const same = async (why: string, run: (e: EngineClient) => Promise<unknown>) => {
+      const [a, b] = await each(run);
+      expect(timeless(a), why).toEqual(timeless(b));
+      await agree(why);
+      return a;
+    };
+    /** The same as `same`, for a change both engines must make rather than refuse. */
+    const done = async (why: string, run: (e: EngineClient) => Promise<unknown>) => {
+      const a = await same(why, run);
+      expect(a, why).not.toHaveProperty('code');
+      return a;
+    };
+    const imported =
+      (file: typeof golden, o: ImportRequestOptions = {}) =>
+      (e: EngineClient) =>
+        (async () => e.awaitJob<DatasetSummary>(await e.importFile(file, o)))();
+    const override =
+      (
+        datasetId: string,
+        property: Extract<Decision, { kind: 'override_detection' }>['property'],
+        value: unknown,
+        columnId?: string,
+        reason = 'Checked against the well file',
+      ) =>
+      (e: EngineClient) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId,
+          property,
+          value: value as never,
+          reason,
+          ...(columnId === undefined ? {} : { columnId }),
+        } as Decision);
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Overrides', profile: { ...PROFILE } });
+
+      // The template that fits the file is recorded as overrides after the import.
+      await done('import through a template', imported(golden));
+      const fromTemplate = (await allAudit(nat.client)).filter((e) => e.action === 'detection.override');
+      expect(fromTemplate.map((e) => [e.target.columnId, e.payload])).toEqual([
+        ['c0', { property: 'name' }],
+        ['c4', { property: 'unit' }],
+      ]);
+      await done('checks', async (e) => {
+        const { durationMs: _d, ...run } = await e.awaitJob<CheckSummary>(await e.runChecks('d1'));
+        return run;
+      });
+
+      // Column overrides change how a column is read; the rows stay, the checks run again.
+      await done('name', override('d1', 'name', 'Reading time', 'c1'));
+      await done('role', override('d1', 'role', 'measure', 'c2'));
+      const retyped = (await done('type', override('d1', 'type', 'string', 'c3'))) as AuditEntry[];
+      await done('null markers', override('d1', 'nullMarkers', ['2430.2'], 'c6'));
+      await done('date format', override('d1', 'dateFormat', 'dmy', 'c1'));
+      await done('time zone', override('d1', 'timezone', 'utc', 'c1'));
+      await done('unit', override('d1', 'unit', 'degC', 'c5'));
+      await done('no unit', override('d1', 'unit', null, 'c8'));
+      await done('coordinate system', override('d1', 'crs', { code: 'EPSG:27700', source: 'user' }));
+      await done('revert the type', (e) =>
+        e.decide({ kind: 'revert', seq: (retyped[0] as AuditEntry).seq, reason: 'Longitude is a number' }),
+      );
+
+      // A cell's lineage lists the overrides of its column.
+      for (const column of ['c1', 'c3', 'c6']) {
+        const [a, b] = await each((e) => e.explainCell('d1', 3, column));
+        const shape = (x: unknown) => ({
+          ...(x as object),
+          history: (x as { history: { at: string }[] }).history.map(({ at: _a, ...rest }) => rest),
+        });
+        expect(shape(a), `lineage of ${column}`).toEqual(shape(b));
+        expect((a as { history: unknown[] }).history.length, column).toBeGreaterThan(0);
+      }
+
+      // Refusals give the same code and message.
+      await same('unknown unit', override('d1', 'unit', 'furlong', 'c4'));
+      await same('unknown type', override('d1', 'type', 'blob', 'c4'));
+      await same('unknown column', override('d1', 'name', 'X', 'c99'));
+      await same('unknown dataset', override('d9', 'name', 'X', 'c0'));
+      await same('no reason', override('d1', 'name', 'X', 'c0', ' '));
+      await same('a workbook setting', override('d1', 'sheet', 'Sheet1'));
+      const excluded = (await done('exclude', (e) =>
+        e.decide({ kind: 'exclude_rows', datasetId: 'd1', rows: [0], reason: 'Commissioning test' }),
+      )) as AuditEntry[];
+      await same('a reading setting over work', override('d1', 'delimiter', ';'));
+      await done('revert the exclusion', (e) =>
+        e.decide({ kind: 'revert', seq: (excluded[0] as AuditEntry).seq, reason: 'The record is real' }),
+      );
+
+      // Reading settings plan the whole file again and read it into new rows.
+      await done('import a semicolon file', imported(semicolon));
+      await done('checks of d2', async (e) => {
+        const { durationMs: _d, ...run } = await e.awaitJob<CheckSummary>(await e.runChecks('d2'));
+        return run;
+      });
+      await same('a decimal separator that clashes', override('d2', 'decimalSeparator', '.'));
+      const decimal = (await done('decimal separator', override('d1', 'decimalSeparator', ','))) as AuditEntry[];
+      await done('revert the decimal separator', (e) =>
+        e.decide({ kind: 'revert', seq: (decimal[0] as AuditEntry).seq, reason: 'The file uses points' }),
+      );
+      await done('lines to skip', override('d2', 'skipLines', 1));
+      await done('header rows', override('d2', 'headerRows', 0));
+      await done('encoding', override('d2', 'encoding', 'utf-8'));
+      await done('delimiter', override('d1', 'delimiter', ';'));
+      await same('an invalid delimiter', override('d2', 'delimiter', ':'));
+
+      // An import with the user's settings and column overrides records them, with the reason.
+      const { options } = (await reference.sniff(semicolon, { template: null })).sniff;
+      if (options.format !== 'csv') throw new Error('The semicolon fixture is not read as CSV.');
+      const chosen = { ...options, csv: { ...options.csv, headerRows: 2, skipLines: 1 } };
+      await same('settings without a reason', imported(semicolon, { options: chosen }));
+      await same(
+        'an override of a column the file lacks',
+        imported(semicolon, { columnOverrides: [{ columnId: 'c99', name: 'X' }], overrideReason: 'Site names' }),
+      );
+      await done(
+        'settings and overrides',
+        imported(semicolon, {
+          options: chosen,
+          columnOverrides: [{ columnId: 'c0', name: 'Site', role: 'id' }],
+          overrideReason: 'The export has two header rows',
+        }),
+      );
+
+      // Both engines open the native engine's project file to the same state.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const bytes = saved.bytes as Uint8Array;
+      const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+      const { report, opened } = await openNatively(bytes);
+      try {
+        const tsReport = await opener.awaitJob<ProjectOpenReport>(
+          await opener.openProject({ kind: 'bytes', bytes, name: saved.fileName }),
+        );
+        expect(tsReport.checks.filter((c) => !c.ok)).toEqual([]);
+        expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+        expect(report.readOnly).toBe(false);
+        await sameState(opened.client, opener);
+        await sameState(opened.client, nat.client);
+      } finally {
+        stopNative(opened);
+        opener.close();
+      }
+
+      // An edit is stored in its column's storage type, so the native engine refuses a type change
+      // that would store the edited column differently, rather than show the edit differently.
+      await nat.client.decide({
+        kind: 'edit_cell',
+        datasetId: 'd3',
+        rowId: 0,
+        columnId: 'c0',
+        value: { text: 'DE-08' },
+        reason: 'Typo in the site name',
+      });
+      await expect(override('d3', 'type', 'number', 'c0')(nat.client)).rejects.toMatchObject({
+        code: 'PROTOCOL_MISMATCH',
+        message: expect.stringContaining('a column with edits'),
+      });
+    } finally {
+      stopNative(nat);
       lite.close();
       rmSync(home, { recursive: true, force: true });
     }
@@ -1442,13 +1666,12 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       code: 'PROTOCOL_MISMATCH',
       fix: expect.any(String),
     });
-    // Changed import settings are recorded as decisions, which the native import cannot write yet.
-    const pipe = { kind: 'path' as const, path: fixturePath('csv_pipe_delimited.csv') };
-    const { options } = (await reference.sniff(pipe, { template: null })).sniff;
-    if (options.format !== 'csv') throw new Error('The pipe-delimited fixture is not read as CSV.');
     await expect(
-      native.client.importFile(pipe, { options: { ...options, csv: { ...options.csv, headerRows: 2 } } }),
-    ).rejects.toMatchObject({ code: 'PROTOCOL_MISMATCH', message: expect.stringContaining('changed import settings') });
+      native.client.importFile({ kind: 'path', path: fixturePath('xlsx_date1904.xlsx') }),
+    ).rejects.toMatchObject({
+      code: 'PROTOCOL_MISMATCH',
+      message: expect.stringContaining('Excel'),
+    });
   });
 });
 
