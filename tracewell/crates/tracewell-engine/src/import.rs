@@ -51,6 +51,8 @@ pub enum Reading {
         header_rows: usize,
     },
     Parquet,
+    /// JSON records laid out as an array, under a member, or one per line.
+    Json(crate::json::Layout),
 }
 
 /// What an import does: how the file is read, and how each column is parsed.
@@ -142,6 +144,12 @@ pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
     if format == "parquet" {
         return Ok(ImportPlan {
             reading: Reading::Parquet,
+            columns: plan_columns(spec, '.', "")?,
+        });
+    }
+    if format == "json" {
+        return Ok(ImportPlan {
+            reading: Reading::Json(crate::json::Layout::of_options(&options["json"])),
             columns: plan_columns(spec, '.', "")?,
         });
     }
@@ -523,6 +531,56 @@ fn read_parquet(
     Ok((Vec::new(), digest, size))
 }
 
+/// Hashes and decodes a JSON file and reads its records as rows of typed fields, a batch at a time
+/// (json/importer.ts read). The encoding is the one its first MiB shows, as the sniff decided.
+pub fn read_json(
+    path: &Path,
+    layout: &crate::json::Layout,
+    send: &mut dyn FnMut(u64, Vec<Raw>) -> Result<()>,
+    cancel: &AtomicBool,
+    bytes_read: &AtomicU64,
+) -> Result<(Vec<Note>, String, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut head = Vec::new();
+    (&mut file).take(1 << 20).read_to_end(&mut head)?;
+    let e = crate::sniff::sniff_encoding(&head);
+    let mut decoder = TextDecoder::new(e.value, e.bom_length)?;
+    let mut records = crate::json::Records::new(layout);
+    let mut columns = crate::json::RecordColumns::default();
+    let mut take = |loc: u64, v: crate::json::J| -> Result<()> {
+        let fields = columns.row_of(&crate::json::members(v));
+        send(loc, fields)
+    };
+    let mut hash = Sha256::new();
+    hash.update(&head);
+    let mut size = head.len() as u64;
+    let mut utf8 = Vec::with_capacity(READ_BYTES * 3);
+    decoder.decode(&head, &mut utf8);
+    records.push(&utf8, &mut take)?;
+    let mut buf = vec![0u8; READ_BYTES];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+        size += n as u64;
+        bytes_read.store(size, Ordering::Relaxed);
+        utf8.clear();
+        decoder.decode(&buf[..n], &mut utf8);
+        records.push(&utf8, &mut take)?;
+    }
+    utf8.clear();
+    decoder.finish(&mut utf8);
+    records.push(&utf8, &mut take)?;
+    records.finish(&mut take)?;
+    let digest = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Ok((Vec::new(), digest, size))
+}
+
 /// The text of one field of an original file, read again under the import's plan (lineage.ts
 /// sourceText): field `index` of the record that starts on line `loc`, or None when the record has
 /// no such field. Reading stops at that record.
@@ -678,9 +736,33 @@ fn load(
         let reader = s.spawn(move || {
             let out = {
                 let send = |b: Batch| row_tx.send(b).is_ok();
-                match plan.reading {
+                match &plan.reading {
                     Reading::Csv { .. } => read_file(path, plan, &send, cancel, bytes_read),
                     Reading::Parquet => read_parquet(&reader_conn, path, &send, cancel, bytes_read),
+                    Reading::Json(layout) => {
+                        let mut batch = TypedBatch::default();
+                        let read = read_json(
+                            path,
+                            layout,
+                            &mut |loc, fields| {
+                                batch.rows.push(fields);
+                                batch.locs.push(loc as i64);
+                                if batch.locs.len() == BATCH_ROWS
+                                    && !send(Batch::Typed(std::mem::take(&mut batch)))
+                                {
+                                    return Err(cancelled());
+                                }
+                                Ok(())
+                            },
+                            cancel,
+                            bytes_read,
+                        );
+                        match read {
+                            Ok(r) if batch.locs.is_empty() || send(Batch::Typed(batch)) => Ok(r),
+                            Ok(_) => Err(cancelled()),
+                            Err(e) => Err(e),
+                        }
+                    }
                 }
             };
             drop(row_tx);

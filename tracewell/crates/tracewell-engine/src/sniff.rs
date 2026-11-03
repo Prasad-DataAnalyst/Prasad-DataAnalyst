@@ -323,7 +323,61 @@ fn extension_of(file_name: &str) -> String {
         .map_or(String::new(), |i| file_name[i + 1..].to_lowercase())
 }
 
-/// The source format from the first bytes and the file name, refused unless it is CSV or TSV.
+/// GeoJSON object types; one of them as the top-level "type" marks a JSON file as GeoJSON.
+const GEOJSON_TYPES: [&str; 9] = [
+    "FeatureCollection",
+    "Feature",
+    "Point",
+    "MultiPoint",
+    "LineString",
+    "MultiLineString",
+    "Polygon",
+    "MultiPolygon",
+    "GeometryCollection",
+];
+
+/// The value of the top-level object's "type" member when it is a string within `text`
+/// (format.ts topLevelType); members of nested objects are skipped.
+fn top_level_type(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut depth = 0i64;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '"' => {
+                let mut end = i + 1;
+                while end < chars.len() && chars[end] != '"' {
+                    end += if chars[end] == '\\' { 2 } else { 1 };
+                }
+                if end >= chars.len() {
+                    return None;
+                }
+                if depth == 1 && chars[i..=end].iter().collect::<String>() == "\"type\"" {
+                    let after: String = chars[end + 1..chars.len().min(end + 64)].iter().collect();
+                    let rest = after.trim_start_matches(crate::units::is_js_space);
+                    if let Some(rest) = rest.strip_prefix(':') {
+                        let rest = rest.trim_start_matches(crate::units::is_js_space);
+                        if let Some(value) = rest.strip_prefix('"')
+                            && let Some(close) = value.find(['"', '\\'])
+                            && value[close..].starts_with('"')
+                        {
+                            return Some(value[..close].to_string());
+                        }
+                    }
+                }
+                i = end;
+            }
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The source format from the first bytes and the file name (format.ts detectFormat): CSV, TSV,
+/// Parquet or JSON; Excel and GeoJSON files, which the native engine does not read yet, are refused.
 fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     let refuse = |what: &str| {
         Err(EngineError::unsupported(format!(
@@ -342,14 +396,19 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     let e = sniff_encoding(sample);
     let decoded = decode_all(sample, e.value, e.bom_length)?;
     let text = decoded.strip_prefix('\u{FEFF}').unwrap_or(&decoded);
-    let first = text
-        .trim_start_matches(crate::units::is_js_space)
-        .chars()
-        .next();
-    if matches!(first, Some('{' | '[')) {
-        return refuse("JSON");
-    }
+    let body = text.trim_start_matches(crate::units::is_js_space);
+    let first = body.chars().next();
     let ext = extension_of(file_name);
+    if matches!(first, Some('{' | '[')) {
+        let geojson = ext == "geojson"
+            || (first == Some('{')
+                && top_level_type(body).is_some_and(|t| GEOJSON_TYPES.contains(&t.as_str())));
+        return if geojson {
+            refuse("GeoJSON")
+        } else {
+            Ok("json")
+        };
+    }
     if ext == "tsv" || ext == "tab" {
         return Ok("tsv");
     }
@@ -1736,7 +1795,7 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         detect_format(&head, src.name)?.to_string()
     } else {
         match options["format"].as_str() {
-            Some(f @ ("csv" | "tsv" | "parquet")) => f.to_string(),
+            Some(f @ ("csv" | "tsv" | "parquet" | "json")) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
                     "the import preview of {} files",
@@ -1745,6 +1804,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
             }
         }
     };
+    if format == "json" {
+        return sniff_json(src, &head, options);
+    }
     if format == "parquet" {
         let mut s = sniff_parquet(conn, src)?;
         // Settings chosen for the file read it again with them (resniffByReading).
@@ -1789,6 +1851,103 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         .insert(0, ("encoding".into(), encoding_detection));
     s.format = format;
     s.options = options.clone();
+    Ok(s)
+}
+
+/// The first rows of a JSON file read with a layout, from the start of the file.
+fn json_rows(
+    path: &Path,
+    layout: &crate::json::Layout,
+    limit: usize,
+) -> Result<Vec<(u64, Vec<Raw>)>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut head = Vec::new();
+    (&mut file)
+        .take(PREVIEW_MAX_BYTES as u64)
+        .read_to_end(&mut head)?;
+    let e = sniff_encoding(&head);
+    let mut decoder = TextDecoder::new(e.value, e.bom_length)?;
+    let mut records = crate::json::Records::new(layout);
+    let mut columns = crate::json::RecordColumns::default();
+    let rows = std::cell::RefCell::new(Vec::new());
+    let mut take = |loc: u64, v: crate::json::J| -> Result<()> {
+        let mut rows = rows.borrow_mut();
+        if rows.len() < limit {
+            let fields = columns.row_of(&crate::json::members(v));
+            rows.push((loc, fields));
+        }
+        Ok(())
+    };
+    // The sample stops at its last row, as the TypeScript reader stops reading there.
+    let full = |rows: &std::cell::RefCell<Vec<(u64, Vec<Raw>)>>| rows.borrow().len() >= limit;
+    let mut utf8 = Vec::new();
+    decoder.decode(&head, &mut utf8);
+    records.push(&utf8, &mut take)?;
+    let mut buf = vec![0u8; 1 << 20];
+    while !full(&rows) {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            utf8.clear();
+            decoder.finish(&mut utf8);
+            records.push(&utf8, &mut take)?;
+            records.finish(&mut take)?;
+            break;
+        }
+        utf8.clear();
+        decoder.decode(&buf[..n], &mut utf8);
+        records.push(&utf8, &mut take)?;
+    }
+    Ok(rows.into_inner())
+}
+
+/// A JSON file's sniff (json/importer.ts sniff): the layout and the keys from at most its first
+/// MiB, with those records as the sample.
+fn sniff_json(src: &Source, head: &[u8], options: &Value) -> Result<Sniffed> {
+    let complete = head.len() as u64 >= src.size;
+    let e = sniff_encoding(head);
+    let text = decode_all(head, e.value, e.bom_length)?;
+    let detected = crate::json::detect_layout(&text, complete)?;
+    let mut records = crate::json::Records::new(&detected.layout);
+    let mut columns = crate::json::RecordColumns::default();
+    let mut rows = Vec::new();
+    let mut take = |loc: u64, v: crate::json::J| -> Result<()> {
+        let fields = columns.row_of(&crate::json::members(v));
+        if rows.len() < SAMPLE_MAX_ROWS {
+            rows.push((loc, fields));
+        }
+        Ok(())
+    };
+    records.push(text.as_bytes(), &mut take)?;
+    // A cut-off head ends mid-document by design; only a whole file must be a complete document.
+    if complete {
+        records.finish(&mut take)?;
+    }
+    let mut detections = vec![("encoding".to_string(), e.detection)];
+    detections.extend(crate::json::detections(
+        &detected,
+        &columns,
+        records.count(),
+        complete,
+    ));
+    let mut s = Sniffed {
+        format: "json".into(),
+        options: json!({
+            "format": "json",
+            "json": { "layout": detected.layout.name(), "member": detected.layout.member(), "nested": "json-text" },
+        }),
+        detections,
+        header: vec![columns.keys.clone()],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+    };
+    // Settings chosen for the file read it again with them (resniffByReading).
+    if !options.is_null() && &s.options != options {
+        let layout = crate::json::Layout::of_options(&options["json"]);
+        s.rows = json_rows(src.path, &layout, SAMPLE_MAX_ROWS)?;
+        s.options = options.clone();
+    }
     Ok(s)
 }
 
@@ -1992,6 +2151,9 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
     if s.format == "parquet" {
         // The footer states the row count exactly.
         return s.detection("rowCount").and_then(|d| d["value"].as_u64());
+    }
+    if s.format == "json" {
+        return None;
     }
     if n == 0 {
         return None;

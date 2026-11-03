@@ -26,6 +26,7 @@ mod export;
 mod framing;
 mod import;
 mod issues;
+mod json;
 mod memory;
 mod overrides;
 mod parquet;

@@ -4,7 +4,7 @@
  * audit format and on every value it imports. The suite runs when the engine has been built with
  * `npm run build:native`; without the binary it is skipped and says so.
  */
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuditLog } from '@tw/audit';
@@ -1160,6 +1160,174 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       await same('a reading setting', async (e) => override('delimiter', ';')(e));
       await same('rows after the overrides', async (e) => allRows(e, 'd2'));
       await same('schema after the overrides', (e) => e.getSchema('d2'));
+      // The project file opens to the same state in both engines.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const { report, opened } = await openNatively(saved.bytes as Uint8Array);
+      try {
+        expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+        await sameState(opened.client, lite);
+      } finally {
+        stopNative(opened);
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('reads JSON and JSON Lines the same way: layouts, key order, previews, imports, checks, lineage and refusals', async () => {
+    // Records whose keys arrive in different orders and kinds (integer-like keys come first in
+    // JavaScript), repeated keys, escapes, numbers past what a double holds, nested values, a
+    // member holding the records, blank and CRLF lines, and files past the 1 MiB preview window
+    // (wide records, so a few thousand of them are enough).
+    const many = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `W-${i}`,
+        rate: i * 1.5,
+        ok: i % 2 === 0,
+        tags: i % 7 === 0 ? ['a', i] : null,
+        [String(i % 3)]: i,
+        note: `Well test ${i}: choke changed, separator stable. `.repeat(6),
+      }));
+    const generated: [string, string][] = [
+      [
+        'keys.json',
+        JSON.stringify([
+          { b: 1, '2': 'two', a: 3, '1': 'one', b2: { y: 1, '0': 2 } },
+          { a: 5, c: 'new' },
+        ]),
+      ],
+      ['repeated.json', '[{"a":1,"b":2,"a":3},{"b":4}]'],
+      ['escapes.json', '[{"t":"\\u0041\\n\\"q\\"\\\\/","n":1e400,"m":-0,"x":12345678901234567890,"s":"é"}]'],
+      ['member.json', '{"meta":{"rows":[1,2]},"count":2,"items":[{"k":1},{"k":2,"j":[1,{"z":null}]}],"tail":true}'],
+      ['single.json', '{"a": 1, "b": "x"}'],
+      ['spaced.jsonl', '{"a":1}\n\n   \n{"a":2,"b":3}\r\n{"b":4}'],
+      ['large.json', JSON.stringify(many(4000))],
+      [
+        'large.jsonl',
+        many(4000)
+          .map((r) => JSON.stringify(r))
+          .join('\n'),
+      ],
+      ['large-member.json', JSON.stringify({ status: 'ok', data: many(4000) })],
+      // A key first seen past the preview window is not in the plan the preview made.
+      ['late-key.json', JSON.stringify([...many(4000), { id: 'W-late', late: 1 }])],
+    ];
+    // Files that are not records, or not JSON at all.
+    const broken: [string, string][] = [
+      ['not-records.json', '{\n"a": [1, 2]\n}'],
+      ['not-object.json', '[{"a":1}, 5]'],
+      [
+        'truncated.jsonl',
+        `${many(4000)
+          .map((r) => JSON.stringify(r))
+          .join('\n')}\n{"broken": `,
+      ],
+      ['truncated.json', JSON.stringify(many(4000)).slice(0, -40)],
+      ['scalar-line.jsonl', '{"a":1}\n7\n'],
+      ['trailing.json', '[{"a":1}] x'],
+      ['bad-line.jsonl', '{"a":1}\n{"a":2,}\n'],
+    ];
+    const folder = mkdtempSync(join(tmpdir(), 'tw-json-'));
+    for (const [name, body] of [...generated, ...broken]) writeFileSync(join(folder, name), body);
+    for (const name of [
+      'large.json',
+      'large.jsonl',
+      'large-member.json',
+      'late-key.json',
+      'truncated.json',
+      'truncated.jsonl',
+    ]) {
+      expect(statSync(join(folder, name)).size, `${name} is past the preview window`).toBeGreaterThan(1 << 20);
+    }
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    // Why a parser stopped is worded by the parser (the reference engine's differs between
+    // browsers), so that reason is left out; where the file broke, and everything else, is compared.
+    const settle = (run: () => Promise<unknown>) =>
+      run().then(
+        (v) => v,
+        (err: { code: string; message: string; fix: string }) => {
+          const parsed =
+            /^(The JSON file is not valid JSON: (?:line [\d,]+: )?).*?((?: \(after [\d,]+ records\)\.)?)$/s.exec(
+              err.message,
+            );
+          const message = err.code === 'PARSE_FAILED' && parsed !== null ? `${parsed[1]}…${parsed[2]}` : err.message;
+          return { code: err.code, message, fix: err.fix };
+        },
+      );
+    const same = async (why: string, run: (e: EngineClient) => Promise<unknown>) => {
+      const [a, b] = [await settle(() => run(nat.client)), await settle(() => run(lite))];
+      expect(a, why).toEqual(b);
+      return a;
+    };
+    const json = (layout: 'array' | 'lines' | 'member', member = '') => ({
+      options: { format: 'json' as const, json: { layout, member, nested: 'json-text' as const } },
+    });
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'JSON', profile: { ...PROFILE } });
+      const files = [
+        fixturePath('json_api_wrapper_nested.json'),
+        fixturePath('jsonl_well_tests_crlf.jsonl'),
+        ...generated.map(([name]) => join(folder, name)),
+      ];
+      for (const [i, path] of files.entries()) {
+        const file = { kind: 'path' as const, path };
+        const id = `d${i + 1}`;
+        await same(`${path}: preview`, (e) => e.sniff(file));
+        await same(`${path}: import`, async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+        await same(`${path}: schema`, (e) => e.getSchema(id));
+        await same(`${path}: rows`, async (e) => allRows(e, id));
+        const { columns } = await lite.getSchema(id);
+        for (const c of columns.slice(0, 8)) {
+          for (const row of [0, 1]) {
+            await same(`${path}: lineage of ${c.id} row ${row}`, async (e) => ({
+              ...(await e.explainCell(id, row, c.id)),
+              history: [],
+            }));
+          }
+        }
+        await same(`${path}: checks`, async (e) => {
+          const { durationMs: _d, ...run } = await e.awaitJob<CheckSummary>(await e.runChecks(id));
+          return run;
+        });
+        await same(`${path}: issues`, async (e) => (await e.listIssues({ datasetId: id, limit: 1000 })).items);
+      }
+      // A layout named in the settings is read as named, or refused when the file does not hold it.
+      const api = { kind: 'path' as const, path: fixturePath('json_api_wrapper_nested.json') };
+      const lines = { kind: 'path' as const, path: fixturePath('jsonl_well_tests_crlf.jsonl') };
+      await same('the records member named', (e) => e.sniff(api, json('member', 'data')));
+      await same('a member that is missing', (e) => e.sniff(api, json('member', 'missing')));
+      await same('a member that holds no records', (e) => e.sniff(api, json('member', 'meta')));
+      await same('an object read as lines', (e) => e.sniff(api, json('lines')));
+      await same('lines read as an array', (e) => e.sniff(lines, json('array')));
+      await same('lines read as lines', (e) => e.sniff(lines, json('lines')));
+      for (const [name] of broken) {
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        await same(`${name}: preview`, (e) => e.sniff(file));
+        const refusal = await same(`${name}: import`, async (e) =>
+          e.awaitJob<DatasetSummary>(await e.importFile(file)),
+        );
+        expect(refusal, `${name} is refused`).toMatchObject({ code: expect.any(String) });
+      }
+      // Overrides read the JSON file again, and reading settings do not apply to it.
+      const override = (property: string, value: unknown, columnId?: string) => (e: EngineClient) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId: 'd1',
+          property,
+          value,
+          reason: 'Checked against the source system',
+          ...(columnId === undefined ? {} : { columnId }),
+        } as Decision);
+      const { columns } = await lite.getSchema('d1');
+      const numeric = columns.find((c) => c.type.value === 'number');
+      expect(numeric, 'a number column to read as text').toBeDefined();
+      await same('a column read as text', async (e) => (await override('type', 'string', numeric?.id)(e)).map(content));
+      await same('a reading setting', async (e) => override('delimiter', ';')(e));
+      await same('rows after the overrides', async (e) => allRows(e, 'd1'));
+      await same('schema after the overrides', (e) => e.getSchema('d1'));
       // The project file opens to the same state in both engines.
       const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
       const { report, opened } = await openNatively(saved.bytes as Uint8Array);

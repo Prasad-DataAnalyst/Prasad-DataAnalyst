@@ -163,6 +163,15 @@ fn root_of(stages: &Stages, id: &str) -> String {
     id
 }
 
+/// A dataset schema's `source` (schemaFor): the file, its format and, for JSON, its layout.
+fn source_of(spec: &Value) -> Value {
+    let mut source = json!({ "fileId": spec["fileId"], "fileName": spec["fileName"], "format": spec["options"]["format"] });
+    if spec["options"]["format"] == "json" {
+        source["layout"] = spec["options"]["json"]["layout"].clone();
+    }
+    source
+}
+
 /// A row's or a cell's source locator (locator.ts): 'line 4, field 3' for delimited text,
 /// 'row 4, column "rate"' for Parquet, the column named as the file names it.
 fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
@@ -173,7 +182,21 @@ fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
             .unwrap_or("")
             .to_string()
     };
+    let json_at = || {
+        let unit = if spec["options"]["json"]["layout"] == "lines" {
+            "line"
+        } else {
+            "record"
+        };
+        format!("{unit} {loc}")
+    };
     match (spec["options"]["format"].as_str(), column) {
+        (Some("json"), None) => json_at(),
+        (Some("json"), Some(c)) => format!(
+            "{}, key {}",
+            json_at(),
+            serde_json::to_string(&source_name(c)).unwrap_or_default()
+        ),
         (Some("parquet"), None) => format!("row {loc}"),
         (Some("parquet"), Some(c)) => format!(
             "row {loc}, column {}",
@@ -487,7 +510,7 @@ impl Engine {
             "version": self.version,
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
-                "formats": ["csv", "tsv", "parquet"],
+                "formats": ["csv", "tsv", "parquet", "json"],
                 "exportProfiles": ["csv", "parquet"],
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
@@ -562,7 +585,7 @@ impl Engine {
         json!({
             "id": d.id,
             "name": d.name,
-            "source": { "fileId": d.spec["fileId"], "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
+            "source": source_of(&d.spec),
             "rowCount": d.row_count,
             "outputRowCount": d.output_rows,
             "columnCount": d.stages().map_or(d.columns.len(), |s| s.working.len()),
@@ -619,7 +642,7 @@ impl Engine {
         Ok(json!({
             "datasetId": d.id,
             "name": d.name,
-            "source": { "fileId": d.spec["fileId"], "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
+            "source": source_of(&d.spec),
             "rowCount": if output { d.output_rows } else { d.visible_rows() },
             "columns": cols.iter().map(|c| c.schema.clone()).collect::<Vec<_>>(),
             "crs": d.spec["crs"],
@@ -3052,6 +3075,30 @@ impl Engine {
                             crate::parquet::read_row(&self.conn, &path, loc.max(0) as u64)?
                                 .and_then(|fields| fields.get(index).map(Raw::text))
                         }
+                        // The records are read again until the one at this locator.
+                        crate::import::Reading::Json(layout) => {
+                            let path =
+                                crate::overrides::original_file(source, &self.workdir, file_id)?;
+                            let mut found = None;
+                            let stop = EngineError::new("FOUND", "", "");
+                            let read = crate::import::read_json(
+                                &path,
+                                &layout,
+                                &mut |at, fields| {
+                                    if at as i64 == loc {
+                                        found = Some(fields.get(index).map(Raw::text));
+                                        return Err(stop.clone());
+                                    }
+                                    Ok(())
+                                },
+                                &AtomicBool::new(false),
+                                &std::sync::atomic::AtomicU64::new(0),
+                            );
+                            match read {
+                                Err(e) if e.code != "FOUND" => return Err(e),
+                                _ => found.flatten(),
+                            }
+                        }
                         _ => crate::import::field_text(source, &read, loc, index)?,
                     }
                 }
@@ -4348,6 +4395,10 @@ fn finish_job(
 /// The TW-IMP-004 note for an assumed encoding, restated from the spec as the TypeScript ingest
 /// does, so an import replayed from a project raises it exactly as the first did.
 pub fn assumed_encoding_note(spec: &Value) -> Option<Note> {
+    // Only delimited text has the note at import (assumedEncodingNote).
+    if !matches!(spec["options"]["format"].as_str(), Some("csv" | "tsv")) {
+        return None;
+    }
     let d = &spec["detections"]["encoding"];
     if d["assumed"].as_bool() != Some(true) {
         return None;
@@ -4685,6 +4736,7 @@ fn commit_import(
     let media_type = match spec["options"]["format"].as_str() {
         Some("tsv") => "text/tab-separated-values",
         Some("parquet") => "application/vnd.apache.parquet",
+        Some("json") => "application/json",
         _ => "text/csv",
     };
     let mut add = draft(
