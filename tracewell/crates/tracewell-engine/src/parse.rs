@@ -36,6 +36,49 @@ pub enum Cell {
     DateTime(i64),
 }
 
+/// A field as a reader emits it (RawField): text, or a value the format types itself, such as a
+/// Parquet number or a spreadsheet date. Detection gives it a type; the parser reads it under one.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Raw {
+    Null,
+    Text(String),
+    Number(f64),
+    Bool(bool),
+    /// A calendar date, 'YYYY-MM-DD'.
+    Date(String),
+    /// A UTC instant, 'YYYY-MM-DDTHH:mm:ss.sssZ'.
+    DateTime(String),
+    /// A spreadsheet error cell, such as '#DIV/0!'; the workbook readers emit it.
+    #[allow(dead_code)]
+    Error(String),
+}
+
+impl Raw {
+    /// The field's text (rawToText): numbers in their canonical form, booleans as JSON words.
+    pub fn text(&self) -> String {
+        match self {
+            Raw::Null => String::new(),
+            Raw::Text(t) | Raw::Date(t) | Raw::DateTime(t) | Raw::Error(t) => t.clone(),
+            Raw::Number(n) => crate::canonical::canonical_number(*n),
+            Raw::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        }
+    }
+
+    /// The field as a reader's sample row carries it in the protocol.
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Raw::Null => serde_json::Value::Null,
+            Raw::Text(t) => json!(t),
+            Raw::Number(n) => json!(n),
+            Raw::Bool(b) => json!(b),
+            Raw::Date(d) => json!({ "date": d }),
+            Raw::DateTime(t) => json!({ "datetime": t }),
+            Raw::Error(e) => json!({ "error": e }),
+        }
+    }
+}
+
 /// The outcome for one field: a value (null names the marker it matched, if any), or raw text.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Parsed {
@@ -125,6 +168,74 @@ impl ColumnParser {
             None => Parsed::Failed(raw.to_string()),
         }
     }
+}
+
+impl ColumnParser {
+    /// Parses a typed field as the TypeScript parser does (makeParser): text as `parse` reads it;
+    /// a native number, boolean or date converts to the column's type where the type holds it.
+    pub fn parse_raw(&self, raw: &Raw) -> Parsed {
+        let n = match raw {
+            Raw::Null => return Parsed::Value(Cell::Null, None),
+            Raw::Text(t) => return self.parse(Some(t)),
+            Raw::Number(n) => Some(*n),
+            _ => None,
+        };
+        // A native number matches a marker that is the same number ('-999.25').
+        if let Some(v) = n
+            && let Some((_, m)) = self.numeric_markers.iter().find(|(x, _)| *x == v)
+        {
+            return Parsed::Value(Cell::Null, Some(m.clone()));
+        }
+        let value = match (self.kind, raw) {
+            (_, Raw::Error(_)) => None,
+            (Kind::String, _) => Some(Cell::Text(raw.text())),
+            (Kind::Number, Raw::Number(n)) => n.is_finite().then_some(Cell::Number(*n)),
+            (Kind::Integer, Raw::Number(n)) => {
+                (n.is_finite() && n.fract() == 0.0 && n.abs() <= 9_007_199_254_740_991.0)
+                    .then_some(Cell::Number(*n))
+            }
+            (Kind::Boolean, Raw::Bool(b)) => Some(Cell::Bool(*b)),
+            (Kind::Boolean, Raw::Number(n)) if *n == 1.0 || *n == 0.0 => {
+                Some(Cell::Bool(*n == 1.0))
+            }
+            (Kind::Date, Raw::Date(d)) => parse_date(d, DateFormat::Iso).map(Cell::Date),
+            // A spreadsheet datetime at midnight is a date written with a zero time.
+            (Kind::Date, Raw::DateTime(t)) => t
+                .strip_suffix("T00:00:00.000Z")
+                .and_then(|d| parse_date(d, DateFormat::Iso))
+                .map(Cell::Date),
+            (Kind::Date, Raw::Number(n)) if self.format == DateFormat::ExcelSerial => {
+                serial_cell(*n, false)
+            }
+            (Kind::DateTime, Raw::DateTime(t)) => {
+                parse_datetime(t, DateFormat::Iso).map(Cell::DateTime)
+            }
+            (Kind::DateTime, Raw::Date(d)) => {
+                parse_date(d, DateFormat::Iso).map(|days| Cell::DateTime(days * MS_PER_DAY))
+            }
+            (Kind::DateTime, Raw::Number(n)) if self.format == DateFormat::ExcelSerial => {
+                serial_cell(*n, true)
+            }
+            _ => None,
+        };
+        match value {
+            Some(v) => Parsed::Value(v, None),
+            None => Parsed::Failed(raw.text()),
+        }
+    }
+}
+
+/// An Excel serial day number as a date, or with its fraction as a date-time (serialDate).
+fn serial_cell(serial: f64, with_time: bool) -> Option<Cell> {
+    if !with_time && serial.fract() != 0.0 {
+        return None;
+    }
+    let ms = excel_serial_millis(serial)?;
+    Some(if with_time {
+        Cell::DateTime(ms)
+    } else {
+        Cell::Date(ms.div_euclid(MS_PER_DAY))
+    })
 }
 
 fn all_digits(s: &str) -> bool {

@@ -5,7 +5,7 @@
 //! file the same way.
 
 use crate::import::column_parser;
-use crate::parse::{DateFormat, Parsed, date_parts, month_day, parse_number};
+use crate::parse::{DateFormat, Parsed, Raw, date_parts, month_day, parse_number};
 use crate::units::{get_unit, js_trim, parse_header_unit};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -161,29 +161,44 @@ const TEXT_NULL_MARKERS: [&str; 7] = ["", "NA", "N/A", "#N/A", "NULL", "null", "
 const SENTINELS: [f64; 2] = [-999.25, -9999.0];
 const SENTINEL_MIN_COUNT: usize = 2;
 
-/// The marker a field matches: its text, or a numeric marker of the same value.
-pub fn match_null_marker(raw: Option<&str>, markers: &[String], decimal: char) -> Option<String> {
-    let raw = raw?;
-    let text = js_trim(raw);
-    if markers.iter().any(|m| m == text) {
-        return Some(text.to_string());
-    }
-    let value = parse_number(raw, decimal, "")?;
+/// The marker a field matches (matchNullMarker): its trimmed text, or a marker that is the same
+/// number, written differently or stored as a native number.
+pub fn match_null_marker(raw: &Raw, markers: &[String], decimal: char) -> Option<String> {
+    let value = match raw {
+        Raw::Text(t) => {
+            let text = js_trim(t);
+            if markers.iter().any(|m| m == text) {
+                return Some(text.to_string());
+            }
+            parse_number(t, decimal, "")?
+        }
+        Raw::Number(n) => *n,
+        _ => return None,
+    };
     markers
         .iter()
         .find(|m| !m.is_empty() && parse_number(m, '.', "") == Some(value))
         .cloned()
 }
 
-fn candidate_marker(raw: Option<&str>) -> Option<String> {
-    let text = js_trim(raw?);
-    if TEXT_NULL_MARKERS.contains(&text) {
-        return Some(text.to_string());
+/// The default marker a field is a candidate for, before frequency is considered.
+fn candidate_marker(raw: &Raw) -> Option<String> {
+    match raw {
+        Raw::Text(t) => {
+            let text = js_trim(t);
+            if TEXT_NULL_MARKERS.contains(&text) {
+                return Some(text.to_string());
+            }
+            let value = parse_number(text, '.', "").or_else(|| parse_number(text, ',', ""))?;
+            SENTINELS
+                .contains(&value)
+                .then(|| crate::canonical::canonical_number(value))
+        }
+        Raw::Number(n) => SENTINELS
+            .contains(n)
+            .then(|| crate::canonical::canonical_number(*n)),
+        _ => None,
     }
-    let value = parse_number(text, '.', "").or_else(|| parse_number(text, ',', ""))?;
-    SENTINELS
-        .contains(&value)
-        .then(|| crate::canonical::canonical_number(value))
 }
 
 fn is_sentinel(marker: &str) -> bool {
@@ -192,10 +207,10 @@ fn is_sentinel(marker: &str) -> bool {
 
 /// The null markers of a column's sample (detectNullMarkers): the text markers found, and the
 /// numeric sentinels that repeat.
-pub fn detect_null_markers(values: &[Option<&str>]) -> Value {
+pub fn detect_null_markers(values: &[&Raw]) -> Value {
     let mut tallies: Vec<(String, usize, usize)> = Vec::new();
     for (index, raw) in values.iter().enumerate() {
-        let Some(marker) = candidate_marker(*raw) else {
+        let Some(marker) = candidate_marker(raw) else {
             continue;
         };
         match tallies.iter_mut().find(|t| t.0 == marker) {
@@ -285,9 +300,14 @@ enum Kind {
     Num,
     Identifier,
     Bool,
+    /// A date or date-time the source stores as one (a Parquet DATE, a spreadsheet date).
+    DateNative,
+    DateTimeNative,
     DateText(crate::parse::DateParts),
     Json,
     Text,
+    /// A spreadsheet error cell: it fits no type and keeps its text.
+    Fail,
 }
 
 fn is_json_text(t: &str) -> bool {
@@ -296,8 +316,28 @@ fn is_json_text(t: &str) -> bool {
     (object || array) && serde_json::from_str::<Value>(t).is_ok()
 }
 
-fn classify(raw: Option<&str>, o: &DetectOptions) -> Option<Kind> {
-    let t = js_trim(raw?);
+/// What one field says about its column's type (classify); None for a field that says nothing.
+fn classify(raw: &Raw, o: &DetectOptions) -> Option<Kind> {
+    match raw {
+        Raw::Null => None,
+        Raw::Text(t) => classify_text(t, o),
+        Raw::Bool(_) => Some(Kind::Bool),
+        Raw::Number(n) => Some(if is_safe_integer(*n) {
+            Kind::Int
+        } else {
+            Kind::Num
+        }),
+        Raw::Date(_) => Some(Kind::DateNative),
+        Raw::DateTime(_) => Some(Kind::DateTimeNative),
+        Raw::Error(_) => Some(Kind::Fail),
+    }
+}
+
+fn classify_text(raw: &str, o: &DetectOptions) -> Option<Kind> {
+    let t = js_trim(raw);
+    if t.is_empty() {
+        return None;
+    }
     if TEXT_NULL_MARKERS.contains(&t) || is_below_detection_limit(t) {
         return None;
     }
@@ -448,6 +488,14 @@ fn resolve_day_month(parts: &[&crate::parse::DateParts]) -> Value {
 }
 
 fn analyse_dates(kinds: &[Kind]) -> DateAnalysis {
+    let date_natives = kinds
+        .iter()
+        .filter(|k| matches!(k, Kind::DateNative))
+        .count();
+    let time_natives = kinds
+        .iter()
+        .filter(|k| matches!(k, Kind::DateTimeNative))
+        .count();
     let texts: Vec<&crate::parse::DateParts> = kinds
         .iter()
         .filter_map(|k| match k {
@@ -480,7 +528,10 @@ fn analyse_dates(kinds: &[Kind]) -> DateAnalysis {
                     json!("iso"),
                     "high",
                     "native-cells",
-                    "The source stores 0 values as dates.",
+                    format!(
+                        "The source stores {} values as dates.",
+                        date_natives + time_natives
+                    ),
                     false,
                 )
             } else {
@@ -501,8 +552,13 @@ fn analyse_dates(kinds: &[Kind]) -> DateAnalysis {
         .collect();
     let timed: Vec<&&&crate::parse::DateParts> =
         valid.iter().filter(|p| p.time.is_some()).collect();
-    let typ = if timed.is_empty() { "date" } else { "datetime" };
+    let typ = if time_natives > 0 || !timed.is_empty() {
+        "datetime"
+    } else {
+        "date"
+    };
     let timezone = (typ == "datetime").then(|| {
+        // Date-times the source stores have no zone, so they count as naive.
         let zones: Vec<&str> = timed
             .iter()
             .map(|p| match &p.time {
@@ -510,6 +566,7 @@ fn analyse_dates(kinds: &[Kind]) -> DateAnalysis {
                 Some(t) if t.zoned => "offset",
                 _ => "none",
             })
+            .chain(std::iter::repeat_n("none", time_natives))
             .collect();
         let naive = zones.iter().filter(|z| **z == "none").count();
         if naive == 0 && zones.iter().all(|z| *z == "utc") {
@@ -542,7 +599,7 @@ fn analyse_dates(kinds: &[Kind]) -> DateAnalysis {
         }
     });
     DateAnalysis {
-        valid: valid.len(),
+        valid: date_natives + time_natives + valid.len(),
         typ,
         date_format,
         timezone,
@@ -558,8 +615,8 @@ fn with_dates(typ: Value, dates: DateAnalysis) -> TypeInference {
 }
 
 /// The type of a column's values (inferType), with the date format and time zone of dates.
-pub fn infer_type(values: &[Option<&str>], o: &DetectOptions) -> TypeInference {
-    let kinds: Vec<Kind> = values.iter().filter_map(|v| classify(*v, o)).collect();
+pub fn infer_type(values: &[&Raw], o: &DetectOptions) -> TypeInference {
+    let kinds: Vec<Kind> = values.iter().filter_map(|v| classify(v, o)).collect();
     let total = kinds.len();
     let count = |f: fn(&Kind) -> bool| kinds.iter().filter(|k| f(k)).count();
     if total == 0 {
@@ -632,13 +689,17 @@ pub fn infer_type(values: &[Option<&str>], o: &DetectOptions) -> TypeInference {
     ))
 }
 
-fn numeric_values(values: &[Option<&str>], o: &DetectOptions) -> Option<Vec<f64>> {
+/// Every value as a number, blanks left out (numericValues); None when one is not a number.
+fn numeric_values(values: &[&Raw], o: &DetectOptions) -> Option<Vec<f64>> {
     let mut nums = Vec::new();
-    for v in values.iter().flatten() {
-        if js_trim(v).is_empty() {
-            continue;
+    for v in values {
+        match v {
+            Raw::Null => {}
+            Raw::Text(t) if js_trim(t).is_empty() => {}
+            Raw::Number(n) => nums.push(*n),
+            Raw::Text(t) => nums.push(parse_number(t, o.decimal, &o.thousands)?),
+            _ => return None,
         }
-        nums.push(parse_number(v, o.decimal, &o.thousands)?);
     }
     (!nums.is_empty()).then_some(nums)
 }
@@ -683,7 +744,7 @@ fn refine_by_name(
     inferred: TypeInference,
     tokens: &[String],
     has_unit: bool,
-    values: &[Option<&str>],
+    values: &[&Raw],
     o: &DetectOptions,
 ) -> TypeInference {
     let typ = inferred.typ["value"].as_str().unwrap_or("");
@@ -931,7 +992,7 @@ fn plan_column(
     source_header: Vec<String>,
     unit: Value,
     index: usize,
-    values: &[Option<&str>],
+    values: &[&Raw],
     o: &DetectOptions,
 ) -> Value {
     let null_markers = detect_null_markers(values);
@@ -941,10 +1002,10 @@ fn plan_column(
         .flatten()
         .filter_map(|m| m.as_str().map(String::from))
         .collect();
-    let typed: Vec<Option<&str>> = values
+    let typed: Vec<&Raw> = values
         .iter()
         .copied()
-        .filter(|v| match_null_marker(*v, &markers, o.decimal).is_none())
+        .filter(|v| match_null_marker(v, &markers, o.decimal).is_none())
         .collect();
     let unit_code = unit["value"].as_str().map(String::from);
     let inferred = refine_by_name(
@@ -988,7 +1049,7 @@ fn plan_column(
     let parsed: Vec<Value> = match column_parser(&plan, o.decimal, &o.thousands) {
         Ok(parser) => values
             .iter()
-            .filter_map(|v| match parser.parse(*v) {
+            .filter_map(|v| match parser.parse_raw(v) {
                 Parsed::Value(cell, _) => Some(crate::engine::cell_json(&cell)),
                 Parsed::Failed(_) => None,
             })
@@ -1008,7 +1069,7 @@ fn plan_column(
 /// from the first SAMPLE_LIMIT rows.
 pub fn detect_columns(
     header: &[Vec<String>],
-    sample: &[Vec<Option<String>>],
+    sample: &[Vec<Raw>],
     o: &DetectOptions,
 ) -> Vec<Value> {
     let rows = &sample[..sample.len().min(SAMPLE_LIMIT)];
@@ -1047,9 +1108,9 @@ pub fn detect_columns(
         .into_iter()
         .enumerate()
         .map(|(i, (name, source, unit))| {
-            let values: Vec<Option<&str>> = rows
+            let values: Vec<&Raw> = rows
                 .iter()
-                .map(|r| r.get(i).and_then(|f| f.as_deref()))
+                .map(|r| r.get(i).unwrap_or(&Raw::Null))
                 .collect();
             plan_column(
                 names.get(i).cloned().unwrap_or(name),

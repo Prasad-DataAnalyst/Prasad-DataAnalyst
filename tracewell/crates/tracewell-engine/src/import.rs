@@ -1,6 +1,7 @@
-//! CSV import under a reviewed plan (an ImportSpec). Three stages run at once:
-//! - a reader thread hashes the original bytes, decodes them and cuts them into rows exactly as
-//!   the TypeScript reader does (csv.rs);
+//! Import under a plan (an ImportSpec). Three stages run at once:
+//! - a reader thread hashes the original bytes and cuts them into rows exactly as the TypeScript
+//!   reader does: delimited text decoded and tokenized (csv.rs), or Parquet rows as typed fields
+//!   (parquet.rs);
 //! - worker threads parse each slice of rows with the ported cell parser into typed Arrow batches;
 //! - an appender thread writes the batches to a staging database file.
 //!
@@ -13,7 +14,7 @@
 use crate::csv::{Note, RowBatch, TableLayout, TableReader};
 use crate::encoding::TextDecoder;
 use crate::error::{EngineError, Result};
-use crate::parse::{Cell, ColumnParser, DateFormat, Kind, Parsed};
+use crate::parse::{Cell, ColumnParser, DateFormat, Kind, Parsed, Raw};
 use duckdb::Connection;
 use duckdb::arrow::array::{
     ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, Int64Builder, StringBuilder,
@@ -40,12 +41,21 @@ pub struct ColumnSpec {
     pub parser: ColumnParser,
 }
 
-pub struct CsvPlan {
-    pub encoding: String,
-    pub bom_length: u64,
-    pub delimiter: u8,
-    pub skip_lines: u64,
-    pub header_rows: usize,
+/// How an original is read.
+pub enum Reading {
+    Csv {
+        encoding: String,
+        bom_length: u64,
+        delimiter: u8,
+        skip_lines: u64,
+        header_rows: usize,
+    },
+    Parquet,
+}
+
+/// What an import does: how the file is read, and how each column is parsed.
+pub struct ImportPlan {
+    pub reading: Reading,
     pub columns: Vec<ColumnSpec>,
 }
 
@@ -112,10 +122,29 @@ pub fn column_parser(c: &Value, decimal: char, thousands: &str) -> Result<Column
     ))
 }
 
-/// The CSV plan of an ImportSpec, or why this engine cannot follow it yet.
-pub fn csv_plan(spec: &Value) -> Result<CsvPlan> {
+fn plan_columns(spec: &Value, decimal: char, thousands: &str) -> Result<Vec<ColumnSpec>> {
+    let mut columns = Vec::new();
+    for c in spec["columns"].as_array().into_iter().flatten() {
+        let parser = column_parser(c, decimal, thousands)?;
+        columns.push(ColumnSpec {
+            id: c["id"].as_str().unwrap_or_default().to_string(),
+            kind: parser.kind,
+            parser,
+        });
+    }
+    Ok(columns)
+}
+
+/// The plan of an ImportSpec, or why this engine cannot follow it yet.
+pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
     let options = &spec["options"];
     let format = text(options, "format").unwrap_or("");
+    if format == "parquet" {
+        return Ok(ImportPlan {
+            reading: Reading::Parquet,
+            columns: plan_columns(spec, '.', "")?,
+        });
+    }
     if format != "csv" && format != "tsv" {
         return Err(EngineError::unsupported(format!(
             "{} files",
@@ -147,22 +176,15 @@ pub fn csv_plan(spec: &Value) -> Result<CsvPlan> {
         .next()
         .unwrap_or('.');
     let thousands = text(csv, "thousandsSeparator").unwrap_or("").to_string();
-    let mut columns = Vec::new();
-    for c in spec["columns"].as_array().into_iter().flatten() {
-        let parser = column_parser(c, decimal, &thousands)?;
-        columns.push(ColumnSpec {
-            id: c["id"].as_str().unwrap_or_default().to_string(),
-            kind: parser.kind,
-            parser,
-        });
-    }
-    Ok(CsvPlan {
-        encoding,
-        bom_length,
-        delimiter,
-        skip_lines: csv["skipLines"].as_u64().unwrap_or(0),
-        header_rows: csv["headerRows"].as_u64().unwrap_or(1) as usize,
-        columns,
+    Ok(ImportPlan {
+        reading: Reading::Csv {
+            encoding,
+            bom_length,
+            delimiter,
+            skip_lines: csv["skipLines"].as_u64().unwrap_or(0),
+            header_rows: csv["headerRows"].as_u64().unwrap_or(1) as usize,
+        },
+        columns: plan_columns(spec, decimal, &thousands)?,
     })
 }
 
@@ -240,7 +262,7 @@ impl Values {
 }
 
 /// The rows table: row id, source line, then each column's typed value.
-fn table_schema(plan: &CsvPlan) -> (Vec<String>, Arc<Schema>) {
+fn table_schema(plan: &ImportPlan) -> (Vec<String>, Arc<Schema>) {
     let mut ddl = vec!["__rid BIGINT".to_string(), "__loc BIGINT".to_string()];
     let mut fields = vec![
         Field::new("__rid", DataType::Int64, false),
@@ -295,17 +317,59 @@ impl Exceptions {
     }
 }
 
+/// Rows a reader hands on: delimited text, or typed fields.
+pub enum Batch {
+    Text(RowBatch),
+    Typed(TypedBatch),
+}
+
+/// Rows of typed fields, each with its source locator.
+#[derive(Default)]
+pub struct TypedBatch {
+    pub rows: Vec<Vec<Raw>>,
+    pub locs: Vec<i64>,
+}
+
+impl Batch {
+    fn rows(&self) -> usize {
+        match self {
+            Batch::Text(b) => b.rows(),
+            Batch::Typed(b) => b.locs.len(),
+        }
+    }
+
+    fn loc(&self, i: usize) -> i64 {
+        match self {
+            Batch::Text(b) => b.locs[i],
+            Batch::Typed(b) => b.locs[i],
+        }
+    }
+
+    /// Field `j` of row `i` under `parser`.
+    fn parse(&self, i: usize, j: usize, parser: &ColumnParser) -> Parsed {
+        match self {
+            // A column past the file's own width (the plan has more columns) is missing in every row.
+            Batch::Text(b) => {
+                let bytes = if j < b.width { b.cell(i, j) } else { None };
+                let field = bytes.map(String::from_utf8_lossy);
+                parser.parse(field.as_deref())
+            }
+            Batch::Typed(b) => parser.parse_raw(b.rows[i].get(j).unwrap_or(&Raw::Null)),
+        }
+    }
+}
+
 /// A slice of parsed rows and its exceptions.
 type Parsed2 = (RecordBatch, Option<RecordBatch>);
 
 /// Parses rows `from..to` of a batch into a typed record batch whose first row id is `rid`, and
 /// the exceptions of those rows.
 fn parse_rows(
-    batch: &RowBatch,
+    batch: &Batch,
     from: usize,
     to: usize,
     rid: i64,
-    plan: &CsvPlan,
+    plan: &ImportPlan,
     schema: &Arc<Schema>,
 ) -> Result<Parsed2> {
     let n = to - from;
@@ -313,22 +377,15 @@ fn parse_rows(
     let mut locs = Int64Builder::with_capacity(n);
     for i in from..to {
         rids.append_value(rid + (i - from) as i64);
-        locs.append_value(batch.locs[i]);
+        locs.append_value(batch.loc(i));
     }
     let mut arrays: Vec<ArrayRef> = vec![Arc::new(rids.finish()), Arc::new(locs.finish())];
     let mut exceptions = Exceptions::default();
     for (j, c) in plan.columns.iter().enumerate() {
         let mut values = Values::new(c.kind, n);
         for i in from..to {
-            // A column past the file's own width (the plan has more columns) is missing in every row.
-            let bytes = if j < batch.width {
-                batch.cell(i, j)
-            } else {
-                None
-            };
-            let field = bytes.map(String::from_utf8_lossy);
             let row = rid + (i - from) as i64;
-            match c.parser.parse(field.as_deref()) {
+            match batch.parse(i, j, &c.parser) {
                 Parsed::Value(cell, marker) => {
                     values.push(Some(&cell));
                     if marker.is_some() {
@@ -360,17 +417,27 @@ fn cancelled() -> EngineError {
 /// SHA-256 and the size.
 fn read_file(
     path: &Path,
-    plan: &CsvPlan,
-    send: &dyn Fn(RowBatch) -> bool,
+    plan: &ImportPlan,
+    send: &dyn Fn(Batch) -> bool,
     cancel: &AtomicBool,
     bytes_read: &AtomicU64,
 ) -> Result<(Vec<Note>, String, u64)> {
+    let Reading::Csv {
+        encoding,
+        bom_length,
+        delimiter,
+        skip_lines,
+        header_rows,
+    } = &plan.reading
+    else {
+        return Err(EngineError::internal("The file is not delimited text."));
+    };
     let mut file = std::fs::File::open(path)?;
-    let mut decoder = TextDecoder::new(&plan.encoding, plan.bom_length)?;
+    let mut decoder = TextDecoder::new(encoding, *bom_length)?;
     let mut table = TableReader::new(&TableLayout {
-        delimiter: plan.delimiter,
-        skip_lines: plan.skip_lines,
-        header_rows: plan.header_rows,
+        delimiter: *delimiter,
+        skip_lines: *skip_lines,
+        header_rows: *header_rows,
         batch_rows: BATCH_ROWS,
         keep_blank: false,
     });
@@ -380,7 +447,7 @@ fn read_file(
     let mut size = 0u64;
     let forward = |table: &mut TableReader| -> Result<()> {
         for b in table.take_batches() {
-            if !send(b) {
+            if !send(Batch::Text(b)) {
                 return Err(cancelled());
             }
         }
@@ -411,12 +478,57 @@ fn read_file(
     Ok((std::mem::take(&mut table.notes), digest, size))
 }
 
+/// Hashes a Parquet file, then reads its rows as typed fields, a batch at a time. Returns the
+/// notes (none: the footer says everything a reader could), the SHA-256 and the size.
+fn read_parquet(
+    conn: &Connection,
+    path: &Path,
+    send: &dyn Fn(Batch) -> bool,
+    cancel: &AtomicBool,
+    bytes_read: &AtomicU64,
+) -> Result<(Vec<Note>, String, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buf = vec![0u8; READ_BYTES];
+    let mut size = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+        size += n as u64;
+        bytes_read.store(size, Ordering::Relaxed);
+    }
+    let digest = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let meta = crate::parquet::metadata(conn, path)?;
+    let mut batch = TypedBatch::default();
+    crate::parquet::read_rows(conn, path, &meta, None, &mut |loc, fields| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        batch.rows.push(fields);
+        batch.locs.push(loc as i64);
+        if batch.locs.len() == BATCH_ROWS && !send(Batch::Typed(std::mem::take(&mut batch))) {
+            return Err(cancelled());
+        }
+        Ok(true)
+    })?;
+    if !batch.locs.is_empty() && !send(Batch::Typed(batch)) {
+        return Err(cancelled());
+    }
+    Ok((Vec::new(), digest, size))
+}
+
 /// The text of one field of an original file, read again under the import's plan (lineage.ts
 /// sourceText): field `index` of the record that starts on line `loc`, or None when the record has
 /// no such field. Reading stops at that record.
 pub fn field_text(
     source: &crate::project::OriginalSource,
-    plan: &CsvPlan,
+    plan: &ImportPlan,
     loc: i64,
     index: usize,
 ) -> Result<Option<String>> {
@@ -433,11 +545,21 @@ pub fn field_text(
             Box::new(f.take(*size))
         }
     };
-    let mut decoder = TextDecoder::new(&plan.encoding, plan.bom_length)?;
+    let Reading::Csv {
+        encoding,
+        bom_length,
+        delimiter,
+        skip_lines,
+        header_rows,
+    } = &plan.reading
+    else {
+        return Err(EngineError::internal("The file is not delimited text."));
+    };
+    let mut decoder = TextDecoder::new(encoding, *bom_length)?;
     let mut table = TableReader::new(&TableLayout {
-        delimiter: plan.delimiter,
-        skip_lines: plan.skip_lines,
-        header_rows: plan.header_rows,
+        delimiter: *delimiter,
+        skip_lines: *skip_lines,
+        header_rows: *header_rows,
         batch_rows: 1024,
         keep_blank: false,
     });
@@ -477,10 +599,10 @@ pub fn field_text(
 
 /// Imports `path` as dataset `id`, calling `progress` with the bytes read so far.
 #[allow(clippy::too_many_arguments)]
-pub fn import_csv(
+pub fn import_source(
     conn: &Connection,
     path: &Path,
-    plan: &CsvPlan,
+    plan: &ImportPlan,
     id: &str,
     workdir: &Path,
     threads: usize,
@@ -533,7 +655,7 @@ pub fn import_csv(
 fn load(
     conn: &Connection,
     path: &Path,
-    plan: &CsvPlan,
+    plan: &ImportPlan,
     stage: &str,
     schema: &Arc<Schema>,
     threads: usize,
@@ -543,7 +665,8 @@ fn load(
     let workers = threads.max(1);
     let bytes_read = &AtomicU64::new(0);
     let failed = &AtomicBool::new(false);
-    let (row_tx, row_rx) = sync_channel::<RowBatch>(4);
+    let (row_tx, row_rx) = sync_channel::<Batch>(4);
+    let reader_conn = conn.try_clone()?;
     let (typed_tx, typed_rx) = sync_channel::<Parsed2>(workers * 2);
     let writer = conn.try_clone()?;
     let exc_writer = conn.try_clone()?;
@@ -554,8 +677,11 @@ fn load(
     std::thread::scope(|s| -> Result<(Vec<Note>, String, u64, u64)> {
         let reader = s.spawn(move || {
             let out = {
-                let send = |b: RowBatch| row_tx.send(b).is_ok();
-                read_file(path, plan, &send, cancel, bytes_read)
+                let send = |b: Batch| row_tx.send(b).is_ok();
+                match plan.reading {
+                    Reading::Csv { .. } => read_file(path, plan, &send, cancel, bytes_read),
+                    Reading::Parquet => read_parquet(&reader_conn, path, &send, cancel, bytes_read),
+                }
             };
             drop(row_tx);
             out.map_err(stop)

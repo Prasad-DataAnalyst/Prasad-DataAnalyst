@@ -19,16 +19,15 @@ test(
   },
 );
 
-test(
-  'parquet_well_daily_typed.parquet keeps its stored types and its UTC times need no assumption',
-  { tag: '@lite' },
-  async ({ app, page }) => {
-    const expected = fixtureExpectation('parquet_well_daily_typed.parquet');
-    await app.open();
-    await app.importFixture('parquet_well_daily_typed.parquet');
-    expect(await page.locator('.tw-colhead-text').allInnerTexts()).toEqual(expected.columns.map((c) => c.name));
-    await app.runChecks();
-    const counts = await app.issueCounts();
-    expect(Object.keys(counts).sort()).toEqual(Object.keys(expected.issues).sort());
-  },
-);
+test('parquet_well_daily_typed.parquet keeps its stored types and its UTC times need no assumption', async ({
+  app,
+  page,
+}) => {
+  const expected = fixtureExpectation('parquet_well_daily_typed.parquet');
+  await app.open();
+  await app.importFixture('parquet_well_daily_typed.parquet');
+  expect(await page.locator('.tw-colhead-text').allInnerTexts()).toEqual(expected.columns.map((c) => c.name));
+  await app.runChecks();
+  const counts = await app.issueCounts();
+  expect(Object.keys(counts).sort()).toEqual(Object.keys(expected.issues).sort());
+});

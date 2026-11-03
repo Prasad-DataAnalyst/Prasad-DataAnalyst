@@ -13,8 +13,9 @@ use crate::detect::{DetectOptions, collect_assumptions, det, detect_columns, det
 use crate::encoding::TextDecoder;
 use crate::error::{EngineError, Result};
 use crate::import::column_parser;
-use crate::parse::Parsed;
+use crate::parse::{Parsed, Raw};
 use crate::units::{get_unit, js_trim};
+use duckdb::Connection;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use std::io::Read;
@@ -335,7 +336,7 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
         return refuse("Excel");
     }
     if head.starts_with(b"PAR1") {
-        return refuse("Parquet");
+        return Ok("parquet");
     }
     let sample = &head[..head.len().min(FORMAT_SNIFF_BYTES)];
     let e = sniff_encoding(sample);
@@ -915,13 +916,17 @@ struct NumberEvidence {
     examples: [Option<String>; SHAPE_COUNT],
 }
 
-fn collect_number_evidence(rows: &[(u64, Vec<Option<String>>)]) -> NumberEvidence {
+fn collect_number_evidence(rows: &[(u64, Vec<Raw>)]) -> NumberEvidence {
     let mut e = NumberEvidence {
         counts: [0; SHAPE_COUNT],
         examples: Default::default(),
     };
     for (_, fields) in rows {
-        for field in fields.iter().flatten() {
+        // Only text says how numbers are written; native numbers have no separators.
+        for field in fields.iter().filter_map(|f| match f {
+            Raw::Text(t) => Some(t),
+            _ => None,
+        }) {
             if let Some(shape) = shape_of(field) {
                 e.counts[shape] += 1;
                 if e.examples[shape].is_none() {
@@ -1431,7 +1436,7 @@ pub struct Sniffed {
     /// In the order the TypeScript lists them, which is the order of the assumptions.
     detections: Vec<(String, Value)>,
     header: Vec<Vec<String>>,
-    rows: Vec<(u64, Vec<Option<String>>)>,
+    rows: Vec<(u64, Vec<Raw>)>,
     notes: Vec<Value>,
     decimal: char,
     thousands: String,
@@ -1443,7 +1448,10 @@ impl Sniffed {
         let rows: Vec<Value> = self
             .rows
             .iter()
-            .map(|(loc, fields)| json!({ "srcLoc": loc, "fields": fields }))
+            .map(|(loc, fields)| {
+                let fields: Vec<Value> = fields.iter().map(Raw::to_json).collect();
+                json!({ "srcLoc": loc, "fields": fields })
+            })
             .collect();
         json!({
             "format": self.format,
@@ -1464,11 +1472,7 @@ impl Sniffed {
 }
 
 /// A sample's header rows, data rows with their lines, and the reader's notes on them.
-type Sample = (
-    Vec<Vec<String>>,
-    Vec<(u64, Vec<Option<String>>)>,
-    Vec<Value>,
-);
+type Sample = (Vec<Vec<String>>, Vec<(u64, Vec<Raw>)>, Vec<Value>);
 
 /// The header and up to SAMPLE_MAX_ROWS rows, read the way the import reads them.
 fn assemble(
@@ -1489,7 +1493,7 @@ fn assemble(
     if complete {
         reader.finish()?;
     }
-    let mut rows: Vec<(u64, Vec<Option<String>>)> = Vec::new();
+    let mut rows: Vec<(u64, Vec<Raw>)> = Vec::new();
     'batches: for batch in reader.take_all() {
         for r in 0..batch.rows() {
             if rows.len() == SAMPLE_MAX_ROWS {
@@ -1497,9 +1501,9 @@ fn assemble(
             }
             let fields = (0..batch.width)
                 .map(|c| {
-                    batch
-                        .cell(r, c)
-                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                    batch.cell(r, c).map_or(Raw::Null, |b| {
+                        Raw::Text(String::from_utf8_lossy(b).into_owned())
+                    })
                 })
                 .collect();
             rows.push((batch.locs[r] as u64, fields));
@@ -1725,14 +1729,14 @@ fn user_csv(options: &Value) -> Result<(String, u64, Overrides)> {
 
 /// Sniffs a delimited-text file (sniffSource): detected from its first MiB, or with the options
 /// the user chose in the import settings, which are taken as given.
-pub fn sniff_source(src: &Source, options: &Value) -> Result<Sniffed> {
+pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<Sniffed> {
     let head = read_head(src)?;
     let truncated = src.size > head.len() as u64;
     let format = if options.is_null() {
         detect_format(&head, src.name)?.to_string()
     } else {
         match options["format"].as_str() {
-            Some(f @ ("csv" | "tsv")) => f.to_string(),
+            Some(f @ ("csv" | "tsv" | "parquet")) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
                     "the import preview of {} files",
@@ -1741,6 +1745,14 @@ pub fn sniff_source(src: &Source, options: &Value) -> Result<Sniffed> {
             }
         }
     };
+    if format == "parquet" {
+        let mut s = sniff_parquet(conn, src)?;
+        // Settings chosen for the file read it again with them (resniffByReading).
+        if !options.is_null() && &s.options != options {
+            s.options = options.clone();
+        }
+        return Ok(s);
+    }
     let e = sniff_encoding(&head);
     let text = decode_all(&head, e.value, e.bom_length)?;
     let mut base = sniff_text(
@@ -1778,6 +1790,33 @@ pub fn sniff_source(src: &Source, options: &Value) -> Result<Sniffed> {
     s.format = format;
     s.options = options.clone();
     Ok(s)
+}
+
+/// A Parquet file's sniff (parquet/import.ts sniff): the columns and row count from its footer,
+/// and its first rows as typed fields.
+fn sniff_parquet(conn: &Connection, src: &Source) -> Result<Sniffed> {
+    let meta = crate::parquet::metadata(conn, src.path)?;
+    let mut rows = Vec::new();
+    crate::parquet::read_rows(
+        conn,
+        src.path,
+        &meta,
+        Some(meta.rows.min(SAMPLE_MAX_ROWS as u64)),
+        &mut |loc, fields| {
+            rows.push((loc, fields));
+            Ok(true)
+        },
+    )?;
+    Ok(Sniffed {
+        format: "parquet".into(),
+        options: json!({ "format": "parquet", "parquet": { "nested": "json-text" } }),
+        detections: crate::parquet::detections(&meta),
+        header: vec![meta.names.clone()],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1950,6 +1989,10 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
     if src.size <= PREVIEW_MAX_BYTES as u64 && n < SAMPLE_MAX_ROWS {
         return Some(n as u64);
     }
+    if s.format == "parquet" {
+        // The footer states the row count exactly.
+        return s.detection("rowCount").and_then(|d| d["value"].as_u64());
+    }
     if n == 0 {
         return None;
     }
@@ -1959,8 +2002,8 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
         .map(|(_, fields)| {
             1 + fields
                 .iter()
-                .flatten()
-                .map(|f| utf16_len(f) + 1)
+                .filter(|f| **f != Raw::Null)
+                .map(|f| utf16_len(&f.text()) + 1)
                 .sum::<usize>()
         })
         .sum();
@@ -1974,7 +2017,7 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
         decimal: s.decimal,
         thousands: s.thousands.clone(),
     };
-    let fields: Vec<Vec<Option<String>>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
+    let fields: Vec<Vec<Raw>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
     let planned = detect_columns(&s.header, &fields, &o);
     let columns = apply_overrides(planned, overrides)?;
     let crs = s
@@ -1996,7 +2039,7 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
                 .zip(&parsers)
                 .map(|(c, parser)| {
                     let index = c["sourceIndex"].as_u64().unwrap_or(0) as usize;
-                    match parser.parse(f.get(index).and_then(|v| v.as_deref())) {
+                    match parser.parse_raw(f.get(index).unwrap_or(&Raw::Null)) {
                         Parsed::Value(cell, _) => crate::engine::cell_json(&cell),
                         Parsed::Failed(_) => Value::Null,
                     }
@@ -2030,8 +2073,8 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
 
 /// The import spec of a file read with these options (previewSource's spec), for an override
 /// that changes how the whole file is read.
-pub fn plan_spec(src: &Source, options: &Value) -> Result<Value> {
-    let s = sniff_source(src, options)?;
+pub fn plan_spec(conn: &Connection, src: &Source, options: &Value) -> Result<Value> {
+    let s = sniff_source(conn, src, options)?;
     let p = preview(src, &s, &[], u64::MAX)?;
     let name = src.name.rsplit(['/', '\\']).next().unwrap_or(src.name);
     let stem = match name.rfind('.') {

@@ -10,7 +10,7 @@
 use crate::csv::Note;
 use crate::engine::{Dataset, assumed_encoding_note};
 use crate::error::{EngineError, Result};
-use crate::import::{EXCEPTIONS_SUFFIX, csv_plan, import_csv, quote_ident};
+use crate::import::{EXCEPTIONS_SUFFIX, import_plan, import_source, quote_ident};
 use crate::parse::Kind;
 use crate::project::OriginalSource;
 use crate::sniff::{Source, apply_overrides, plan_spec};
@@ -365,12 +365,12 @@ pub fn outcome(
             name: original_name,
             size: std::fs::metadata(original)?.len(),
         };
-        let mut planned = plan_spec(&src, &options)?;
+        let mut planned = plan_spec(conn, &src, &options)?;
         planned["fileId"] = spec["fileId"].clone();
         planned["datasetName"] = spec["datasetName"].clone();
         spec = planned;
     }
-    let plan = csv_plan(&spec)?;
+    let plan = import_plan(&spec)?;
     let columns: Vec<(String, Kind)> = plan
         .columns
         .iter()
@@ -417,7 +417,7 @@ pub fn outcome(
     let reread = if changes_rows(property) || VALUE_PROPERTIES.contains(&property) {
         let job = format!("ovr_{}_{seq}", d.id);
         std::fs::create_dir_all(project_dir)?;
-        let imported = import_csv(
+        let imported = import_source(
             conn,
             original,
             &plan,

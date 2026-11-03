@@ -39,6 +39,7 @@ import {
   type RowWindow,
 } from '@tw/model';
 import { columnDigest } from '@tw/table';
+import { parquetWriteBuffer } from 'hyparquet-writer';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ENGINE_FACTORIES, PROFILE, START } from './harness';
 import { NATIVE_BINARY, nativeBuilt, startNative, stopNative, type NativeProcess } from './native-process';
@@ -1036,6 +1037,142 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       stopNative(withStore);
       lite.close();
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reads Parquet the same way: every stored type, previews, imports, checks, lineage and overrides', async () => {
+    // A file of the types the readers convert differently: dates, legacy and logical timestamps of
+    // every unit (local and UTC), decimals, integers past 2^53, NaN and infinities, raw and fixed
+    // bytes, UUIDs, JSON and unsigned 64-bit integers. (DuckDB keeps a UTC nanosecond timestamp
+    // to the microsecond, so the UTC nanosecond values here are whole microseconds.)
+    const schema = [
+      { name: 'root', num_children: 14 },
+      { name: 'd', type: 'INT32', converted_type: 'DATE', repetition_type: 'OPTIONAL' },
+      { name: 'tms', type: 'INT64', converted_type: 'TIMESTAMP_MILLIS', repetition_type: 'OPTIONAL' },
+      { name: 'tus', type: 'INT64', converted_type: 'TIMESTAMP_MICROS', repetition_type: 'OPTIONAL' },
+      {
+        name: 'tns_local',
+        type: 'INT64',
+        logical_type: { type: 'TIMESTAMP', isAdjustedToUTC: false, unit: 'NANOS' },
+        repetition_type: 'OPTIONAL',
+      },
+      {
+        name: 'tns_utc',
+        type: 'INT64',
+        logical_type: { type: 'TIMESTAMP', isAdjustedToUTC: true, unit: 'NANOS' },
+        repetition_type: 'OPTIONAL',
+      },
+      { name: 'dec', type: 'INT32', converted_type: 'DECIMAL', scale: 2, precision: 9, repetition_type: 'OPTIONAL' },
+      { name: 'big', type: 'INT64', repetition_type: 'OPTIONAL' },
+      { name: 'dbl', type: 'DOUBLE', repetition_type: 'OPTIONAL' },
+      { name: 'flt', type: 'FLOAT', repetition_type: 'OPTIONAL' },
+      { name: 'raw', type: 'BYTE_ARRAY', repetition_type: 'OPTIONAL' },
+      { name: 'fixed', type: 'FIXED_LEN_BYTE_ARRAY', type_length: 2, repetition_type: 'OPTIONAL' },
+      {
+        name: 'uuid',
+        type: 'FIXED_LEN_BYTE_ARRAY',
+        type_length: 16,
+        logical_type: { type: 'UUID' },
+        repetition_type: 'OPTIONAL',
+      },
+      { name: 'json', type: 'BYTE_ARRAY', converted_type: 'JSON', repetition_type: 'OPTIONAL' },
+      { name: 'u64', type: 'INT64', converted_type: 'UINT_64', repetition_type: 'OPTIONAL' },
+    ];
+    const columnData = [
+      { name: 'd', data: [19000, 0, -1, null] },
+      { name: 'tms', data: [1577836800123n, 0n, -1n, null] },
+      { name: 'tus', data: [1577836800123456n, 1577836800123000n, -1n, null] },
+      { name: 'tns_local', data: [1577836800123456789n, 1577836800000000000n, 5n, null] },
+      { name: 'tns_utc', data: [1577836800123456000n, 1577836800000000000n, -1000n, null] },
+      { name: 'dec', data: [12.5, -0.05, 0, null] },
+      { name: 'big', data: [9007199254740993n, 5n, -9007199254740993n, null] },
+      { name: 'dbl', data: [NaN, Infinity, 1.5, -0] },
+      { name: 'flt', data: [1.5, 0.1, -2, null] },
+      { name: 'raw', data: [new Uint8Array([104, 105]), new Uint8Array([0xff, 0x41]), new Uint8Array([]), null] },
+      { name: 'fixed', data: [new Uint8Array([0, 255]), new Uint8Array([1, 2]), new Uint8Array([3, 4]), null] },
+      {
+        name: 'uuid',
+        data: ['a8098c1a-f86e-11da-bd1a-00112444be1e', '00000000-0000-0000-0000-000000000000', null, null],
+      },
+      { name: 'json', data: [{ z: 1, a: [1.0, 2.5, 'x'] }, 'text', 7, null] },
+      { name: 'u64', data: [18446744073709551615n, 1n, 9007199254740993n, null] },
+    ];
+    const folder = mkdtempSync(join(tmpdir(), 'tw-parquet-'));
+    const generated = join(folder, 'types.parquet');
+    writeFileSync(
+      generated,
+      new Uint8Array(parquetWriteBuffer({ columnData: columnData as never, schema: schema as never })),
+    );
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const settle = (run: () => Promise<unknown>) =>
+      run().then(
+        (v) => v,
+        (err: { code: string; message: string }) => ({ code: err.code, message: err.message }),
+      );
+    const same = async (why: string, run: (e: EngineClient) => Promise<unknown>) => {
+      const [a, b] = [await settle(() => run(nat.client)), await settle(() => run(lite))];
+      expect(a, why).toEqual(b);
+      return a;
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Parquet', profile: { ...PROFILE } });
+      const files = [fixturePath('parquet_well_daily_typed.parquet'), generated];
+      for (const [i, path] of files.entries()) {
+        const file = { kind: 'path' as const, path };
+        const id = `d${i + 1}`;
+        await same(`${path}: preview`, (e) => e.sniff(file));
+        await same(`${path}: preview with its settings`, async (e) =>
+          e.sniff(file, { options: { format: 'parquet', parquet: { nested: 'json-text' } } }),
+        );
+        await same(`${path}: import`, async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+        await same(`${path}: schema`, (e) => e.getSchema(id));
+        await same(`${path}: rows`, async (e) => allRows(e, id));
+        const { columns } = await lite.getSchema(id);
+        for (const c of columns) {
+          for (const row of [0, 1, 2, 3]) {
+            await same(`${path}: lineage of ${c.id} row ${row}`, async (e) => ({
+              ...(await e.explainCell(id, row, c.id)),
+              history: [],
+            }));
+          }
+        }
+        await same(`${path}: checks`, async (e) => {
+          const { durationMs: _d, ...run } = await e.awaitJob<CheckSummary>(await e.runChecks(id));
+          return run;
+        });
+        await same(`${path}: issues`, async (e) => (await e.listIssues({ datasetId: id, limit: 1000 })).items);
+      }
+      // Overrides read the Parquet file again, and reading settings do not apply to it.
+      const override = (property: string, value: unknown, columnId?: string) => (e: EngineClient) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId: 'd2',
+          property,
+          value,
+          reason: 'Checked against the source system',
+          ...(columnId === undefined ? {} : { columnId }),
+        } as Decision);
+      await same('a column read as text', async (e) => (await override('type', 'string', 'c5')(e)).map(content));
+      await same('a timestamp column read as text', async (e) =>
+        (await override('type', 'string', 'c3')(e)).map(content),
+      );
+      await same('a reading setting', async (e) => override('delimiter', ';')(e));
+      await same('rows after the overrides', async (e) => allRows(e, 'd2'));
+      await same('schema after the overrides', (e) => e.getSchema('d2'));
+      // The project file opens to the same state in both engines.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const { report, opened } = await openNatively(saved.bytes as Uint8Array);
+      try {
+        expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+        await sameState(opened.client, lite);
+      } finally {
+        stopNative(opened);
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
     }
   });
 

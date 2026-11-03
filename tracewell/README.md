@@ -53,7 +53,7 @@ The native engine needs Rust 1.89 or later; its first build compiles DuckDB and 
 Playwright runs every test on the same production build twice: with the Lite engine in its worker,
 and with the native engine, which the test harness runs as a process for each page and connects
 through page bindings rather than the network. Tests tagged `@lite` need what only the Lite engine
-has (workbooks, GeoJSON, JSON and Parquet input, Excel and GeoJSON exports) and run once. Without a
+has (workbook, GeoJSON and JSON input, Excel and GeoJSON exports) and run once. Without a
 native build, the native runs are skipped and say why.
 
 ## Layout

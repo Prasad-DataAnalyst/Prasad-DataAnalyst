@@ -28,6 +28,7 @@ mod import;
 mod issues;
 mod memory;
 mod overrides;
+mod parquet;
 mod parse;
 mod project;
 mod recipes;

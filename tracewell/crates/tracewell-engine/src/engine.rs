@@ -8,12 +8,15 @@ use crate::checks::{CheckCtx, Col, summarize};
 use crate::csv::Note;
 use crate::error::{EngineError, Result};
 use crate::framing::{Incoming, write_message};
-use crate::import::{CsvPlan, EXCEPTIONS_SUFFIX, csv_plan, import_csv, quote_ident, quote_text};
+use crate::import::{
+    EXCEPTIONS_SUFFIX, ImportPlan, import_plan, import_source, quote_ident, quote_text,
+};
 use crate::issues::{
     IssueState, Listed, matches, merge_check_run, occurrence_state, open_rows, sort, to_issue,
 };
 use crate::overrides::{Outcome, ReadEnv, original_file, override_of};
 use crate::parse::Kind;
+use crate::parse::Raw;
 use crate::rules::{Draft, RowSet, check_packs, find_rule};
 use crate::steps::{StageColumn, Stages};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
@@ -158,6 +161,30 @@ fn root_of(stages: &Stages, id: &str) -> String {
         id = from.to_string();
     }
     id
+}
+
+/// A row's or a cell's source locator (locator.ts): 'line 4, field 3' for delimited text,
+/// 'row 4, column "rate"' for Parquet, the column named as the file names it.
+fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
+    let source_name = |c: &Value| {
+        c["sourceHeader"][0]
+            .as_str()
+            .or(c["name"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    match (spec["options"]["format"].as_str(), column) {
+        (Some("parquet"), None) => format!("row {loc}"),
+        (Some("parquet"), Some(c)) => format!(
+            "row {loc}, column {}",
+            serde_json::to_string(&source_name(c)).unwrap_or_default()
+        ),
+        (_, None) => format!("line {loc}"),
+        (_, Some(c)) => format!(
+            "line {loc}, field {}",
+            c["sourceIndex"].as_u64().unwrap_or(0) + 1
+        ),
+    }
 }
 
 /// Columns as an export or a digest takes them.
@@ -460,7 +487,7 @@ impl Engine {
             "version": self.version,
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
-                "formats": ["csv", "tsv"],
+                "formats": ["csv", "tsv", "parquet"],
                 "exportProfiles": ["csv", "parquet"],
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
@@ -728,7 +755,7 @@ impl Engine {
                 .collect();
             out.push(json!({
                 "rowId": rid,
-                "locator": format!("line {loc}"),
+                "locator": locator(&d.spec, loc, None),
                 "cells": cells,
                 "edited": cols.iter().zip(&roots).map(|((id, _, _), root)| d.edits.contains_key(&(id.clone(), r)) || d.edits.contains_key(&(root.clone(), r))).collect::<Vec<_>>(),
                 "issue": issue,
@@ -960,12 +987,9 @@ impl Engine {
                         Self::cell(row, 2, *kind)?,
                         row.get::<_, Option<String>>(3)?
                             .map_or(Value::Null, Value::String),
-                        format!(
-                            "line {loc}, field {}",
-                            plan["sourceIndex"].as_u64().unwrap_or(0) + 1
-                        ),
+                        locator(&d.spec, loc, Some(plan)),
                     ),
-                    None => (Value::Null, Value::Null, format!("line {loc}")),
+                    None => (Value::Null, Value::Null, locator(&d.spec, loc, None)),
                 };
                 items.push(json!({
                     "issueId": id,
@@ -1910,7 +1934,7 @@ fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, V
     let typ = plan["type"]["value"].as_str().unwrap_or("string");
     let name = plan["name"].as_str().unwrap_or(col);
     let value = if let Some(text) = d["value"]["text"].as_str() {
-        let csv = csv_plan(&ds.spec)?;
+        let csv = import_plan(&ds.spec)?;
         let parser = &csv
             .columns
             .iter()
@@ -1970,7 +1994,7 @@ fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, V
         "datasetId": ds.id,
         "rowId": row,
         "columnId": col,
-        "locator": format!("line {loc}, field {}", plan["sourceIndex"].as_u64().unwrap_or(0) + 1),
+        "locator": locator(&ds.spec, loc, Some(plan)),
     });
     if let Some(issue) = d.get("issueId").filter(|v| !v.is_null()) {
         target["issueId"] = issue.clone();
@@ -2546,7 +2570,7 @@ impl Engine {
             name: &name,
             size,
         };
-        let sniffed = sniff_source(&src, &o["options"])?;
+        let sniffed = sniff_source(&self.conn, &src, &o["options"])?;
         let budget = self.memory_limit;
         let mut detected = preview(&src, &sniffed, &[], budget)?;
         let plans = detected["columns"].as_array().cloned().unwrap_or_default();
@@ -3017,12 +3041,20 @@ impl Engine {
         let raw_text = match raw.clone().or(marker.clone()) {
             Some(kept) => Some(kept),
             None => match p.original_paths.get(file_id) {
-                Some(source) => crate::import::field_text(
-                    source,
-                    &csv_plan(&d.spec)?,
-                    loc,
-                    plan["sourceIndex"].as_u64().unwrap_or(0) as usize,
-                )?,
+                Some(source) => {
+                    let index = plan["sourceIndex"].as_u64().unwrap_or(0) as usize;
+                    let read = import_plan(&d.spec)?;
+                    match read.reading {
+                        // A Parquet row is found by its number; its field reads as rawToText does.
+                        crate::import::Reading::Parquet => {
+                            let path =
+                                crate::overrides::original_file(source, &self.workdir, file_id)?;
+                            crate::parquet::read_row(&self.conn, &path, loc.max(0) as u64)?
+                                .and_then(|fields| fields.get(index).map(Raw::text))
+                        }
+                        _ => crate::import::field_text(source, &read, loc, index)?,
+                    }
+                }
                 None => None,
             },
         };
@@ -3088,7 +3120,7 @@ impl Engine {
             "source": {
                 "fileId": file_id,
                 "fileName": file_name,
-                "locator": format!("line {loc}, field {}", plan["sourceIndex"].as_u64().unwrap_or(0) + 1),
+                "locator": locator(&d.spec, loc, Some(&plan)),
                 "rawText": raw_text,
             },
             "parse": {
@@ -4422,7 +4454,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
     let budget = engine.memory_limit;
     let planned = crate::sniff::preview(
         &src,
-        &crate::sniff::sniff_source(&src, &Value::Null)?,
+        &crate::sniff::sniff_source(&engine.conn, &src, &Value::Null)?,
         &[],
         budget,
     )?;
@@ -4431,7 +4463,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
     } else {
         crate::sniff::preview(
             &src,
-            &crate::sniff::sniff_source(&src, &o["options"])?,
+            &crate::sniff::sniff_source(&engine.conn, &src, &o["options"])?,
             &[],
             budget,
         )?
@@ -4494,7 +4526,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         "crs": preview["crs"],
         "datasetName": o["name"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| dataset_name_for(&name)),
     });
-    let plan: CsvPlan = csv_plan(&spec)?;
+    let plan: ImportPlan = import_plan(&spec)?;
     // The preview lists its assumptions under the dataset id 'preview'; the commit renames them.
     let assumptions: Vec<Value> = preview["assumptions"]
         .as_array()
@@ -4529,7 +4561,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
                 .event(json!({ "type": "job.progress", "jobId": progress_job, "progress": p }));
         };
         let outcome = (|| -> Result<Value> {
-            let imported = import_csv(
+            let imported = import_source(
                 &conn,
                 &path,
                 &plan,
@@ -4622,7 +4654,7 @@ fn commit_import(
     shared: &Arc<Shared>,
     project_id: &str,
     spec: Value,
-    plan: &CsvPlan,
+    plan: &ImportPlan,
     imported: crate::import::Imported,
     workdir: &Path,
     job_id: &str,
@@ -4650,10 +4682,10 @@ fn commit_import(
         jobexc = quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", imported.view)),
     ))?;
     let file_id = spec["fileId"].clone();
-    let media_type = if spec["options"]["format"] == "tsv" {
-        "text/tab-separated-values"
-    } else {
-        "text/csv"
+    let media_type = match spec["options"]["format"].as_str() {
+        Some("tsv") => "text/tab-separated-values",
+        Some("parquet") => "application/vnd.apache.parquet",
+        _ => "text/csv",
     };
     let mut add = draft(
         "source.add",
@@ -4972,7 +5004,7 @@ impl Reopen<'_> {
         let dataset_id = e["target"]["datasetId"].as_str().unwrap_or("").to_string();
         let seq = e["seq"].as_u64().unwrap_or(0);
         let spec = e["payload"]["spec"].clone();
-        let plan = csv_plan(&spec)?;
+        let plan = import_plan(&spec)?;
         let file_id = spec["fileId"].as_str().unwrap_or("").to_string();
         let dir = self.workdir.join(&p.id);
         std::fs::create_dir_all(&dir)?;
@@ -5062,7 +5094,7 @@ impl Reopen<'_> {
                     }
                 };
                 let job = format!("open_{dataset_id}");
-                let imported = import_csv(
+                let imported = import_source(
                     self.conn,
                     &path,
                     &plan,
