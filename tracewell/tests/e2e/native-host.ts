@@ -44,9 +44,17 @@ class Session {
       this.finish();
     });
     child.stderr.on('data', (d: Buffer) => process.stderr.write(`[native] ${d.toString()}`));
+    // A write that races the end of the engine fails with EPIPE, and the pipe reports it as an
+    // error event too; unheard, that event would end the test worker. The write's own promise
+    // carries the failure, and the page learns of the end from read().
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+      if (!this.ended || e.code !== 'EPIPE')
+        process.stderr.write(`[native] the pipe to the engine failed: ${e.message}\n`);
+    });
   }
 
   write(base64: string): Promise<void> {
+    if (this.ended) return Promise.reject(new Error('The engine has stopped.'));
     return new Promise((resolve, reject) =>
       this.child.stdin.write(Buffer.from(base64, 'base64'), (e) => (e ? reject(e) : resolve())),
     );
