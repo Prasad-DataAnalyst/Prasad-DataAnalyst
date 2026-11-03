@@ -493,6 +493,9 @@ pub struct TwpRead {
     pub checks: Vec<Value>,
     /// The paths whose bytes matched the manifest.
     pub verified: std::collections::HashSet<String>,
+    /// Each original the manifest lists, by file ID: the SHA-256 of its bytes, or None when they
+    /// are missing or cannot be read.
+    pub originals: std::collections::HashMap<String, Option<String>>,
 }
 
 pub fn integrity(
@@ -591,15 +594,41 @@ fn manifest_problem(m: &Value) -> Option<String> {
     None
 }
 
-/// Reads and checks a project file. It never fails on bad content: what cannot be read is a
-/// failed check, so a damaged project still opens read-only for inspection.
+/// The checksum file's entries (parseChecksumsFile), or None when a line cannot be read.
+fn checksum_lines(text: &str) -> Option<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for raw in text.strip_prefix('\u{FEFF}').unwrap_or(text).split('\n') {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if line.trim_matches(crate::units::is_js_space).is_empty() {
+            continue;
+        }
+        let (hex, rest) = (line.get(..64)?, line.get(64..)?);
+        let path = rest
+            .strip_prefix("  ")
+            .or_else(|| rest.strip_prefix(" *"))?;
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) || path.is_empty() || path.contains('\r') {
+            return None;
+        }
+        if out.iter().any(|(p, _)| p == path) {
+            return None;
+        }
+        out.push((path.to_string(), hex.to_ascii_lowercase()));
+    }
+    Some(out)
+}
+
+/// Reads and checks a project file as the TypeScript reader does (twp.ts readTwp), with the same
+/// findings in the same order. It never fails on bad content: what cannot be read is a failed
+/// check, so a damaged project still opens read-only for inspection.
 pub fn read_twp(archive: &Path, progress: &mut dyn FnMut(&str, u64)) -> TwpRead {
+    use std::collections::{HashMap, HashSet};
     let mut out = TwpRead {
         entries: Vec::new(),
         manifest: None,
         audit_jsonl: None,
         checks: Vec::new(),
-        verified: Default::default(),
+        verified: HashSet::new(),
+        originals: HashMap::new(),
     };
     let prj4 = Some("TW-PRJ-004");
     match crate::zip::read_entries(archive) {
@@ -615,84 +644,138 @@ pub fn read_twp(archive: &Path, progress: &mut dyn FnMut(&str, u64)) -> TwpRead 
             return out;
         }
     }
+    // File entries in archive order; directory entries are left out, as the TypeScript reader does.
+    let paths: Vec<String> = out
+        .entries
+        .iter()
+        .filter(|e| !e.name.ends_with('/'))
+        .map(|e| e.name.clone())
+        .collect();
     out.checks.push(integrity(
         "zip",
         true,
-        "The file is a readable ZIP archive.".into(),
+        format!("The archive is readable and holds {} entries.", paths.len()),
         None,
         None,
     ));
     let find = |name: &str| out.entries.iter().find(|e| e.name == name).cloned();
-    let first_ok = out
-        .entries
-        .first()
-        .is_some_and(|e| e.name == "mimetype" && e.method == 0)
-        && find("mimetype")
-            .and_then(|e| entry_bytes(archive, &e).ok())
-            .is_some_and(|b| b == MIMETYPE.as_bytes());
-    out.checks.push(if first_ok {
-        integrity(
-            "mimetype",
-            true,
-            "The first entry identifies a Tracewell project.".into(),
-            None,
-            None,
-        )
+    let bytes_of = |name: &str| find(name).and_then(|e| entry_bytes(archive, &e).ok());
+    let text_of = |name: &str| {
+        bytes_of(name).and_then(|b| {
+            String::from_utf8(b)
+                .ok()
+                .map(|t| t.strip_prefix('\u{FEFF}').map(String::from).unwrap_or(t))
+        })
+    };
+
+    out.checks
+        .push(if paths.first().map(String::as_str) != Some("mimetype") {
+            integrity(
+                "mimetype",
+                false,
+                "The first entry is not \"mimetype\", so this is not a Tracewell project file."
+                    .into(),
+                prj4,
+                None,
+            )
+        } else {
+            match text_of("mimetype") {
+                Some(t) if t == MIMETYPE => integrity(
+                    "mimetype",
+                    true,
+                    format!("The file identifies itself as {MIMETYPE}."),
+                    None,
+                    None,
+                ),
+                other => integrity(
+                    "mimetype",
+                    false,
+                    format!(
+                        "The mimetype entry reads \"{}\", not \"{MIMETYPE}\".",
+                        other.as_deref().unwrap_or("(unreadable)")
+                    ),
+                    prj4,
+                    None,
+                ),
+            }
+        });
+
+    // The manifest as JSON, or why it is not.
+    let raw: std::result::Result<Value, String> = if find("manifest.json").is_none() {
+        Err("manifest.json is missing".into())
     } else {
-        integrity(
-            "mimetype",
-            false,
-            format!("The first entry is not an uncompressed mimetype of \"{MIMETYPE}\"."),
-            prj4,
-            None,
-        )
-    });
-    let manifest: Option<Value> = find("manifest.json")
-        .and_then(|e| entry_bytes(archive, &e).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok());
-    let version = manifest
-        .as_ref()
-        .map(|m| (m["format"].clone(), m["formatVersion"].clone()));
-    out.checks.push(match &version {
-        None => integrity(
-            "format-version",
-            false,
-            "The format version is unknown because manifest.json is missing or not JSON.".into(),
-            prj4,
-            None,
-        ),
-        Some((f, v)) if f == "tracewell-project" && (v == "0.1" || v == "0.2") => integrity(
-            "format-version",
-            true,
-            format!(
-                "Format tracewell-project {} is supported.",
-                v.as_str().unwrap_or("")
-            ),
-            None,
-            None,
-        ),
-        Some((_, v)) => integrity(
-            "format-version",
-            false,
-            format!(
-                "The project uses format version {v}; this version of Tracewell reads 0.1 and 0.2."
-            ),
-            prj4,
-            None,
-        ),
-    });
-    let manifest = match manifest {
-        None => {
+        match text_of("manifest.json") {
+            None => Err("manifest.json could not be read: it is not valid UTF-8".into()),
+            Some(t) => serde_json::from_str(&t)
+                .map_err(|e| format!("manifest.json could not be read: {e}")),
+        }
+    };
+    let version_ok = match &raw {
+        Err(why) => {
+            out.checks.push(integrity(
+                "format-version",
+                false,
+                format!("The format version is unknown because {why}."),
+                prj4,
+                None,
+            ));
+            false
+        }
+        Ok(m) => {
+            let check = if m["format"] != "tracewell-project" {
+                let format = m
+                    .get("format")
+                    .map_or("undefined".to_string(), |f| f.to_string());
+                integrity(
+                    "format-version",
+                    false,
+                    format!("The manifest format is {format}, not \"tracewell-project\"."),
+                    prj4,
+                    None,
+                )
+            } else if !matches!(m["formatVersion"].as_str(), Some("0.1" | "0.2")) {
+                let version = m
+                    .get("formatVersion")
+                    .map_or("undefined".to_string(), |v| v.to_string());
+                integrity(
+                    "format-version",
+                    false,
+                    format!(
+                        "The project uses format version {version}; this version of Tracewell reads 0.1 and 0.2."
+                    ),
+                    prj4,
+                    None,
+                )
+            } else {
+                integrity(
+                    "format-version",
+                    true,
+                    format!(
+                        "Format tracewell-project {} is supported.",
+                        m["formatVersion"].as_str().unwrap_or("")
+                    ),
+                    None,
+                    None,
+                )
+            };
+            let ok = check["ok"] == true;
+            out.checks.push(check);
+            ok
+        }
+    };
+    // A manifest of an unsupported version is still used for the checks below, but not handed on.
+    let manifest: Option<Value> = match raw {
+        Err(why) => {
             out.checks.push(integrity(
                 "manifest-schema",
                 false,
-                "The manifest cannot be checked because it is missing or not JSON.".into(),
+                format!("The manifest cannot be checked because {why}."),
                 None,
                 None,
             ));
-            return out;
+            None
         }
-        Some(m) => match manifest_problem(&m) {
+        Ok(m) => match manifest_problem(&m) {
             Some(at) => {
                 out.checks.push(integrity(
                     "manifest-schema",
@@ -701,7 +784,7 @@ pub fn read_twp(archive: &Path, progress: &mut dyn FnMut(&str, u64)) -> TwpRead 
                     None,
                     None,
                 ));
-                return out;
+                None
             }
             None => {
                 out.checks.push(integrity(
@@ -711,129 +794,115 @@ pub fn read_twp(archive: &Path, progress: &mut dyn FnMut(&str, u64)) -> TwpRead 
                     None,
                     None,
                 ));
-                m
+                Some(m)
             }
         },
     };
 
+    // Each entry's SHA-256, read once: None when it is missing or cannot be read.
+    let mut digests: HashMap<String, Option<String>> = HashMap::new();
+    let mut done = 0u64;
+    let mut digest = |path: &str, progress: &mut dyn FnMut(&str, u64)| -> Option<String> {
+        if let Some(d) = digests.get(path) {
+            return d.clone();
+        }
+        let d = find(path).and_then(|e| {
+            let base = done;
+            let mut seen = 0u64;
+            let sha = crate::zip::read_entry(archive, &e, &mut |b| {
+                seen += b.len() as u64;
+                progress("Verifying the project file", base + seen);
+                Ok(())
+            });
+            done += e.size;
+            sha.ok()
+        });
+        digests.insert(path.to_string(), d.clone());
+        d
+    };
+
     // Every listed entry present with its size and SHA-256, nothing else, and CHECKSUMS agreeing.
     let mut failures = Vec::new();
-    let mut digests = std::collections::HashMap::new();
-    let listed: Vec<Value> = manifest["entries"].as_array().cloned().unwrap_or_default();
-    let mut done = 0u64;
-    for l in &listed {
-        let path = l["path"].as_str().unwrap_or("");
-        let Some(e) = find(path) else {
-            failures.push(integrity(
-                "entry-checksum",
-                false,
-                format!("{path} is listed in the manifest but missing."),
-                prj4,
-                Some(path),
-            ));
-            continue;
-        };
-        if Some(e.size) != l["size"].as_u64() {
-            failures.push(integrity(
-                "entry-checksum",
-                false,
-                format!(
-                    "{path} is {} bytes; the manifest says {}.",
-                    e.size, l["size"]
-                ),
-                prj4,
-                Some(path),
-            ));
-            continue;
-        }
-        let base = done;
-        let mut seen = 0u64;
-        let sha = crate::zip::read_entry(archive, &e, &mut |b| {
-            seen += b.len() as u64;
-            progress("Verifying the project file", base + seen);
-            Ok(())
-        });
-        done += e.size;
-        match sha {
-            Ok(sha) if Some(sha.as_str()) == l["sha256"].as_str() => {
-                digests.insert(path.to_string(), sha);
-                out.verified.insert(path.to_string());
+    let fail_entry = |detail: String, target: &str| {
+        integrity("entry-checksum", false, detail, prj4, Some(target))
+    };
+    if let Some(m) = &manifest {
+        let listed: Vec<Value> = m["entries"].as_array().cloned().unwrap_or_default();
+        for l in &listed {
+            let path = l["path"].as_str().unwrap_or("");
+            match find(path) {
+                None => failures.push(fail_entry(
+                    format!("The entry {path} listed in the manifest is missing."),
+                    path,
+                )),
+                Some(e) => {
+                    let sha = digest(path, progress);
+                    if Some(e.size) != l["size"].as_u64() || sha.as_deref() != l["sha256"].as_str()
+                    {
+                        failures.push(fail_entry(
+                            format!(
+                                "The entry {path} does not match its recorded SHA-256 checksum."
+                            ),
+                            path,
+                        ));
+                    } else {
+                        out.verified.insert(path.to_string());
+                    }
+                }
             }
-            Ok(_) => failures.push(integrity(
-                "entry-checksum",
-                false,
-                format!("{path} does not match its SHA-256 in the manifest."),
-                prj4,
-                Some(path),
-            )),
-            Err(err) => failures.push(integrity(
-                "entry-checksum",
-                false,
-                format!("{path} cannot be read: {}", err.message),
-                prj4,
-                Some(path),
-            )),
         }
-    }
-    let known: std::collections::HashSet<&str> =
-        listed.iter().filter_map(|l| l["path"].as_str()).collect();
-    for e in &out.entries {
-        if !known.contains(e.name.as_str())
-            && !matches!(
-                e.name.as_str(),
+        let known: HashSet<&str> = listed.iter().filter_map(|l| l["path"].as_str()).collect();
+        for path in &paths {
+            if !matches!(
+                path.as_str(),
                 "mimetype" | "manifest.json" | "CHECKSUMS.sha256"
-            )
-        {
-            failures.push(integrity(
-                "entry-checksum",
-                false,
-                format!("{} is in the archive but not in the manifest.", e.name),
-                prj4,
-                Some(&e.name),
-            ));
+            ) && !known.contains(path.as_str())
+            {
+                failures.push(fail_entry(
+                    format!("The entry {path} is not listed in the manifest."),
+                    path,
+                ));
+            }
         }
     }
-    let sums = find("CHECKSUMS.sha256")
-        .and_then(|e| entry_bytes(archive, &e).ok())
-        .map(|b| String::from_utf8_lossy(&b).into_owned());
-    match sums {
-        None => failures.push(integrity(
-            "entry-checksum",
-            false,
-            "CHECKSUMS.sha256 is missing.".into(),
-            prj4,
-            Some("CHECKSUMS.sha256"),
+    match text_of("CHECKSUMS.sha256").and_then(|t| checksum_lines(&t)) {
+        None => failures.push(fail_entry(
+            "CHECKSUMS.sha256 is missing or unreadable.".into(),
+            "CHECKSUMS.sha256",
         )),
-        Some(text) => {
-            for line in text.lines().filter(|l| !l.is_empty()) {
-                let (sha, path) = line.split_once("  ").unwrap_or(("", line));
-                let actual = match path {
-                    "mimetype" | "manifest.json" => find(path)
-                        .and_then(|e| entry_bytes(archive, &e).ok())
-                        .map(|b| sha256_hex(&b)),
-                    _ => digests.get(path).cloned(),
-                };
-                let covered = known.contains(path) || matches!(path, "mimetype" | "manifest.json");
-                if covered && actual.as_deref() != Some(sha) {
-                    failures.push(integrity(
-                        "entry-checksum",
-                        false,
-                        format!("CHECKSUMS.sha256 does not agree with {path}."),
-                        prj4,
-                        Some(path),
+        Some(sums) => {
+            for (path, sha) in &sums {
+                if find(path).is_none() || digest(path, progress).as_deref() != Some(sha.as_str()) {
+                    failures.push(fail_entry(
+                        format!("The entry {path} does not match CHECKSUMS.sha256."),
+                        path,
+                    ));
+                }
+            }
+            for path in &paths {
+                if path != "CHECKSUMS.sha256" && !sums.iter().any(|(p, _)| p == path) {
+                    failures.push(fail_entry(
+                        format!("The entry {path} is not listed in CHECKSUMS.sha256."),
+                        path,
                     ));
                 }
             }
         }
     }
     // One finding per entry, as the TypeScript reader reports them.
-    let mut seen = std::collections::HashSet::new();
-    failures.retain(|f| seen.insert(f["target"].as_str().unwrap_or("").to_string()));
+    let mut seen = HashSet::new();
+    failures.retain(|f| {
+        let key = f["target"].as_str().or(f["detail"].as_str()).unwrap_or("");
+        seen.insert(key.to_string())
+    });
     if failures.is_empty() {
         out.checks.push(integrity(
             "entry-checksum",
             true,
-            format!("All {} entries match their SHA-256.", listed.len()),
+            format!(
+                "All {} entries match their recorded SHA-256 checksums.",
+                paths.len()
+            ),
             None,
             None,
         ));
@@ -841,39 +910,86 @@ pub fn read_twp(archive: &Path, progress: &mut dyn FnMut(&str, u64)) -> TwpRead 
         out.checks.extend(failures);
     }
 
-    // Each original stored at its content address.
+    // Each original's SHA-256 equals its file ID, which is also the folder it is stored under.
     let mut bad = Vec::new();
-    for o in manifest["originals"].as_array().into_iter().flatten() {
-        let (id, name, path) = (
-            o["fileId"].as_str().unwrap_or(""),
-            o["name"].as_str().unwrap_or(""),
-            o["path"].as_str().unwrap_or(""),
-        );
-        if path != original_path(id, name) || digests.get(path).map(String::as_str) != Some(id) {
-            bad.push(integrity(
-                "original-checksum",
-                false,
-                format!("The original {path} does not match its content address."),
-                Some("TW-PRJ-001"),
-                Some(path),
-            ));
+    let fail_original = |detail: String, target: &str| {
+        integrity(
+            "original-checksum",
+            false,
+            detail,
+            Some("TW-PRJ-001"),
+            Some(target),
+        )
+    };
+    match &manifest {
+        None => {
+            for path in paths.iter().filter(|p| p.starts_with("originals/")) {
+                let folder = path.split('/').nth(1).unwrap_or("");
+                if digest(path, progress).as_deref() != Some(folder) {
+                    bad.push(fail_original(
+                        format!("The original {path} does not match its content address."),
+                        path,
+                    ));
+                }
+            }
+            if bad.is_empty() {
+                bad.push(integrity(
+                    "original-checksum",
+                    true,
+                    "The originals match their content addresses; the manifest is unavailable to name them.".into(),
+                    None,
+                    None,
+                ));
+            }
+        }
+        Some(m) => {
+            let originals = m["originals"].as_array().cloned().unwrap_or_default();
+            for o in &originals {
+                let (id, name, path) = (
+                    o["fileId"].as_str().unwrap_or(""),
+                    o["name"].as_str().unwrap_or(""),
+                    o["path"].as_str().unwrap_or(""),
+                );
+                let sha = if find(path).is_some() {
+                    digest(path, progress)
+                } else {
+                    None
+                };
+                out.originals.insert(id.to_string(), sha.clone());
+                match sha {
+                    None => bad.push(fail_original(
+                        format!("The original \"{name}\" is missing from {path}."),
+                        path,
+                    )),
+                    Some(d) if d != id || path.split('/').nth(1) != Some(id) => bad.push(fail_original(
+                        format!(
+                            "The original \"{name}\" has changed: its SHA-256 is {d}, but it was imported as {id}."
+                        ),
+                        path,
+                    )),
+                    Some(_) => {}
+                }
+            }
+            if bad.is_empty() {
+                let n = originals.len();
+                bad.push(integrity(
+                    "original-checksum",
+                    true,
+                    if n == 0 {
+                        "The project has no original files.".into()
+                    } else {
+                        format!("All {n} original files are byte-identical to the files imported.")
+                    },
+                    None,
+                    None,
+                ));
+            }
         }
     }
-    if bad.is_empty() {
-        let n = manifest["originals"].as_array().map_or(0, Vec::len);
-        out.checks.push(integrity(
-            "original-checksum",
-            true,
-            format!("All {n} originals match their SHA-256."),
-            None,
-            None,
-        ));
-    } else {
-        out.checks.extend(bad);
+    out.checks.extend(bad);
+    out.audit_jsonl = text_of("audit.jsonl");
+    if version_ok {
+        out.manifest = manifest;
     }
-    out.audit_jsonl = find("audit.jsonl")
-        .and_then(|e| entry_bytes(archive, &e).ok())
-        .map(|b| String::from_utf8_lossy(&b).into_owned());
-    out.manifest = Some(manifest);
     out
 }

@@ -1,11 +1,13 @@
 /**
- * Starts Tracewell: the engine in a module worker behind the engine protocol, a protocol check,
- * the analyst's profile on first start, the offer to recover work an earlier session left unsaved
- * (FR-PRJ-03), a new project, then the workbench shell with its views and commands. Nothing here talks to the network; the build's CSP forbids it as well.
+ * Starts Tracewell: the engine behind the engine protocol, a protocol check, the analyst's profile
+ * on first start, the offer to recover work an earlier session left unsaved (FR-PRJ-03), a new
+ * project, then the workbench shell with its views and commands. The engine is the TypeScript one
+ * in a module worker, or the native one when the page's container provides it (the host bridge,
+ * SAD decision D-14). Nothing here talks to the network; the build's CSP forbids it as well.
  */
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { EngineClient, workerTransport, type EngineInfo } from '@tw/engine-api';
+import { EngineClient, hostTransport, workerTransport, type EngineHost, type EngineInfo } from '@tw/engine-api';
 import type { EngineErrorData, ProjectOpenReport, RecoveryInfo, UserProfile } from '@tw/model';
 import { AppShell, toErrorData, useWorkbench } from '@tw/ui-shell';
 import { ProfileSetupDialog, SHELL_VIEWS, defaultCommands, openDialog } from '@tw/ui-views';
@@ -15,6 +17,8 @@ import { loadProfile, saveProfile } from './profile';
 declare global {
   interface Window {
     __tracewellReady?: boolean;
+    /** Set by a container that runs the native engine for this page (the test harness, later the desktop shell). */
+    __tracewellHost?: EngineHost;
   }
 }
 
@@ -32,6 +36,15 @@ function startWorker(): EngineClient {
   const worker = new Worker(new URL('../engine/worker.ts', import.meta.url), { type: 'module', name });
   return new EngineClient(workerTransport(worker));
 }
+
+/** The native engine the page's container runs: one session per page load. */
+async function startHosted(host: EngineHost): Promise<EngineClient> {
+  await host.open();
+  return new EngineClient(hostTransport(host));
+}
+
+/** The edition the shell names: the native engine is the desktop edition's. */
+type Edition = 'lite' | 'desktop';
 
 /** The open-issue count the toolbar shows; null until checks have run. */
 function useOpenIssues(engine: EngineClient): number | null {
@@ -54,7 +67,7 @@ function useOpenIssues(engine: EngineClient): number | null {
   return count?.key === key ? count.value : (count?.value ?? null);
 }
 
-function Workbench(p: { engine: EngineClient }): React.JSX.Element {
+function Workbench(p: { engine: EngineClient; edition: Edition }): React.JSX.Element {
   const openIssues = useOpenIssues(p.engine);
   const theme = useWorkbench((s) => s.theme);
   const density = useWorkbench((s) => s.density);
@@ -68,7 +81,7 @@ function Workbench(p: { engine: EngineClient }): React.JSX.Element {
   return (
     <AppShell
       engine={p.engine}
-      edition="lite"
+      edition={p.edition}
       owner={OWNER}
       appVersion={VERSION}
       views={SHELL_VIEWS}
@@ -78,7 +91,7 @@ function Workbench(p: { engine: EngineClient }): React.JSX.Element {
   );
 }
 
-function App(p: { engine: EngineClient; info: EngineInfo }): React.JSX.Element {
+function App(p: { engine: EngineClient; info: EngineInfo; edition: Edition }): React.JSX.Element {
   const [profile, setProfile] = useState<UserProfile | null>(() => loadProfile());
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<EngineErrorData | null>(null);
@@ -173,7 +186,7 @@ function App(p: { engine: EngineClient; info: EngineInfo }): React.JSX.Element {
       </div>
     );
   }
-  return <Workbench engine={p.engine} />;
+  return <Workbench engine={p.engine} edition={p.edition} />;
 }
 
 function RecoveryPrompt(p: {
@@ -230,13 +243,15 @@ function StartError(p: { error: EngineErrorData }): React.JSX.Element {
 /** Mounts Tracewell into `root`. Tests may pass their own engine client. */
 export async function bootstrap(root: HTMLElement, o: { engine?: EngineClient } = {}): Promise<void> {
   const reactRoot = createRoot(root);
-  const engine = o.engine ?? startWorker();
+  const host = window.__tracewellHost;
   try {
+    const engine = o.engine ?? (host === undefined ? startWorker() : await startHosted(host));
     const info = await engine.hello();
     checkProtocol(info.protocol);
+    const edition: Edition = o.engine === undefined && host !== undefined ? 'desktop' : 'lite';
     reactRoot.render(
       <StrictMode>
-        <App engine={engine} info={info} />
+        <App engine={engine} info={info} edition={edition} />
       </StrictMode>,
     );
   } catch (e) {

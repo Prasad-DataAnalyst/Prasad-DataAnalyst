@@ -14,7 +14,7 @@ use crate::issues::{
 };
 use crate::overrides::{Outcome, ReadEnv, original_file, override_of};
 use crate::parse::Kind;
-use crate::rules::{Draft, RowSet, check_packs};
+use crate::rules::{Draft, RowSet, check_packs, find_rule};
 use crate::steps::{StageColumn, Stages};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
@@ -199,6 +199,9 @@ pub struct Project {
     pub reverted: HashSet<u64>,
     /// Step IDs are numbered per project: 's1', 's2', ...
     pub next_step: u64,
+    /// Findings about the project file when it was opened or recovered: one issue of the system
+    /// rule pack per failed integrity rule (TW-PRJ-001 to TW-PRJ-004), listed with the issues.
+    pub system_issues: Vec<Draft>,
 }
 
 /// The project area as the checks take it.
@@ -511,6 +514,7 @@ impl Engine {
             project_area: Value::Null,
             reverted: HashSet::new(),
             next_step: 1,
+            system_issues: Vec::new(),
         });
         let mut d = draft("project.create", json!({}));
         d.insert(
@@ -850,6 +854,34 @@ impl Engine {
                 }
             }
         }
+        // Findings about the project file concern every dataset, so they are listed whatever the filter.
+        let head = p.log.head().0;
+        for dr in &p.system_issues {
+            if !(q["datasetId"].is_null()
+                || dr.dataset_id.is_empty()
+                || q["datasetId"] == dr.dataset_id.as_str())
+            {
+                continue;
+            }
+            let d = p.datasets.iter().find(|d| d.id == dr.dataset_id);
+            let mut issue = system_to_issue(dr, head);
+            if let Some(baseline) = d.and_then(|d| d.recipe["baseline"]["issues"].as_array()) {
+                issue["delta"] = crate::recipes::delta_of(&issue, &[], baseline);
+            }
+            let stages = d.and_then(|d| d.stages().ok());
+            let root = |c: &str| {
+                stages
+                    .as_ref()
+                    .map_or_else(|| c.to_string(), |s| root_of(s, c))
+            };
+            let listed = Listed {
+                issue,
+                names: String::new(),
+            };
+            if matches(&listed, q, &root) {
+                list.push(listed);
+            }
+        }
         sort(&mut list, &q["sort"])?;
         let total = list.len();
         let items: Vec<Value> = list
@@ -866,6 +898,9 @@ impl Engine {
         let offset = count(&page["offset"], "offset", 0, u64::MAX >> 11)?;
         let limit = count(&page["limit"], "limit", 100, 1000)?;
         let id = issue_id.as_str().unwrap_or("");
+        if p.system_issues.iter().any(|d| d.issue_id() == id) {
+            return Ok(json!({ "items": [], "total": 0, "offset": offset }));
+        }
         let (d, st) = p
             .datasets
             .iter()
@@ -1267,6 +1302,98 @@ fn recheck(
     let n = d.row_count;
     merge_check_run(&mut d.issues, drafts, seq, n);
     Ok(())
+}
+
+/// An issue of the system rule pack about the whole project or one dataset (systemIssue).
+fn system_issue(rule_id: &str, dataset_id: &str, message: &str, detail: Value) -> Option<Draft> {
+    let pack = check_packs().iter().find(|p| p.id == "tracewell.system")?;
+    let rule = pack.rules.iter().find(|r| r.id == rule_id)?;
+    Some(Draft {
+        rule_id: rule.id.clone(),
+        rule_version: rule.version.clone(),
+        pack_id: pack.id.clone(),
+        severity: rule.severity.clone(),
+        category: rule.category.clone(),
+        dataset_id: dataset_id.to_string(),
+        columns: Vec::new(),
+        scope: "dataset",
+        rows: RowSet::new(0),
+        message: crate::rules::render_message(
+            &rule.message,
+            &[
+                ("detail", crate::rules::Var::Text(message.to_string())),
+                ("count", crate::rules::Var::Num(1.0)),
+                ("column", crate::rules::Var::Text("the dataset".into())),
+                ("unit", crate::rules::Var::Text(String::new())),
+            ],
+        ),
+        detail: Some(detail),
+    })
+}
+
+/// The failed integrity checks of an open or a recovery as issues, one per rule, in the order the
+/// rules first failed (project-io.ts finish). An issue names the dataset when its only failure
+/// does; otherwise it concerns the whole project.
+fn integrity_issues(p: &Project, checks: &[Value]) -> Vec<Draft> {
+    let mut by_rule: Vec<(String, Vec<&Value>)> = Vec::new();
+    for c in checks.iter().filter(|c| c["ok"] == false) {
+        let Some(rule) = c["ruleId"].as_str() else {
+            continue;
+        };
+        match by_rule.iter_mut().find(|(r, _)| r == rule) {
+            Some((_, list)) => list.push(c),
+            None => by_rule.push((rule.to_string(), vec![c])),
+        }
+    }
+    by_rule
+        .into_iter()
+        .filter_map(|(rule, list)| {
+            let first = list[0];
+            let more = if list.len() > 1 {
+                format!(" (and {} more)", list.len() - 1)
+            } else {
+                String::new()
+            };
+            let dataset = first["target"]
+                .as_str()
+                .filter(|t| list.len() == 1 && p.datasets.iter().any(|d| d.id == *t))
+                .unwrap_or("");
+            let detail = json!({
+                "checks": list
+                    .iter()
+                    .map(|c| json!({ "id": c["id"], "detail": c["detail"], "target": c.get("target").cloned().unwrap_or(Value::Null) }))
+                    .collect::<Vec<_>>(),
+            });
+            let message = format!("{}{more}", first["detail"].as_str().unwrap_or(""));
+            system_issue(&rule, dataset, &message, detail)
+        })
+        .collect()
+}
+
+/// A system issue as the issue list shows it (systemToIssue): open, with nothing to review row by row.
+fn system_to_issue(d: &Draft, seq: u64) -> Value {
+    let rule = find_rule(&d.rule_id).map(|(_, r)| r);
+    json!({
+        "id": d.issue_id(),
+        "ruleId": d.rule_id,
+        "ruleVersion": d.rule_version,
+        "packId": d.pack_id,
+        "severity": d.severity,
+        "category": d.category,
+        "datasetId": d.dataset_id,
+        "columns": d.columns,
+        "scope": d.scope,
+        "title": rule.map_or(d.rule_id.as_str(), |r| r.title.as_str()),
+        "message": d.message,
+        "explanation": rule.map_or("", |r| r.explanation.as_str()),
+        "source": rule.map_or("", |r| r.source.as_str()),
+        "status": "open",
+        "counts": { "flagged": 1, "open": 1, "accepted": 0, "excluded": 0, "fixed": 0 },
+        "openRows": { "count": 0, "ranges": [] },
+        "comments": [],
+        "firstSeenSeq": seq,
+        "lastCheckedSeq": seq,
+    })
 }
 
 fn dataset_mut<'a>(p: &'a mut Project, id: &str) -> Result<&'a mut Dataset> {
@@ -2715,6 +2842,7 @@ pub fn recover_project(shared: &Arc<Shared>) -> Result<Value> {
                 project_area: Value::Null,
                 reverted: HashSet::new(),
                 next_step: 1,
+                system_issues: Vec::new(),
             };
             let archive = PathBuf::new();
             let mut reopen = Reopen {
@@ -2748,6 +2876,7 @@ pub fn recover_project(shared: &Arc<Shared>) -> Result<Value> {
                 audit_jsonl: None,
                 checks: Vec::new(),
                 verified: HashSet::new(),
+                originals: HashMap::new(),
             };
             drop(engine);
             let replayed = reopen.replay(&mut p, &log, &read, &Value::Null, &mut |_, _| ())?;
@@ -2760,6 +2889,7 @@ pub fn recover_project(shared: &Arc<Shared>) -> Result<Value> {
             }
             let read_only = checks.iter().any(|c| c["ok"] == false);
             p.read_only = read_only;
+            p.system_issues = integrity_issues(&p, &checks);
             p.log = log;
             let mut engine = shared
                 .engine
@@ -4846,16 +4976,31 @@ impl Reopen<'_> {
         let file_id = spec["fileId"].as_str().unwrap_or("").to_string();
         let dir = self.workdir.join(&p.id);
         std::fs::create_dir_all(&dir)?;
+        let file_name = spec["fileName"].as_str().unwrap_or_default();
         let missing = || {
             EngineError::new(
                 "PROJECT_INVALID",
-                format!("The original file {} is missing.", spec["fileName"]),
+                format!("The original file {file_name} is missing."),
                 "Open the project from a complete .twp file.",
             )
         };
         let (source, cached) = match &self.journal {
             Some(originals) => (originals.get(&file_id).cloned().ok_or_else(missing)?, None),
             None => {
+                // The TypeScript replay reads every original, so one that is missing or cannot be
+                // read stops it here, and so does one whose bytes are not the file imported.
+                match read.originals.get(&file_id) {
+                    None | Some(None) => return Err(missing()),
+                    Some(Some(sha)) if *sha != file_id => {
+                        return Err(EngineError::invalid(
+                            format!(
+                                "The file {file_name} is not the file this import was planned for (its SHA-256 differs)."
+                            ),
+                            "Import the file again so the plan matches its contents.",
+                        ));
+                    }
+                    Some(Some(_)) => {}
+                }
                 let original = manifest["originals"]
                     .as_array()
                     .into_iter()
@@ -5115,8 +5260,16 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
             let fail = |id: &str, detail: String, rule: &str| {
                 crate::project::integrity(id, false, detail, Some(rule), None)
             };
-            checks.push(if text.is_none() {
-                fail("audit-chain", "The audit chain cannot be verified because audit.jsonl is missing.".into(), "TW-PRJ-002")
+            // Why the log cannot be replayed at all, as the TypeScript engine words it.
+            let unreadable = if read.manifest.is_none() {
+                Some("the manifest could not be read")
+            } else if text.is_none() {
+                Some("audit.jsonl is missing or unreadable")
+            } else {
+                None
+            };
+            checks.push(if let Some(why) = unreadable {
+                fail("audit-chain", format!("The audit chain cannot be verified because {why}."), "TW-PRJ-002")
             } else if let Some((line, why)) = &bad_line {
                 fail("audit-chain", format!("audit.jsonl line {line} cannot be read: {why}."), "TW-PRJ-002")
             } else if chain["ok"] != true {
@@ -5149,6 +5302,7 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 project_area: Value::Null,
                 reverted: HashSet::new(),
                 next_step: 1,
+                system_issues: Vec::new(),
             };
             let mut reopen = Reopen {
                 conn: &conn,
@@ -5164,11 +5318,8 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 issue_caches: HashMap::new(),
                 journal: None,
             };
-            let replayed = if read.manifest.is_none() || text.is_none() {
-                Replayed {
-                    stopped: Some("the manifest or the audit log could not be read".into()),
-                    ..Replayed::default()
-                }
+            let replayed = if unreadable.is_some() {
+                Replayed::default()
             } else {
                 reopen.replay(&mut p, &log, &read, &manifest, &mut progress)?
             };
@@ -5178,54 +5329,139 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 replayed.checks_restored,
                 replayed.checks_ran,
             );
-            checks.push(match &stopped {
-                Some(why) => fail("replay-digest", format!("Rebuilding the project stopped at {why}"), "TW-PRJ-003"),
-                None => {
-                    let mut bad = Vec::new();
-                    let saved: Vec<Value> = manifest["datasets"].as_array().cloned().unwrap_or_default();
-                    for d in &p.datasets {
-                        progress("Comparing the dataset digests", 0);
-                        let stages = d.stages()?;
-                        let sha = crate::export::dataset_digest(&conn, &quote_ident(&d.view), !d.edits.is_empty(), &out_columns(&stages.working), d.visible_rows(), threads)?;
-                        let out = crate::export::dataset_digest(&conn, &quote_ident(&d.out_view()), !d.edits.is_empty(), &out_columns(&stages.output), d.output_rows, threads)?;
-                        match saved.iter().find(|s| s["id"] == d.id.as_str()) {
-                            None => bad.push(format!("the audit log builds dataset {}, which the manifest does not list", d.id)),
-                            Some(s) if s["rowCount"].as_u64() != Some(d.row_count) => bad.push(format!("dataset {} has {} rows instead of the {} saved", d.id, d.row_count, s["rowCount"])),
-                            Some(s) if s["workingDigest"].as_str() != Some(sha.as_str()) || s["outputDigest"].as_str() != Some(out.as_str()) => {
-                                bad.push(format!("dataset {} ({}) differs from its saved digest", d.id, d.name))
-                            }
-                            Some(_) => {}
-                        }
-                    }
-                    for s in &saved {
-                        if !p.datasets.iter().any(|d| s["id"] == d.id.as_str()) {
-                            bad.push(format!("dataset {} is not rebuilt by the audit log", s["id"]));
-                        }
-                    }
-                    if bad.is_empty() {
-                        let n = p.datasets.len();
-                        let how = if from_cache == n {
-                            "restored from their saved working data".to_string()
-                        } else if from_cache == 0 {
-                            "rebuilt from the originals and the audit log".to_string()
-                        } else {
-                            format!("rebuilt ({from_cache} from their saved working data, {} from the originals)", n - from_cache)
-                        };
-                        let issues = match (checks_restored, checks_ran) {
-                            (0, 0) => String::new(),
-                            (_, 0) => " Their issues were restored from the saved check results.".to_string(),
-                            (0, 1) => " The recorded check run ran again.".to_string(),
-                            (0, r) => format!(" The {r} recorded check runs ran again."),
-                            (k, r) => format!(" The issues of {k} datasets were restored from the saved check results, and {r} recorded check runs ran again."),
-                        };
-                        crate::project::integrity("replay-digest", true, format!("All {n} datasets were {how} and match their saved digests.{issues}"), None, None)
+            if let Some(why) = unreadable {
+                checks.push(fail(
+                    "replay-digest",
+                    format!("The datasets cannot be rebuilt because {why}."),
+                    "TW-PRJ-003",
+                ));
+            } else if let Some(why) = &stopped {
+                checks.push(fail(
+                    "replay-digest",
+                    format!("Rebuilding the project stopped at audit {why}"),
+                    "TW-PRJ-003",
+                ));
+            } else {
+                // Each saved dataset rebuilt with its saved digests, then any the log builds that
+                // the manifest does not list (replayChecks).
+                let saved: Vec<Value> =
+                    manifest["datasets"].as_array().cloned().unwrap_or_default();
+                let target_fail = |detail: String, target: &str| {
+                    crate::project::integrity(
+                        "replay-digest",
+                        false,
+                        detail,
+                        Some("TW-PRJ-003"),
+                        Some(target),
+                    )
+                };
+                let mut bad = Vec::new();
+                for s in &saved {
+                    let (id, name) = (
+                        s["id"].as_str().unwrap_or(""),
+                        s["name"].as_str().unwrap_or(""),
+                    );
+                    let Some(d) = p.datasets.iter().find(|d| d.id == id) else {
+                        bad.push(target_fail(
+                            format!("Dataset {id} ({name}) is not rebuilt by the audit log."),
+                            id,
+                        ));
+                        continue;
+                    };
+                    progress("Comparing the dataset digests", 0);
+                    let stages = d.stages()?;
+                    let working = crate::export::dataset_digest(
+                        &conn,
+                        &quote_ident(&d.view),
+                        !d.edits.is_empty(),
+                        &out_columns(&stages.working),
+                        d.visible_rows(),
+                        threads,
+                    )?;
+                    let output = crate::export::dataset_digest(
+                        &conn,
+                        &quote_ident(&d.out_view()),
+                        !d.edits.is_empty(),
+                        &out_columns(&stages.output),
+                        d.output_rows,
+                        threads,
+                    )?;
+                    let what = if s["rowCount"].as_u64() != Some(d.row_count) {
+                        Some(format!(
+                            "{} rows instead of the {} saved",
+                            d.row_count, s["rowCount"]
+                        ))
+                    } else if s["workingDigest"].as_str() != Some(working.as_str()) {
+                        Some("working data that differs from the saved digest".to_string())
+                    } else if s["outputDigest"].as_str() != Some(output.as_str()) {
+                        Some("output data that differs from the saved digest".to_string())
                     } else {
-                        fail("replay-digest", format!("Rebuilding the project gives {}.", bad.join("; ")), "TW-PRJ-003")
+                        None
+                    };
+                    if let Some(what) = what {
+                        bad.push(target_fail(
+                            format!("Rebuilding dataset {id} ({name}) gives {what}."),
+                            id,
+                        ));
                     }
                 }
-            });
+                for d in p
+                    .datasets
+                    .iter()
+                    .filter(|d| !saved.iter().any(|s| s["id"] == d.id.as_str()))
+                {
+                    bad.push(target_fail(
+                        format!(
+                            "The audit log builds dataset {}, which the manifest does not list.",
+                            d.id
+                        ),
+                        &d.id,
+                    ));
+                }
+                if bad.is_empty() {
+                    let n = saved.len();
+                    let how = if from_cache == n {
+                        "restored from their saved working data".to_string()
+                    } else if from_cache == 0 {
+                        "rebuilt from the originals and the audit log".to_string()
+                    } else {
+                        format!(
+                            "rebuilt ({from_cache} from their saved working data, {} from the originals)",
+                            n - from_cache
+                        )
+                    };
+                    let issues = match (checks_restored, checks_ran) {
+                        (0, 0) => String::new(),
+                        (_, 0) => {
+                            " Their issues were restored from the saved check results.".to_string()
+                        }
+                        (0, 1) => " The recorded check run ran again.".to_string(),
+                        (0, r) => format!(" The {r} recorded check runs ran again."),
+                        (k, r) => format!(
+                            " The issues of {k} datasets were restored from the saved check results, and {r} recorded check runs ran again."
+                        ),
+                    };
+                    let detail = if n == 0 {
+                        "The project has no datasets to rebuild.".to_string()
+                    } else {
+                        format!(
+                            "All {n} datasets were {how} and match their saved digests.{issues}"
+                        )
+                    };
+                    checks.push(crate::project::integrity(
+                        "replay-digest",
+                        true,
+                        detail,
+                        None,
+                        None,
+                    ));
+                } else {
+                    checks.extend(bad);
+                }
+            }
             let read_only = checks.iter().any(|c| c["ok"] == false);
             p.read_only = read_only;
+            p.system_issues = integrity_issues(&p, &checks);
             p.log = log;
             let mut engine = shared
                 .engine

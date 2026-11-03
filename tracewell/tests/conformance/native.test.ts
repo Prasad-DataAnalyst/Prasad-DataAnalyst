@@ -1427,7 +1427,10 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     expect(pa.projectArea).toEqual(pb.projectArea);
     const shape = (p: typeof pa) => p.datasets.map((d) => [d.id, d.rowCount, d.outputRowCount]);
     expect(shape(pa)).toEqual(shape(pb));
-    const [ia, ib] = [(await a.listIssues({ limit: 1000 })).items, (await b.listIssues({ limit: 1000 })).items];
+    // What an open found wrong with its file (TW-PRJ) is the opened project's own, compared apart.
+    const issuesOf = async (e: EngineClient) =>
+      (await e.listIssues({ limit: 1000 })).items.filter((i) => !i.ruleId.startsWith('TW-PRJ'));
+    const [ia, ib] = [await issuesOf(a), await issuesOf(b)];
     expect(ia).toEqual(ib);
     const page = { offset: 0, limit: 1000 };
     for (const i of ia) {
@@ -1449,6 +1452,18 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       const detail = report.checks.find((c) => c.id === 'replay-digest')?.detail;
       expect(detail).toContain('restored from their saved working data');
       expect(detail).toContain('Their issues were restored from the saved check results.');
+      // The TypeScript engine's report on the same file reads the same, but for how the datasets were rebuilt.
+      const ts = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+      try {
+        const tsReport = await ts.awaitJob<ProjectOpenReport>(
+          await ts.openProject({ kind: 'bytes', bytes: savedByNative as Uint8Array, name: 'Parity.twp' }),
+        );
+        const shape = (r: ProjectOpenReport) =>
+          r.checks.map((c) => (c.id === 'replay-digest' ? { ...c, detail: '' } : c));
+        expect(shape(report)).toEqual(shape(tsReport));
+      } finally {
+        ts.close();
+      }
       expect(await allAudit(opened.client)).toEqual(await allAudit(native.client));
       await sameState(opened.client, native.client);
     } finally {
@@ -1485,6 +1500,58 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(report.checks.filter((c) => !c.ok).map((c) => [c.id, c.target])).toEqual([['entry-checksum', path]]);
       expect(report.checks.find((c) => c.id === 'replay-digest')).toMatchObject({ ok: true });
       await expect(opened.client.runChecks('d1')).rejects.toMatchObject({ code: 'READ_ONLY_PROJECT' });
+      await sameFindings(opened.client, bytes, 'TW-PRJ-004', report);
+    } finally {
+      stopNative(opened);
+    }
+  });
+
+  /**
+   * What an open found wrong with a project file is listed as issues of the system rule pack, one
+   * per rule, as the TypeScript engine lists them when it opens the same file.
+   */
+  const sameFindings = async (
+    opened: EngineClient,
+    bytes: Uint8Array,
+    ruleId: string,
+    nativeReport: ProjectOpenReport,
+  ) => {
+    const ts = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    try {
+      const report = await ts.awaitJob<ProjectOpenReport>(
+        await ts.openProject({ kind: 'bytes', bytes, name: 'Parity.twp' }),
+      );
+      expect(report.readOnly).toBe(true);
+      // The open reports agree check for check; only a passed replay says how the native engine
+      // rebuilt the datasets (from its saved working data, or from the originals).
+      const shape = (r: ProjectOpenReport) =>
+        r.checks.map((c) => (c.id === 'replay-digest' && c.ok ? { ...c, detail: '' } : c));
+      expect(shape(nativeReport)).toEqual(shape(report));
+      const findings = async (e: EngineClient) =>
+        (await e.listIssues({ limit: 1000 })).items.filter((i) => i.ruleId.startsWith('TW-PRJ'));
+      const [a, b] = [await findings(opened), await findings(ts)];
+      expect(a).toEqual(b);
+      expect(a.map((i) => i.ruleId)).toContain(ruleId);
+      for (const i of a) expect((await opened.listOccurrences(i.id, { offset: 0, limit: 10 })).total).toBe(0);
+    } finally {
+      ts.close();
+    }
+  };
+
+  it('opens a project file whose original was changed read-only, with the same TW-PRJ-001 issue', async () => {
+    const bytes = (savedByNative as Uint8Array).slice();
+    const zip = readZip(bytes);
+    const original = zip.paths().find((e) => e.startsWith('originals/')) as string;
+    const content = zip.read(original);
+    const at = new TextDecoder('latin1')
+      .decode(bytes)
+      .indexOf(new TextDecoder('latin1').decode(content.subarray(0, 64)));
+    expect(at).toBeGreaterThan(0);
+    bytes[at + 10] = (bytes[at + 10] as number) ^ 0x01;
+    const { report, opened } = await openNatively(bytes);
+    try {
+      expect(report.readOnly).toBe(true);
+      await sameFindings(opened.client, bytes, 'TW-PRJ-001', report);
     } finally {
       stopNative(opened);
     }
@@ -1505,8 +1572,10 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       const replay = report.checks.find((c) => c.id === 'replay-digest');
       expect(replay?.ok).toBe(true);
       expect(replay?.detail).toContain('and 2 recorded check runs ran again');
-      const issues = async (e: EngineClient) => (await e.listIssues({ limit: 1000 })).items;
+      const issues = async (e: EngineClient) =>
+        (await e.listIssues({ limit: 1000 })).items.filter((i) => !i.ruleId.startsWith('TW-PRJ'));
       expect(await issues(opened.client)).toEqual(await issues(native.client));
+      await sameFindings(opened.client, bytes, 'TW-PRJ-004', report);
     } finally {
       stopNative(opened);
     }
@@ -1526,6 +1595,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       expect(report.checks.filter((c) => !c.ok).map((c) => [c.id, c.target])).toEqual([['entry-checksum', path]]);
       expect(report.checks.find((c) => c.id === 'replay-digest')).toMatchObject({ ok: true });
       await sameState(opened.client, native.client);
+      await sameFindings(opened.client, bytes, 'TW-PRJ-004', report);
     } finally {
       stopNative(opened);
     }

@@ -50,19 +50,23 @@ test.describe('@slow large files', () => {
     writeFileSync(file, JSON.stringify({ ...prior, million: { previewMs, importMs, pageMs } }, null, 2));
   });
 
-  test('with a lowered budget a large import stops cleanly with TW-IMP-006', async ({ app, page }, testInfo) => {
-    const path = testInfo.outputPath('large.csv');
-    writeFileSync(path, bigCsv(400_000));
-    await page.goto('/?budget=5000000');
-    await page.getByTestId('tw-profile-name').fill('Prasad');
-    await page.getByRole('button', { name: 'Start' }).click();
-    await page.waitForFunction(() => window.__tracewellReady === true);
-    const chooser = page.waitForEvent('filechooser');
-    await page.keyboard.press('Control+i');
-    await (await chooser).setFiles(path);
-    await page.getByTestId('tw-import-button').click();
-    await expect(page.getByTestId('tw-grid')).toBeVisible({ timeout: 300_000 });
-    await app.runChecks();
-    await expect(page.getByTestId('tw-issues-panel').locator('tr[data-rule="TW-IMP-006"]')).toBeVisible();
-  });
+  test(
+    'with a lowered budget a large import stops cleanly with TW-IMP-006',
+    { tag: '@lite' },
+    async ({ app, page }, testInfo) => {
+      const path = testInfo.outputPath('large.csv');
+      writeFileSync(path, bigCsv(400_000));
+      await page.goto('/?budget=5000000');
+      await page.getByTestId('tw-profile-name').fill('Prasad');
+      await page.getByRole('button', { name: 'Start' }).click();
+      await page.waitForFunction(() => window.__tracewellReady === true);
+      const chooser = page.waitForEvent('filechooser');
+      await page.keyboard.press('Control+i');
+      await (await chooser).setFiles(path);
+      await page.getByTestId('tw-import-button').click();
+      await expect(page.getByTestId('tw-grid')).toBeVisible({ timeout: 300_000 });
+      await app.runChecks();
+      await expect(page.getByTestId('tw-issues-panel').locator('tr[data-rule="TW-IMP-006"]')).toBeVisible();
+    },
+  );
 });

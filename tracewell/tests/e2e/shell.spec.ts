@@ -19,9 +19,13 @@ test('Alt then the arrow keys open the File menu', async ({ app, page }) => {
   await page.keyboard.press('Escape');
 });
 
-test('About names the owner and the worker answers', async ({ app, page }) => {
+test('About names the owner and the worker answers', async ({ app, page, engine }) => {
   await app.open();
+  // The native engine is the desktop edition's, reached through the host bridge (SAD decision D-14).
+  const edition = engine === 'native' ? 'Desktop edition' : 'Lite edition';
+  await expect(page.getByRole('status', { name: 'Status' })).toContainText(edition);
   await app.menu('Help', 'About Tracewell');
+  await expect(page.getByRole('dialog')).toContainText(edition);
   await expect(page.getByRole('dialog')).toContainText('Prasad');
   await expect(page.getByRole('dialog')).toContainText('Works offline');
   await page.getByRole('button', { name: 'Close' }).click();

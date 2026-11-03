@@ -1,7 +1,7 @@
 import { expect, test } from './fixtures';
 import { expectAllChecksPassed, expectOracleAgrees } from './export-shared';
 
-test('a GeoJSON package passes every check and the oracle', async ({ app, page }) => {
+test('a GeoJSON package passes every check and the oracle', { tag: '@lite' }, async ({ app, page }) => {
   await app.open();
   await app.importFixture('geojson_wells_points_wgs84.geojson');
   await app.runChecks();

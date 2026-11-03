@@ -22,6 +22,7 @@
     "format": "prettier --check .",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:native": "playwright test --project=native",
     "test:slow": "node scripts/test-all.mjs --slow",
     "fixtures": "python3 fixtures/generators/make_xlsx_fixtures.py && node fixtures/generators/gen-text-fixtures.mjs",
     "check:hygiene": "node scripts/check-hygiene.mjs",

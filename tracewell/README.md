@@ -27,28 +27,34 @@ local origin. Data stays in memory and in the files you save.
 
 Run from this folder:
 
-| Command                  | What it does                                                                     |
-| ------------------------ | -------------------------------------------------------------------------------- |
-| `npm ci`                 | Install the exact pinned dependencies from `package-lock.json`                   |
-| `npm test`               | The single command: hygiene, licences, typecheck, lint, native, unit, build, E2E |
-| `npm run dev`            | Development server                                                               |
-| `npm run build`          | Production build into `dist/` (CSP injected)                                     |
-| `npm run preview`        | Serve the build on `http://127.0.0.1:4173`                                       |
-| `npm run typecheck`      | `tsc --noEmit` over the whole package                                            |
-| `npm run lint`           | ESLint with zero warnings allowed                                                |
-| `npm run format`         | Prettier check                                                                   |
-| `npm run test:unit`      | Vitest: architecture, unit, property, golden and conformance tests               |
-| `npm run build:native`   | Build the native engine (Rust + DuckDB) in `crates/tracewell-engine`             |
-| `npm run test:native`    | Rust unit tests, then the native build the parity suite runs against             |
-| `npm run test:e2e`       | Playwright against the production build                                          |
-| `npm run test:slow`      | The slow suites (1 M-row benchmarks) with `TW_SLOW=1`                            |
-| `npm run fixtures`       | Regenerate the messy-file library                                                |
-| `npm run check:hygiene`  | Authorship hygiene scan (forbidden names are stored only as SHA-256 hashes)      |
-| `npm run check:licences` | Licence allow-list over the shipped dependency tree                              |
+| Command                   | What it does                                                                     |
+| ------------------------- | -------------------------------------------------------------------------------- |
+| `npm ci`                  | Install the exact pinned dependencies from `package-lock.json`                   |
+| `npm test`                | The single command: hygiene, licences, typecheck, lint, native, unit, build, E2E |
+| `npm run dev`             | Development server                                                               |
+| `npm run build`           | Production build into `dist/` (CSP injected)                                     |
+| `npm run preview`         | Serve the build on `http://127.0.0.1:4173`                                       |
+| `npm run typecheck`       | `tsc --noEmit` over the whole package                                            |
+| `npm run lint`            | ESLint with zero warnings allowed                                                |
+| `npm run format`          | Prettier check                                                                   |
+| `npm run test:unit`       | Vitest: architecture, unit, property, golden and conformance tests               |
+| `npm run build:native`    | Build the native engine (Rust + DuckDB) in `crates/tracewell-engine`             |
+| `npm run test:native`     | Rust unit tests, then the native build the parity suite runs against             |
+| `npm run test:e2e`        | Playwright against the production build, with the Lite engine and the native one |
+| `npm run test:e2e:native` | Playwright with the native engine only, through the host bridge (SAD D-14)       |
+| `npm run test:slow`       | The slow suites (1 M-row benchmarks) with `TW_SLOW=1`                            |
+| `npm run fixtures`        | Regenerate the messy-file library                                                |
+| `npm run check:hygiene`   | Authorship hygiene scan (forbidden names are stored only as SHA-256 hashes)      |
+| `npm run check:licences`  | Licence allow-list over the shipped dependency tree                              |
 
 `node scripts/test-all.mjs --skip-e2e` runs every stage except Playwright, and `--skip-native` leaves
 out the Rust stage on a machine without Rust (the native parity suite is then skipped and says so).
 The native engine needs Rust 1.89 or later; its first build compiles DuckDB and takes about 15 minutes.
+Playwright runs every test on the same production build twice: with the Lite engine in its worker,
+and with the native engine, which the test harness runs as a process for each page and connects
+through page bindings rather than the network. Tests tagged `@lite` need what only the Lite engine
+has (workbooks, GeoJSON, JSON and Parquet input, Excel and GeoJSON exports) and run once. Without a
+native build, the native runs are skipped and say why.
 
 ## Layout
 

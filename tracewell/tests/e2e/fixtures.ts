@@ -2,16 +2,24 @@
  * The shared end-to-end fixture: every test runs against the production build with an offline
  * guard (any request leaving the local origin fails the test) and console-error capture, and drives
  * the workbench through AppDriver, which uses only the stable test hooks and accessible roles.
+ *
+ * The `engine` option says which engine the page gets: the TypeScript one in its worker (`lite`),
+ * or the native one through the host bridge (`native`, SAD decision D-14). Tests tagged @lite use
+ * what only the Lite engine has, such as workbooks, and run in the Lite project only.
  */
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import type { FixtureName } from '@tw/fixtures';
 import { fixturePath } from './files';
+import { attachNativeHost, NATIVE_BINARY, nativeBuilt } from './native-host';
 
 export { expect } from '@playwright/test';
 
 export const ORIGIN = 'http://127.0.0.1:4173';
 
 export type ExportProfileId = 'excel' | 'csv' | 'geojson';
+
+/** The engine a test's page talks to. */
+export type EngineKind = 'lite' | 'native';
 
 /** The filter builder's form, as the Filter dialog holds it. */
 export interface FilterFormState {
@@ -42,7 +50,27 @@ function escape(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 }
 
-export const test = base.extend<{ app: AppDriver; offlineGuard: { requests: string[] }; consoleErrors: string[] }>({
+export const test = base.extend<{
+  engine: EngineKind;
+  nativeHost: void;
+  app: AppDriver;
+  offlineGuard: { requests: string[] };
+  consoleErrors: string[];
+}>({
+  engine: ['lite', { option: true }],
+  nativeHost: [
+    async ({ engine, page }, use, testInfo) => {
+      if (engine !== 'native') {
+        await use();
+        return;
+      }
+      testInfo.skip(!nativeBuilt, `needs the native engine: run npm run build:native (looked for ${NATIVE_BINARY})`);
+      const host = await attachNativeHost(page, testInfo.outputPath('native'));
+      await use();
+      host.stop();
+    },
+    { auto: true },
+  ],
   offlineGuard: [
     async ({ page }, use) => {
       const requests: string[] = [];

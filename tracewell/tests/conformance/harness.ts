@@ -7,7 +7,15 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'vitest';
-import { EngineClient, inProcessTransport, serveStdio, stdioTransport, type ByteChannel } from '@tw/engine-api';
+import {
+  EngineClient,
+  hostTransport,
+  inProcessTransport,
+  serveStdio,
+  stdioTransport,
+  type ByteChannel,
+  type EngineHost,
+} from '@tw/engine-api';
 import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { fixturePath, type FixtureName } from '@tw/fixtures';
 import { nodeFs } from '@tw/io/node';
@@ -39,6 +47,21 @@ function pipes(): { client: ByteChannel; engine: ByteChannel } {
   };
 }
 
+/** The client end of a pipe as a page's container hands it over (the host bridge, SAD decision D-14). */
+function hostOver(ch: ByteChannel): EngineHost {
+  const reader = ch.readable.getReader();
+  return {
+    open: () => Promise.resolve(),
+    write: async (bytes) => {
+      await ch.write(bytes);
+    },
+    read: async () => {
+      const r = await reader.read();
+      return r.done ? null : r.value;
+    },
+  };
+}
+
 export const ENGINE_FACTORIES: Record<string, EngineFactory> = {
   'tracewell-ts': async () => new EngineClient(inProcessTransport(localEngine())),
   // The same engine behind the process framing (JSON lines plus binary frames) a native engine speaks.
@@ -46,6 +69,12 @@ export const ENGINE_FACTORIES: Record<string, EngineFactory> = {
     const p = pipes();
     serveStdio(localEngine(), p.engine);
     return new EngineClient(stdioTransport(p.client));
+  },
+  // And behind the host bridge the page reaches the native engine through.
+  'tracewell-ts over the host bridge': async () => {
+    const p = pipes();
+    serveStdio(localEngine(), p.engine);
+    return new EngineClient(hostTransport(hostOver(p.client)));
   },
 };
 
