@@ -53,6 +53,8 @@ pub enum Reading {
     Parquet,
     /// JSON records laid out as an array, under a member, or one per line.
     Json(crate::json::Layout),
+    /// A table of a workbook sheet, as the format options choose it.
+    Xlsx(Value),
 }
 
 /// What an import does: how the file is read, and how each column is parsed.
@@ -150,6 +152,12 @@ pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
     if format == "json" {
         return Ok(ImportPlan {
             reading: Reading::Json(crate::json::Layout::of_options(&options["json"])),
+            columns: plan_columns(spec, '.', "")?,
+        });
+    }
+    if format == "xlsx" {
+        return Ok(ImportPlan {
+            reading: Reading::Xlsx(options.clone()),
             columns: plan_columns(spec, '.', "")?,
         });
     }
@@ -581,6 +589,52 @@ pub fn read_json(
     Ok((Vec::new(), digest, size))
 }
 
+/// Hashes a workbook and reads the rows of the table its options choose, a batch at a time
+/// (xlsx/importer.ts read), with the notes on what was not imported or was joined.
+fn read_xlsx(
+    path: &Path,
+    options: &Value,
+    send: &dyn Fn(Batch) -> bool,
+    cancel: &AtomicBool,
+    bytes_read: &AtomicU64,
+) -> Result<(Vec<Note>, String, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buf = vec![0u8; READ_BYTES];
+    let mut size = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+        size += n as u64;
+    }
+    bytes_read.store(size, Ordering::Relaxed);
+    let digest = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let mut batch = TypedBatch::default();
+    let mut stopped = false;
+    let notes = crate::xlsx::read(path, options, &mut |loc, fields| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        batch.rows.push(fields);
+        batch.locs.push(loc as i64);
+        if batch.locs.len() == BATCH_ROWS && !send(Batch::Typed(std::mem::take(&mut batch))) {
+            stopped = true;
+            return Ok(false);
+        }
+        Ok(true)
+    })?;
+    if stopped || (!batch.locs.is_empty() && !send(Batch::Typed(batch))) {
+        return Err(cancelled());
+    }
+    Ok((notes, digest, size))
+}
+
 /// The text of one field of an original file, read again under the import's plan (lineage.ts
 /// sourceText): field `index` of the record that starts on line `loc`, or None when the record has
 /// no such field. Reading stops at that record.
@@ -739,6 +793,7 @@ fn load(
                 match &plan.reading {
                     Reading::Csv { .. } => read_file(path, plan, &send, cancel, bytes_read),
                     Reading::Parquet => read_parquet(&reader_conn, path, &send, cancel, bytes_read),
+                    Reading::Xlsx(options) => read_xlsx(path, options, &send, cancel, bytes_read),
                     Reading::Json(layout) => {
                         let mut batch = TypedBatch::default();
                         let read = read_json(

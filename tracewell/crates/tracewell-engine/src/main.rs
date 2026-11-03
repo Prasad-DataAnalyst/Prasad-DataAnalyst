@@ -40,6 +40,7 @@ mod steps;
 mod stream;
 mod time;
 mod units;
+mod xlsx;
 mod zip;
 
 use engine::{Engine, Shared};

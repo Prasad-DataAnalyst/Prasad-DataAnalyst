@@ -163,17 +163,37 @@ fn root_of(stages: &Stages, id: &str) -> String {
     id
 }
 
-/// A dataset schema's `source` (schemaFor): the file, its format and, for JSON, its layout.
+/// A dataset schema's `source` (schemaFor): the file, its format and, for a workbook its sheet,
+/// for JSON its layout.
 fn source_of(spec: &Value) -> Value {
     let mut source = json!({ "fileId": spec["fileId"], "fileName": spec["fileName"], "format": spec["options"]["format"] });
+    if spec["options"]["format"] == "xlsx" {
+        source["sheet"] = spec["options"]["xlsx"]["sheet"].clone();
+    }
     if spec["options"]["format"] == "json" {
         source["layout"] = spec["options"]["json"]["layout"].clone();
     }
     source
 }
 
+/// A sheet name as a spreadsheet formula writes it: quoted, apostrophes doubled, unless it is a
+/// plain word.
+fn sheet_ref(name: &str) -> String {
+    let mut chars = name.chars();
+    let plain = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+    if plain {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
+}
+
 /// A row's or a cell's source locator (locator.ts): 'line 4, field 3' for delimited text,
-/// 'row 4, column "rate"' for Parquet, the column named as the file names it.
+/// 'Sheet1!C17' for workbooks (the column's source index read as its sheet column), 'record 12,
+/// key "rate"' for JSON and 'row 4, column "rate"' for Parquet, columns named as the file names them.
 fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
     let source_name = |c: &Value| {
         c["sourceHeader"][0]
@@ -190,7 +210,20 @@ fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
         };
         format!("{unit} {loc}")
     };
+    let sheet = || {
+        sheet_ref(
+            spec["options"]["xlsx"]["sheet"]
+                .as_str()
+                .unwrap_or("Sheet1"),
+        )
+    };
     match (spec["options"]["format"].as_str(), column) {
+        (Some("xlsx"), None) => format!("{} row {loc}", sheet()),
+        (Some("xlsx"), Some(c)) => format!(
+            "{}!{}{loc}",
+            sheet(),
+            crate::xlsx::column_name(c["sourceIndex"].as_u64().unwrap_or(0) as u32)
+        ),
         (Some("json"), None) => json_at(),
         (Some("json"), Some(c)) => format!(
             "{}, key {}",
@@ -510,7 +543,7 @@ impl Engine {
             "version": self.version,
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
-                "formats": ["csv", "tsv", "parquet", "json"],
+                "formats": ["csv", "tsv", "xlsx", "parquet", "json"],
                 "exportProfiles": ["csv", "parquet"],
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
@@ -3099,6 +3132,20 @@ impl Engine {
                                 _ => found.flatten(),
                             }
                         }
+                        // The chosen table is read again until the row at this locator.
+                        crate::import::Reading::Xlsx(options) => {
+                            let path =
+                                crate::overrides::original_file(source, &self.workdir, file_id)?;
+                            let mut found = None;
+                            crate::xlsx::read(&path, &options, &mut |at, fields| {
+                                if at as i64 == loc {
+                                    found = Some(fields.get(index).map(Raw::text));
+                                    return Ok(false);
+                                }
+                                Ok(true)
+                            })?;
+                            found.flatten()
+                        }
                         _ => crate::import::field_text(source, &read, loc, index)?,
                     }
                 }
@@ -4533,19 +4580,18 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
             decisions.push((column, property, value, reason.clone()));
         }
     }
-    let (detected_csv, chosen_csv) = (
-        &planned["sniff"]["options"]["csv"],
-        &chosen["sniff"]["options"]["csv"],
-    );
-    let mut changes: Vec<(Option<String>, String, Value)> = crate::overrides::CSV_SETTINGS
+    // Reading settings the user chose that differ from the detected ones (optionChanges).
+    let (detected_options, chosen_options) =
+        (&planned["sniff"]["options"], &chosen["sniff"]["options"]);
+    let (group, properties): (&str, &[&str]) = match chosen_options["format"].as_str() {
+        Some("csv" | "tsv") => ("csv", &crate::overrides::CSV_SETTINGS),
+        Some("xlsx") => ("xlsx", &["sheet", "tableIndex"]),
+        _ => ("", &[]),
+    };
+    let mut changes: Vec<(Option<String>, String, Value)> = properties
         .iter()
-        .filter(|p| {
-            matches!(
-                chosen["sniff"]["options"]["format"].as_str(),
-                Some("csv" | "tsv")
-            ) && detected_csv[**p] != chosen_csv[**p]
-        })
-        .map(|p| (None, p.to_string(), chosen_csv[*p].clone()))
+        .filter(|p| detected_options[group][**p] != chosen_options[group][**p])
+        .map(|p| (None, p.to_string(), chosen_options[group][*p].clone()))
         .collect();
     changes.extend(overrides.iter().cloned());
     if !changes.is_empty() {
@@ -4700,6 +4746,16 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
     Ok(json!({ "jobId": job, "kind": "import" }))
 }
 
+/// The first bytes of a file, as many as it has up to eight.
+fn file_head(path: &Path) -> Vec<u8> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(8);
+    if let Ok(f) = std::fs::File::open(path) {
+        let _ = f.take(8).read_to_end(&mut head);
+    }
+    head
+}
+
 #[allow(clippy::too_many_arguments)]
 fn commit_import(
     shared: &Arc<Shared>,
@@ -4737,6 +4793,9 @@ fn commit_import(
         Some("tsv") => "text/tab-separated-values",
         Some("parquet") => "application/vnd.apache.parquet",
         Some("json") => "application/json",
+        // A workbook in an OLE compound file is a legacy .xls (mediaTypeOf).
+        Some("xlsx") if crate::xlsx::is_legacy(&file_head(original)) => "application/vnd.ms-excel",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         _ => "text/csv",
     };
     let mut add = draft(

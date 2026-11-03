@@ -150,6 +150,14 @@ pub fn with_option(options: &Value, property: &str, value: &Value) -> Result<Val
             "Choose a setting that applies to this file.",
         )
     };
+    if format == "xlsx" {
+        if property != "sheet" && property != "tableIndex" {
+            return Err(unsupported());
+        }
+        let mut next = options.clone();
+        next["xlsx"][property] = value.clone();
+        return Ok(next);
+    }
     if format != "csv" && format != "tsv" {
         return Err(unsupported());
     }
@@ -168,6 +176,10 @@ pub fn with_option(options: &Value, property: &str, value: &Value) -> Result<Val
 pub fn current_option(options: &Value, property: &str) -> Value {
     match options["format"].as_str() {
         Some("csv" | "tsv") => options["csv"].get(property).cloned().unwrap_or(Value::Null),
+        Some("xlsx") => options["xlsx"]
+            .get(property)
+            .cloned()
+            .unwrap_or(Value::Null),
         _ => Value::Null,
     }
 }

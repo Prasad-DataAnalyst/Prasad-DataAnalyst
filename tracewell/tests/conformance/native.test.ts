@@ -13,7 +13,7 @@ import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { nodeFs } from '@tw/io/node';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
 import { readBack } from '@tw/export';
-import { readZip } from '@tw/io';
+import { readZip, writeZip } from '@tw/io';
 import {
   canonicalJson,
   type AuditEntry,
@@ -64,6 +64,102 @@ function content(e: AuditEntry): Partial<AuditEntry> {
 }
 
 const CSV_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(csv|tsv)$/.test(n));
+
+const EXCEL_FIXTURES = FIXTURE_NAMES.filter((n) => /\.xlsx?$/.test(n));
+
+const SPREADSHEET =
+  'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const RELATIONSHIP = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+interface HandSheet {
+  name: string;
+  state?: string;
+  /** The worksheet's content: sheetData and anything after it. */
+  xml?: string;
+  /** Before the worksheet element, such as a document type declaration. */
+  prolog?: string;
+  chart?: boolean;
+  /** The relationship target, relative to the workbook part. */
+  target?: string;
+}
+
+/**
+ * A workbook written part by part, for the cell types, layouts and damage no fixture has. Shared
+ * strings that start with '<' are rich text; numFmts and xfs make the styles part.
+ */
+function handWorkbook(
+  sheets: HandSheet[],
+  o: { date1904?: boolean; strings?: string[]; numFmts?: string; xfs?: number[] } = {},
+): Uint8Array {
+  const text = (t: string) => new TextEncoder().encode(t);
+  const rels = sheets.map((s, i) =>
+    s.chart
+      ? `<Relationship Id="rId${i + 1}" Type="${RELATIONSHIP}/chartsheet" Target="chartsheets/sheet${i + 1}.xml"/>`
+      : `<Relationship Id="rId${i + 1}" Type="${RELATIONSHIP}/worksheet" Target="${s.target ?? `worksheets/sheet${i + 1}.xml`}"/>`,
+  );
+  const entries = [
+    {
+      path: '_rels/.rels',
+      data: text(
+        `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${RELATIONSHIP}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+      ),
+    },
+    {
+      path: 'xl/workbook.xml',
+      data: text(
+        `<?xml version="1.0" encoding="UTF-8"?><workbook ${SPREADSHEET}><workbookPr${o.date1904 === true ? ' date1904="1"' : ''}/><sheets>${sheets
+          .map(
+            (s, i) =>
+              `<sheet name="${s.name}" sheetId="${i + 1}"${s.state === undefined ? '' : ` state="${s.state}"`} r:id="rId${i + 1}"/>`,
+          )
+          .join('')}</sheets></workbook>`,
+      ),
+    },
+    {
+      path: 'xl/_rels/workbook.xml.rels',
+      data: text(
+        `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}<Relationship Id="rIdS" Type="${RELATIONSHIP}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rIdT" Type="${RELATIONSHIP}/styles" Target="styles.xml"/></Relationships>`,
+      ),
+    },
+    {
+      path: 'xl/sharedStrings.xml',
+      data: text(
+        `<?xml version="1.0"?><sst ${SPREADSHEET}>${(o.strings ?? [])
+          .map((t) => (t.startsWith('<') ? `<si>${t}</si>` : `<si><t xml:space="preserve">${t}</t></si>`))
+          .join('')}</sst>`,
+      ),
+    },
+    {
+      path: 'xl/styles.xml',
+      data: text(
+        `<?xml version="1.0"?><styleSheet ${SPREADSHEET}>${o.numFmts === undefined ? '' : `<numFmts>${o.numFmts}</numFmts>`}<cellXfs>${(
+          o.xfs ?? [0]
+        )
+          .map((id) => `<xf numFmtId="${id}"/>`)
+          .join('')}</cellXfs></styleSheet>`,
+      ),
+    },
+  ];
+  sheets.forEach((s, i) => {
+    if (s.chart === true) {
+      entries.push({ path: `xl/chartsheets/sheet${i + 1}.xml`, data: text(`<chartsheet ${SPREADSHEET}/>`) });
+      return;
+    }
+    const target = s.target ?? `worksheets/sheet${i + 1}.xml`;
+    const path = decodeURIComponent(target.startsWith('/') ? target.slice(1) : `xl/${target}`);
+    entries.push({
+      path,
+      data: text(
+        `<?xml version="1.0"?>${s.prolog ?? ''}<worksheet ${SPREADSHEET}>${s.xml ?? '<sheetData/>'}</worksheet>`,
+      ),
+    });
+  });
+  return writeZip(entries);
+}
+
+/** A cell element: its reference, content and attributes such as ' t="s"'. */
+const cell = (ref: string, inner: string, attrs = '') => `<c r="${ref}"${attrs}>${inner}</c>`;
+const val = (x: string | number) => `<v>${x}</v>`;
 
 describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a real pipe)', () => {
   let native: NativeProcess;
@@ -1344,6 +1440,236 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   });
 
+  it('reads Excel workbooks the same way: sheets, tables, headers, cell types, choices, overrides and refusals', async () => {
+    // Shared strings: rich text with a phonetic guide and an escaped line break among them.
+    const strings = [
+      'Monthly report',
+      'Well',
+      'Date',
+      'Rate',
+      'Flag',
+      '[bbl/d]',
+      'W-1',
+      'W-2',
+      '<r><t>Ri</t></r><r><t xml:space="preserve">ch </t></r><rPh sb="0" eb="1"><t>ignored</t></rPh><r><t>W_x000D_3</t></r>',
+      'A note',
+      'Other',
+      'Value',
+    ];
+    // A title merged across the table, a units row, a merged data cell, rows and cells out of
+    // order or without references, booleans, errors, formulas with and without a cached result,
+    // ISO dates, dates and times by number format, and a second table after a gap.
+    const edge = [
+      `<row r="1">${cell('A1', val(0), ' t="s"')}</row>`,
+      `<row r="3">${['A3', 'B3', 'C3', 'D3'].map((r, i) => cell(r, val(i + 1), ' t="s"')).join('')}</row>`,
+      `<row r="4">${cell('C4', val(5), ' t="s"')}</row>`,
+      `<row r="5">${cell('A5', val(6), ' t="s"')}${cell('B5', val(45000), ' s="1"')}${cell('C5', val(1250.5))}${cell('D5', val(1), ' t="b"')}</row>`,
+      `<row r="7">${cell('D7', val('#DIV/0!'), ' t="e"')}${cell('C7', `<f>C5*2</f>${val(2501)}`)}${cell('B7', val('2023-03-17T06:30:00Z'), ' t="d"')}${cell('A7', '<is><t>W_x005F_x0041_ inline</t></is>', ' t="inlineStr"')}</row>`,
+      `<row r="6">${cell('A6', val(7), ' t="s"')}${cell('B6', val(45001.25), ' s="2"')}<c r="C6"><f>C5+1</f></c>${cell('D6', val('true'), ' t="b"')}</row>`,
+      `<row r="8"><c t="s">${val(8)}</c><c s="1">${val(45003)}</c><c>${val('  12.5 ')}</c><c t="str">${val('maybe')}</c></row>`,
+      `<row r="9">${cell('A9', val(6), ' t="s"')}${cell('B9', val(45004), ' s="1"')}${cell('C9', val(1300))}${cell('D9', val(0), ' t="b"')}</row>`,
+      `<row r="10">${cell('A10', val(7), ' t="s"')}${cell('B10', val('2023-03-19'), ' t="d"')}${cell('C10', val('1e3'))}${cell('D10', val(' '), ' t="str"')}</row>`,
+      `<row r="14">${cell('A14', val(10), ' t="s"')}${cell('B14', val(11), ' t="s"')}</row>`,
+      `<row r="15">${cell('A15', val(9), ' t="s"')}${cell('B15', val(1))}</row>`,
+      `<row r="16">${cell('A16', val(9), ' t="s"')}${cell('B16', val(2))}</row>`,
+    ].join('');
+    const generated: [string, Uint8Array][] = [
+      [
+        'edge.xlsx',
+        handWorkbook(
+          [
+            {
+              name: 'Data',
+              xml: `<sheetData>${edge}</sheetData><mergeCells><mergeCell ref="A1:D1"/><mergeCell ref="A9:A10"/></mergeCells>`,
+            },
+          ],
+          { strings, numFmts: '<numFmt numFmtId="164" formatCode="yyyy-mm-dd hh:mm"/>', xfs: [0, 14, 164] },
+        ),
+      ],
+      // A hidden sheet with a table, an empty sheet, a chart sheet, and the data on a sheet whose
+      // name needs quotes in a locator and whose part is named by an escaped absolute target.
+      [
+        'sheets.xlsx',
+        handWorkbook(
+          [
+            {
+              name: 'Lookup',
+              state: 'hidden',
+              xml: `<sheetData><row r="1">${cell('A1', val(1), ' t="s"')}${cell('B1', val(3), ' t="s"')}</row><row r="2">${cell('A2', val(6), ' t="s"')}${cell('B2', val(1))}</row><row r="3">${cell('A3', val(7), ' t="s"')}${cell('B3', val(2))}</row></sheetData>`,
+            },
+            { name: 'Empty' },
+            { name: 'Chart', chart: true },
+            {
+              name: "Well 'A' data",
+              target: '/xl/worksheets/data%20sheet.xml',
+              xml: `<sheetData><row r="2">${cell('B2', val(1), ' t="s"')}${cell('C2', val(2), ' t="s"')}</row><row r="3">${cell('B3', val(6), ' t="s"')}${cell('C3', val(45010))}</row><row r="4">${cell('B4', val(7), ' t="s"')}${cell('C4', val(45011))}</row></sheetData>`,
+            },
+          ],
+          { date1904: true, strings },
+        ),
+      ],
+      [
+        'no-table.xlsx',
+        handWorkbook(
+          [{ name: 'Only', xml: `<sheetData><row r="2">${cell('B2', val(9), ' t="s"')}</row></sheetData>` }],
+          { strings },
+        ),
+      ],
+    ];
+    // What is not a workbook, or a damaged one.
+    const valid = handWorkbook([{ name: 'D' }]);
+    const broken: [string, Uint8Array][] = [
+      ['no-workbook.xlsx', writeZip([{ path: 'word/document.xml', data: new TextEncoder().encode('<document/>') }])],
+      [
+        'bad-xml.xlsx',
+        handWorkbook([{ name: 'Bad', xml: '<sheetData><row r="1"><c r="A1"><v>1</c></row></sheetData>' }]),
+      ],
+      [
+        'missing-string.xlsx',
+        handWorkbook([{ name: 'S', xml: `<sheetData><row r="1">${cell('A1', val(99), ' t="s"')}</row></sheetData>` }], {
+          strings,
+        }),
+      ],
+      ['doctype.xlsx', handWorkbook([{ name: 'D', prolog: '<!DOCTYPE worksheet [<!ENTITY x "y">]>' }])],
+      [
+        'bad-reference.xlsx',
+        handWorkbook([{ name: 'R', xml: `<sheetData><row r="1">${cell('A0', val(1))}</row></sheetData>` }]),
+      ],
+      ['truncated.xlsx', valid.slice(0, valid.length - 30)],
+      ['compound-header.xls', readFileSync(fixturePath('xls_date1904.xls')).subarray(0, 512)],
+    ];
+    const folder = mkdtempSync(join(tmpdir(), 'tw-xlsx-'));
+    for (const [name, bytes] of [...generated, ...broken]) writeFileSync(join(folder, name), bytes);
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    // Why an XML parser stopped is worded by the parser, so that reason is left out.
+    const settle = (run: () => Promise<unknown>) =>
+      run().then(
+        (v) => v,
+        (err: { code: string; message: string; fix: string }) => ({
+          code: err.code,
+          message: err.message.replace(/is not well-formed XML \(.*\)\.$/s, 'is not well-formed XML (…).'),
+          fix: err.fix,
+        }),
+      );
+    const same = async (why: string, run: (e: EngineClient) => Promise<unknown>) => {
+      const [a, b] = [await settle(() => run(nat.client)), await settle(() => run(lite))];
+      expect(a, why).toEqual(b);
+      return a;
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Workbooks', profile: { ...PROFILE } });
+      const files = [...EXCEL_FIXTURES.map((n) => fixturePath(n)), ...generated.map(([name]) => join(folder, name))];
+      for (const [i, path] of files.entries()) {
+        const file = { kind: 'path' as const, path };
+        const id = `d${i + 1}`;
+        await same(`${path}: preview`, (e) => e.sniff(file));
+        await same(`${path}: import`, async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+        await same(`${path}: schema`, (e) => e.getSchema(id));
+        await same(`${path}: rows`, async (e) => allRows(e, id));
+        const { columns } = await lite.getSchema(id);
+        for (const c of columns) {
+          for (const row of [0, 1, 2, 3, 4]) {
+            await same(`${path}: lineage of ${c.id} row ${row}`, async (e) => ({
+              ...(await e.explainCell(id, row, c.id)),
+              history: [],
+            }));
+          }
+        }
+        await same(`${path}: checks`, async (e) => {
+          const { durationMs: _d, ...run } = await e.awaitJob<CheckSummary>(await e.runChecks(id));
+          return run;
+        });
+        await same(`${path}: issues`, async (e) => (await e.listIssues({ datasetId: id, limit: 1000 })).items);
+      }
+      for (const [name] of broken) {
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        await same(`${name}: preview`, (e) => e.sniff(file));
+        const refusal = await same(`${name}: import`, async (e) =>
+          e.awaitJob<DatasetSummary>(await e.importFile(file)),
+        );
+        expect(refusal, `${name} is refused`).toMatchObject({ code: expect.any(String) });
+      }
+      // Another table or sheet chosen in the settings is read with its own header rows.
+      const edgeFile = { kind: 'path' as const, path: join(folder, 'edge.xlsx') };
+      const sheetsFile = { kind: 'path' as const, path: join(folder, 'sheets.xlsx') };
+      const xlsx = async (file: typeof edgeFile) => {
+        const o = (await lite.sniff(file)).sniff.options;
+        if (o.format !== 'xlsx') throw new Error('not a workbook');
+        return o;
+      };
+      const base = await xlsx(edgeFile);
+      for (const [why, change] of [
+        ['the second table', { tableIndex: 1 }],
+        ['header rows given', { headerRowStart: 2, headerRowEnd: 2, dataStartRow: 4, firstCol: 0, lastCol: 2 }],
+        ['a missing sheet', { sheet: 'Nope' }],
+        ['impossible rows', { dataStartRow: 1 }],
+      ] as const) {
+        const options = { ...base, xlsx: { ...base.xlsx, ...change } };
+        await same(`edge.xlsx: ${why}`, (e) => e.sniff(edgeFile, { options }));
+      }
+      const sheetsBase = await xlsx(sheetsFile);
+      for (const sheet of ['Lookup', 'Empty', 'Chart']) {
+        const options = { ...sheetsBase, xlsx: { ...sheetsBase.xlsx, sheet, tableIndex: 0 } };
+        await same(`sheets.xlsx: the sheet ${sheet}`, (e) => e.sniff(sheetsFile, { options }));
+      }
+      // Overrides read the workbook again with the table or sheet chosen.
+      const edgeId = `d${EXCEL_FIXTURES.length + 1}`;
+      const override = (property: string, value: unknown) => (e: EngineClient) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId: edgeId,
+          property,
+          value,
+          reason: 'Checked against the source system',
+        } as Decision);
+      for (const [why, property, value] of [
+        ['the second table', 'tableIndex', 1],
+        ['a reading setting of text files', 'delimiter', ';'],
+        ['the first table again', 'tableIndex', 0],
+        ['a sheet the workbook does not have', 'sheet', 'Nope'],
+      ] as const) {
+        await same(`override: ${why}`, async (e) => {
+          const out = await override(property, value)(e);
+          return out.map(content);
+        });
+        await same(`rows after ${why}`, async (e) => allRows(e, edgeId));
+        await same(`schema after ${why}`, (e) => e.getSchema(edgeId));
+      }
+      // A table chosen in the import settings is imported as detected, then read with the
+      // choice, which the log records as an override with its reason.
+      const chosen = { options: { ...base, xlsx: { ...base.xlsx, tableIndex: 1 } } };
+      await same('an import with another table chosen and no reason', async (e) =>
+        e.awaitJob<DatasetSummary>(await e.importFile(edgeFile, chosen)),
+      );
+      const summary = await same('an import with another table chosen', async (e) =>
+        e.awaitJob<DatasetSummary>(
+          await e.importFile(edgeFile, { ...chosen, overrideReason: 'The second table holds the readings' }),
+        ),
+      );
+      expect(summary).not.toHaveProperty('code');
+      const chosenId = (summary as DatasetSummary).id;
+      await same('the choice in the log', async (e) =>
+        (await e.listAudit({ action: ['detection.override'], order: 'desc', limit: 1 })).items.map(content),
+      );
+      await same('rows of the chosen table', async (e) => allRows(e, chosenId));
+      await same('schema of the chosen table', (e) => e.getSchema(chosenId));
+      // The project file opens to the same state in both engines.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const { report, opened } = await openNatively(saved.bytes as Uint8Array);
+      try {
+        expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+        await sameState(opened.client, lite);
+      } finally {
+        stopNative(opened);
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   it('overrides detection the same way: columns, reading settings, imports, templates, reverts and refusals', async () => {
     const golden = { kind: 'path' as const, path: fixturePath('csv_well_daily_golden.csv') };
     const semicolon = { kind: 'path' as const, path: fixturePath('csv_semicolon_decimalcomma_cp1252.csv') };
@@ -2037,15 +2363,14 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
   });
 
   it('refuses what it does not support yet with a reason and a fix', async () => {
-    await expect(native.client.sniff({ kind: 'path', path: fixturePath('xlsx_date1904.xlsx') })).rejects.toMatchObject({
+    const geojson = { kind: 'path' as const, path: fixturePath('geojson_wells_points_wgs84.geojson') };
+    await expect(native.client.sniff(geojson)).rejects.toMatchObject({
       code: 'PROTOCOL_MISMATCH',
       fix: expect.any(String),
     });
-    await expect(
-      native.client.importFile({ kind: 'path', path: fixturePath('xlsx_date1904.xlsx') }),
-    ).rejects.toMatchObject({
+    await expect(native.client.importFile(geojson)).rejects.toMatchObject({
       code: 'PROTOCOL_MISMATCH',
-      message: expect.stringContaining('Excel'),
+      message: expect.stringContaining('GeoJSON'),
     });
   });
 });

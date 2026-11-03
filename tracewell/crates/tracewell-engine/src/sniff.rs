@@ -384,10 +384,12 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
             "the import preview of {what} files"
         )))
     };
+    // A ZIP archive is read as an .xlsx workbook, no other ZIP-based format being supported, and
+    // an OLE compound file as a legacy .xls; the reader refuses what is not a workbook.
     if head.starts_with(&[0x50, 0x4B, 0x03, 0x04])
         || head.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
     {
-        return refuse("Excel");
+        return Ok("xlsx");
     }
     if head.starts_with(b"PAR1") {
         return Ok("parquet");
@@ -1499,6 +1501,8 @@ pub struct Sniffed {
     notes: Vec<Value>,
     decimal: char,
     thousands: String,
+    /// A workbook's sheets with their tables (SheetInfo); None for other formats.
+    sheets: Option<Vec<Value>>,
 }
 
 impl Sniffed {
@@ -1512,14 +1516,18 @@ impl Sniffed {
                 json!({ "srcLoc": loc, "fields": fields })
             })
             .collect();
-        json!({
+        let mut out = json!({
             "format": self.format,
             "options": self.options,
             "detections": detections,
             "header": self.header,
             "sampleRows": rows,
             "notes": self.notes,
-        })
+        });
+        if let Some(sheets) = &self.sheets {
+            out["sheets"] = json!(sheets);
+        }
+        out
     }
 
     fn detection(&self, name: &str) -> Option<&Value> {
@@ -1684,6 +1692,7 @@ fn sniff_text(
         notes,
         decimal: decimal_value.chars().next().unwrap_or('.'),
         thousands: thousands_value,
+        sheets: None,
     })
 }
 
@@ -1795,7 +1804,7 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         detect_format(&head, src.name)?.to_string()
     } else {
         match options["format"].as_str() {
-            Some(f @ ("csv" | "tsv" | "parquet" | "json")) => f.to_string(),
+            Some(f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json")) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
                     "the import preview of {} files",
@@ -1806,6 +1815,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     };
     if format == "json" {
         return sniff_json(src, &head, options);
+    }
+    if format == "xlsx" {
+        return sniff_xlsx(src, options);
     }
     if format == "parquet" {
         let mut s = sniff_parquet(conn, src)?;
@@ -1941,6 +1953,7 @@ fn sniff_json(src: &Source, head: &[u8], options: &Value) -> Result<Sniffed> {
         notes: Vec::new(),
         decimal: '.',
         thousands: String::new(),
+        sheets: None,
     };
     // Settings chosen for the file read it again with them (resniffByReading).
     if !options.is_null() && &s.options != options {
@@ -1949,6 +1962,27 @@ fn sniff_json(src: &Source, head: &[u8], options: &Value) -> Result<Sniffed> {
         s.options = options.clone();
     }
     Ok(s)
+}
+
+/// A workbook's sniff (xlsx/importer.ts sniff): its sheets and their tables, the chosen table's
+/// flattened header and first rows. Settings chosen for the file read it again with them
+/// (sniffXlsxWith).
+fn sniff_xlsx(src: &Source, options: &Value) -> Result<Sniffed> {
+    let mut x = crate::xlsx::sniff(src.path)?;
+    if !options.is_null() && &x.options != options {
+        x = crate::xlsx::sniff_with(src.path, options, &x)?;
+    }
+    Ok(Sniffed {
+        format: "xlsx".into(),
+        options: x.options,
+        detections: x.detections,
+        header: x.header,
+        rows: x.rows,
+        notes: x.notes.iter().map(crate::engine::note_json).collect(),
+        decimal: '.',
+        thousands: String::new(),
+        sheets: Some(x.sheets),
+    })
 }
 
 /// A Parquet file's sniff (parquet/import.ts sniff): the columns and row count from its footer,
@@ -1975,6 +2009,7 @@ fn sniff_parquet(conn: &Connection, src: &Source) -> Result<Sniffed> {
         notes: Vec::new(),
         decimal: '.',
         thousands: String::new(),
+        sheets: None,
     })
 }
 
@@ -2154,6 +2189,28 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
     }
     if s.format == "json" {
         return None;
+    }
+    if s.format == "xlsx" {
+        // The used range of the chosen sheet ends on its last row.
+        let sheet = s.options["xlsx"]["sheet"].as_str();
+        let dimension = s
+            .sheets
+            .iter()
+            .flatten()
+            .find(|i| i["name"].as_str() == sheet)
+            .and_then(|i| i["dimension"].as_str())
+            .unwrap_or("");
+        let digits: String = dimension
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let last: u64 = digits.parse().ok()?;
+        let start = s.options["xlsx"]["dataStartRow"].as_i64().unwrap_or(0);
+        return Some((last as i64 - start).max(0) as u64);
     }
     if n == 0 {
         return None;
