@@ -7,6 +7,8 @@ test('work left unsaved when the page closed is recovered exactly on the next st
   await app.editCell(1, 'Pressure', '1511', 'Field sheet value');
   const counts = await app.issueCounts();
   await page.getByRole('tab', { name: 'Log' }).click();
+  // The log lists entries as they arrive; count them once the edit's entry is there.
+  await expect(page.locator('tr[data-action="cell.edit"]')).toHaveCount(1);
   const auditRows = await page.locator('tr[data-action]').count();
 
   // An unexpected close: the page goes away without saving.

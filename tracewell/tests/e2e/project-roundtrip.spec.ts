@@ -8,6 +8,8 @@ test('a saved project reopens after a reload with the same issues, audit and row
   const counts = await app.issueCounts();
   const status = await app.statusText();
   await page.getByRole('tab', { name: 'Log' }).click();
+  // The log lists entries as they arrive; count them once the edit's entry is there.
+  await expect(page.locator('tr[data-action="cell.edit"]')).toHaveCount(1);
   const auditRows = await page.locator('tr[data-action]').count();
   const { path } = await app.saveProject();
 
