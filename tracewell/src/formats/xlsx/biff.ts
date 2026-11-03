@@ -137,7 +137,10 @@ class Segments {
     }
   }
 
-  /** `cch` characters; where they cross into a CONTINUE record, its first byte says their width again. */
+  /**
+   * `cch` characters; where they cross into a CONTINUE record, its first byte says their width again.
+   * A character cut in two by the end of a record is a damaged record, never a loop.
+   */
   chars(cch: number, high: boolean): string {
     const units: number[] = [];
     let wide = high;
@@ -150,9 +153,14 @@ class Segments {
         if (seg === undefined) throw damagedWorkbook('a string runs past the end of its record.');
         wide = ((seg[this.#pos++] as number) & 1) === 1;
       }
+      const before = units.length;
       while (units.length < cch && this.#pos + (wide ? 2 : 1) <= seg.length) {
         units.push(wide ? u16(seg, this.#pos) : (seg[this.#pos] as number));
         this.#pos += wide ? 2 : 1;
+      }
+      // A two-byte character cut in two by the end of the record can never be read.
+      if (units.length === before && this.#pos < seg.length) {
+        throw damagedWorkbook('a string runs past the end of its record.');
       }
     }
     let out = '';

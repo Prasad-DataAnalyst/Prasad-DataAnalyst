@@ -109,5 +109,13 @@ describe('legacy .xls workbooks', () => {
     expect(() => openWorkbook(whole.subarray(0, 1536))).toThrow(
       expect.objectContaining({ code: 'PARSE_FAILED' }) as Error,
     );
+    // A sheet name of two two-byte characters whose second is cut in two by the end of the record.
+    const cut = compoundFile(
+      'Workbook',
+      biff([0x0809, [0x00, 0x06, 0x05, 0x00]], [0x0085, [0, 0, 0, 0, 0, 0, 2, 1, 0x41, 0x00, 0x42]], [0x000a, []]),
+    );
+    expect(() => openWorkbook(cut)).toThrow(
+      expect.objectContaining({ code: 'PARSE_FAILED', message: expect.stringContaining('runs past the end') }) as Error,
+    );
   });
 });

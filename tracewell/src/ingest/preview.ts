@@ -5,6 +5,7 @@
 import { decodeAll } from '@tw/io';
 import { collectAssumptions, detectColumns, detectLatLonCrs } from '@tw/detect';
 import { sniffCsvText } from '@tw/formats-csv';
+import { sniffXlsxWith } from '@tw/formats-xlsx';
 import {
   EngineError,
   PREVIEW_MAX_BYTES,
@@ -66,10 +67,7 @@ async function resniffCsv(src: ByteSource, options: Extract<FormatOptions, { csv
   } satisfies SniffResult;
 }
 
-/**
- * Re-reads a workbook or GeoJSON file with the user's options. The header comes from reading the
- * header rows as data, so it always matches what the full import will see.
- */
+/** Re-reads a GeoJSON file with the user's options: the sample is what the full import will see. */
 async function resniffByReading(src: ByteSource, options: FormatOptions, base: SniffResult): Promise<SniffResult> {
   const importer = importerFor(options.format);
   const ctl = new AbortController();
@@ -85,19 +83,8 @@ async function resniffByReading(src: ByteSource, options: FormatOptions, base: S
     }
     return rows;
   };
-  let header = base.header;
-  if (options.format === 'xlsx') {
-    const { headerRowStart, headerRowEnd } = options.xlsx;
-    const headerRows = await take(
-      { ...options, xlsx: { ...options.xlsx, dataStartRow: headerRowStart } },
-      headerRowEnd - headerRowStart + 1,
-    );
-    header = headerRows.map((r) =>
-      r.fields.map((f) => (f === null ? '' : typeof f === 'object' ? JSON.stringify(f) : String(f))),
-    );
-  }
   const sampleRows = await take(options, SAMPLE_ROWS);
-  return { ...base, options, header, sampleRows };
+  return { ...base, options, sampleRows };
 }
 
 async function sniffSource(src: ByteSource, options: FormatOptions | undefined): Promise<SniffResult> {
@@ -116,6 +103,7 @@ async function sniffSource(src: ByteSource, options: FormatOptions | undefined):
       { detected: sniff.options.format, requested: options.format },
     );
   }
+  if (options.format === 'xlsx') return sniffXlsxWith(src, options, sniff);
   return resniffByReading(src, options, sniff);
 }
 

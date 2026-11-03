@@ -22,5 +22,5 @@ export { openWorkbook } from './workbook';
 export { cellToSerial, serialToCell } from './dates';
 export { isDateFormat } from './numfmt';
 export { detectTables } from './layout';
-export { xlsxImporter } from './importer';
+export { sniffXlsxWith, xlsxImporter } from './importer';
 export { writeXlsx } from './writer';

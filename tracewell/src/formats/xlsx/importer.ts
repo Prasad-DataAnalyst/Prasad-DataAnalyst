@@ -347,6 +347,62 @@ async function sniff(src: ByteSource): Promise<SniffResult> {
   };
 }
 
+function chosenByUser(value: JsonValue): Detection<JsonValue> {
+  return {
+    value,
+    confidence: 'high',
+    assumed: false,
+    source: 'user',
+    method: 'user-override',
+    evidence: 'Chosen by the user in the import settings.',
+  };
+}
+
+/**
+ * The preview of a workbook read with settings the user chose (`base` is its default preview).
+ * Choosing another sheet or table reads that table as layout detection found it, its header rows
+ * and columns included, so the choice needs no other setting; header rows and columns given for
+ * the detected sheet and table are taken as given. The header is the flattened one the import's
+ * TW-IMP-003 note names.
+ */
+export async function sniffXlsxWith(src: ByteSource, options: FormatOptions, base: SniffResult): Promise<SniffResult> {
+  const o = xlsxOptionsOf(options);
+  const layout = layoutOf(openWorkbook(await allBytes(src)), o.sheet);
+  const before = base.options.format === 'xlsx' ? base.options.xlsx : undefined;
+  const sameSheet = before?.sheet === o.sheet;
+  const sameTable = sameSheet && before?.tableIndex === o.tableIndex;
+  const table = layout.tables[o.tableIndex];
+  const rows = sameTable ? chosenFromOptions(o, layout) : table === undefined ? emptyChosen() : chosenFromTable(table);
+  const sampleRows: RawRow[] = [];
+  for (const row of tableRows(layout.grid, rows)) {
+    if (sampleRows.length >= SAMPLE_ROWS) break;
+    sampleRows.push(row);
+  }
+  let detections = base.detections;
+  if (!sameTable) {
+    const { tableIndex: _first, ...found } = tableDetections(layout, table);
+    const sheet = sameSheet ? base.detections['sheet'] : undefined;
+    const date1904 = base.detections['date1904'];
+    detections = {
+      sheet: sheet ?? chosenByUser(o.sheet),
+      tableIndex: chosenByUser(o.tableIndex),
+      ...found,
+      ...(date1904 === undefined ? {} : { date1904 }),
+    };
+  }
+  const hasColumns = rows.lastCol >= rows.firstCol;
+  const named = sameTable || table === undefined ? blockFor(layout.grid, rows) : table;
+  return {
+    ...base,
+    format: 'xlsx',
+    options: { format: 'xlsx', xlsx: toOptions(o.sheet, o.tableIndex, rows) },
+    detections,
+    header: hasColumns ? [named.flattenedHeader] : [],
+    sampleRows,
+    notes: hasColumns ? notesFor(layout, rows, o.tableIndex) : [],
+  };
+}
+
 async function* read(src: ByteSource, opts: FormatOptions, ctx: ReadContext): AsyncGenerator<RawBatch> {
   const o = xlsxOptionsOf(opts);
   throwIfAborted(ctx.signal);

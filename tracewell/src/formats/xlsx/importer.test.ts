@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bytesSource } from '@tw/io';
 import { BATCH_ROWS, EngineError, type FormatOptions, type XlsxOptions } from '@tw/model';
 import { fixtureExpectation, fixtureSource, handWorkbook, oneSheet, readAll } from './__fixtures__';
-import { writeXlsx, xlsxImporter } from './index';
+import { sniffXlsxWith, writeXlsx, xlsxImporter } from './index';
 
 function xlsxOptions(o: FormatOptions): XlsxOptions {
   if (o.format !== 'xlsx') throw new Error('not xlsx options');
@@ -131,6 +131,115 @@ describe('xlsxImporter.sniff', () => {
     ]);
   });
 });
+
+describe('sniffXlsxWith', () => {
+  const withOptions = async (name: string, change: Partial<XlsxOptions>) => {
+    const src = fixtureSource(name as Parameters<typeof fixtureSource>[0]);
+    const base = await xlsxImporter.sniff(src);
+    const options: FormatOptions = { format: 'xlsx', xlsx: { ...xlsxOptions(base.options), ...change } };
+    return { base, sniff: await sniffXlsxWith(src, options, base) };
+  };
+
+  it('previews the table chosen in the settings with its own header rows, columns and notes', async () => {
+    const { base, sniff } = await withOptions('xlsx_two_tables_one_sheet.xlsx', { tableIndex: 1 });
+    const tables = await xlsxImporter.sniff(fixtureSource('xlsx_two_tables_one_sheet.xlsx'));
+    expect(tables.sheets?.[0]?.tables.map((t) => t.range)).toEqual(['A3:D8', 'A12:C15']);
+    expect(xlsxOptions(sniff.options)).toMatchObject({ tableIndex: 1, headerRowStart: 11, firstCol: 0, lastCol: 2 });
+    expect(sniff.header[0]).toHaveLength(3);
+    expect(sniff.header).not.toEqual(base.header);
+    expect(sniff.sampleRows[0]?.srcLoc).toBe(13);
+    expect(sniff.detections['tableIndex']).toMatchObject({ value: 1, source: 'user', assumed: false });
+    expect(sniff.detections['tableRange']).toMatchObject({ value: 'A12:C15' });
+    expect(sniff.detections['sheet']).toEqual(base.detections['sheet']);
+    expect(sniff.notes.map((n) => [n.code, n.detail])).toEqual([['TW-IMP-002', { sheet: 'Report', range: 'A3:D8' }]]);
+    expect(Object.keys(sniff.detections)).toEqual(Object.keys(base.detections));
+  });
+
+  it('previews another sheet with its own table, and a sheet without a table as having no columns', async () => {
+    const table = (name: string, header: string) => ({
+      name,
+      columns: [
+        { header: 'Well', kind: 'string' as const },
+        { header, kind: 'number' as const },
+      ],
+      rows: [
+        ['A-01', 1],
+        ['A-02', 2],
+      ],
+      freezeHeader: false,
+      autoFilter: false,
+    });
+    const bytes = writeXlsx({
+      sheets: [table('North', 'Oil [bbl/d]'), table('South', 'Gas [MMscf/d]')],
+      created: '2026-01-01T00:00:00.000Z',
+      creator: 'Prasad (Prasad-DataAnalyst)',
+    });
+    const src = bytesSource(bytes, 'two-sheets.xlsx');
+    const base = await xlsxImporter.sniff(src);
+    const south = await sniffXlsxWith(
+      src,
+      { format: 'xlsx', xlsx: { ...xlsxOptions(base.options), sheet: 'South' } },
+      base,
+    );
+    expect(south.header).toEqual([['Well', 'Gas [MMscf/d]']]);
+    expect(south.detections['sheet']).toMatchObject({ value: 'South', source: 'user' });
+    expect(south.detections['tableIndex']).toMatchObject({ value: 0, source: 'user' });
+
+    const notes = handWorkbook({
+      sheets: [
+        { name: 'Data', xml: oneTable },
+        {
+          name: 'Note',
+          xml: '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>A note</t></is></c></row></sheetData>',
+        },
+      ],
+    });
+    const noteSrc = bytesSource(notes, 'notes.xlsx');
+    const noteBase = await xlsxImporter.sniff(noteSrc);
+    const note = await sniffXlsxWith(
+      noteSrc,
+      { format: 'xlsx', xlsx: { ...xlsxOptions(noteBase.options), sheet: 'Note' } },
+      noteBase,
+    );
+    expect(note.header).toEqual([]);
+    expect(note.sampleRows).toEqual([]);
+    expect(note.notes).toEqual([]);
+    expect(xlsxOptions(note.options)).toMatchObject({ sheet: 'Note', lastCol: -1 });
+    expect(note.detections['skipLines']).toMatchObject({ method: 'no-table', source: 'default' });
+  });
+
+  it('takes header rows and columns given for the detected table as given', async () => {
+    const { base, sniff } = await withOptions('xlsx_merged_two_row_header_units.xlsx', {
+      headerRowStart: 2,
+      headerRowEnd: 3,
+      dataStartRow: 5,
+      firstCol: 2,
+      lastCol: 3,
+    });
+    expect(sniff.header).toEqual([['Max [psi]', 'Min [psi]']]);
+    expect(sniff.sampleRows.map((r) => r.fields)).toEqual([
+      [2475, 2301.25],
+      [2602, 2444],
+      [1990, 1850.5],
+      [2050.75, 1902],
+    ]);
+    expect(sniff.detections).toEqual(base.detections);
+  });
+
+  it('refuses a sheet the workbook does not have, and impossible rows', async () => {
+    await expect(withOptions('xlsx_two_tables_one_sheet.xlsx', { sheet: 'Nope' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(withOptions('xlsx_two_tables_one_sheet.xlsx', { dataStartRow: 0 })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
+  });
+});
+
+const oneTable =
+  '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Well</t></is></c><c r="B1" t="inlineStr"><is><t>Rate</t></is></c></row>' +
+  '<row r="2"><c r="A2" t="inlineStr"><is><t>A-01</t></is></c><c r="B2"><v>1</v></c></row>' +
+  '<row r="3"><c r="A3" t="inlineStr"><is><t>A-02</t></is></c><c r="B3"><v>2</v></c></row></sheetData>';
 
 describe('xlsxImporter.read', () => {
   it('reads the data rows of the sniffed table with sheet-row locators and notes', async () => {

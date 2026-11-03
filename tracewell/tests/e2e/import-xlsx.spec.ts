@@ -36,3 +36,22 @@ test(
     expect(names).toEqual(fixtureExpectation('xlsx_merged_two_row_header_units.xlsx').columns.map((c) => c.name));
   },
 );
+
+test(
+  'xlsx_two_tables_one_sheet.xlsx imports the table chosen in the preview, and the choice is logged',
+  { tag: '@lite' },
+  async ({ app, page }) => {
+    await app.open();
+    await app.importFixture('xlsx_two_tables_one_sheet.xlsx', { acceptPreview: false });
+    await page.getByTestId('tw-import-option-tableIndex').selectOption({ label: 'A11:C15' });
+    await expect(page.getByTestId('tw-preview-grid').locator('thead th')).toHaveCount(3);
+    await page.getByTestId('tw-import-button').click();
+    await app.giveReason('The second table lists the downtime events');
+    await expect(page.getByTestId('tw-grid')).toBeVisible();
+    expect(await page.locator('.tw-colhead-text').allInnerTexts()).toEqual(['Event', 'Duration', 'Cause']);
+    await page.getByRole('tab', { name: 'Log' }).click();
+    const row = page.locator('tr[data-action="detection.override"]');
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText('0 → 1');
+  },
+);
