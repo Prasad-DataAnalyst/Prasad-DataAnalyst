@@ -1715,6 +1715,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         ['header rows given', { headerRowStart: 2, headerRowEnd: 2, dataStartRow: 4, firstCol: 0, lastCol: 2 }],
         ['a missing sheet', { sheet: 'Nope' }],
         ['impossible rows', { dataStartRow: 1 }],
+        ['a column past the edge of the sheet', { lastCol: 16_384 }],
       ] as const) {
         const options = { ...base, xlsx: { ...base.xlsx, ...change } };
         await same(`edge.xlsx: ${why}`, (e) => e.sniff(edgeFile, { options }));

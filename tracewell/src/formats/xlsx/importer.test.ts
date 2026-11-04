@@ -347,6 +347,15 @@ describe('xlsxImporter.read', () => {
       },
     };
     expect((await rejection(readAll(src, bad))).code).toBe('INVALID_INPUT');
+    // Rows and columns past the edge of a sheet are refused before anything is read.
+    const base = { sheet: 'IDs', tableIndex: 0, headerRowStart: 0, headerRowEnd: 0, firstCol: 0 };
+    for (const beyond of [
+      { ...base, dataStartRow: 1, lastCol: 16_384 },
+      { ...base, dataStartRow: 1_048_577, lastCol: 2 },
+    ]) {
+      const refusal = await rejection(readAll(src, { format: 'xlsx', xlsx: beyond }));
+      expect([refusal.code, refusal.message]).toEqual(['INVALID_INPUT', expect.stringContaining('16,384 columns')]);
+    }
     const missing: FormatOptions = {
       format: 'xlsx',
       xlsx: {

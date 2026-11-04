@@ -741,14 +741,20 @@ pub fn options_of(options: &Value) -> Result<Options> {
     );
     let refuse = || {
         invalid_argument(
-            "The XLSX options must give whole, 0-based rows and columns with the header before the data and the last column not before the first.",
+            "The XLSX options must give whole, 0-based rows and columns within the 1,048,576 rows and 16,384 columns of a sheet, with the header before the data and the last column not before the first.",
         )
     };
     let (Some(table_index), Some(start), Some(end), Some(data), Some(first), Some(last)) = fields
     else {
         return Err(refuse());
     };
-    if last < first - 1 || end < start || data <= end {
+    // Rows and columns stay within Excel's grid, so a table is never wider or longer than a sheet.
+    if last < first - 1
+        || last >= MAX_COLS as i64
+        || end < start
+        || data <= end
+        || data > MAX_ROWS as i64
+    {
         return Err(refuse());
     }
     Ok(Options {

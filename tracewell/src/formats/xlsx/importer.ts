@@ -29,7 +29,7 @@ import {
 import { invalidArgument, throwIfAborted } from './errors';
 import { isBlank, SheetGrid } from './grid';
 import { blockFor, headerNotes, otherTableNote, tablesIn, type ChosenHeader } from './layout';
-import { formatRange } from './refs';
+import { formatRange, MAX_COLS, MAX_ROWS } from './refs';
 import type { TableBlock, XlsxSheet, XlsxWorkbook } from './types';
 import { openWorkbook } from './workbook';
 
@@ -274,16 +274,19 @@ function xlsxOptionsOf(opts: FormatOptions): XlsxOptions {
   }
   const o = opts.xlsx;
   const counts = [o.tableIndex, o.headerRowStart, o.headerRowEnd, o.dataStartRow, o.firstCol];
+  // Rows and columns stay within Excel's grid, so a table is never wider or longer than a sheet.
   const valid =
     counts.every(isWholeNumber) &&
     Number.isSafeInteger(o.lastCol) &&
     o.lastCol >= o.firstCol - 1 &&
+    o.lastCol < MAX_COLS &&
     o.headerRowEnd >= o.headerRowStart &&
-    o.dataStartRow > o.headerRowEnd;
+    o.dataStartRow > o.headerRowEnd &&
+    o.dataStartRow <= MAX_ROWS;
   if (!valid) {
     throw invalidArgument(
-      'The XLSX options must give whole, 0-based rows and columns with the header before the data ' +
-        'and the last column not before the first.',
+      'The XLSX options must give whole, 0-based rows and columns within the 1,048,576 rows and 16,384 ' +
+        'columns of a sheet, with the header before the data and the last column not before the first.',
       { ...o },
     );
   }
