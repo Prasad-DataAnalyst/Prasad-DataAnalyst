@@ -845,6 +845,20 @@ enum CellType {
     D,
 }
 
+impl CellType {
+    fn name(self) -> &'static str {
+        match self {
+            CellType::N => "n",
+            CellType::S => "s",
+            CellType::B => "b",
+            CellType::E => "e",
+            CellType::Str => "str",
+            CellType::InlineStr => "inlineStr",
+            CellType::D => "d",
+        }
+    }
+}
+
 fn cell_type(t: &str) -> CellType {
     match t {
         "n" => CellType::N,
@@ -888,6 +902,11 @@ struct SheetParser<'a> {
     in_inline: bool,
     phonetic: i64,
     target: Option<Target>,
+    /// Elements open around the one being parsed; the worksheet element is at depth 0.
+    depth: i64,
+    sheet_views: u32,
+    frozen: Option<(u32, u32)>,
+    auto_filter: Option<CellRange>,
 }
 
 fn to_u32(n: i64) -> u32 {
@@ -986,11 +1005,29 @@ impl SheetParser<'_> {
         {
             cells.push(Cell {
                 c: pending.col,
+                is_date: matches!(v, Raw::Date(_) | Raw::DateTime(_)),
                 v,
                 formula: pending.formula,
+                t: pending.t.name(),
             });
         }
         Ok(())
+    }
+
+    /// The frozen pane of the first sheet view: the rows and columns above and left of it.
+    fn read_pane(&mut self, attrs: &Attrs) {
+        if !matches!(attrs.get("state"), Some("frozen" | "frozenSplit")) {
+            return;
+        }
+        let split = |name: &str| {
+            js_number(attrs.get(name).unwrap_or("0"))
+                .filter(|n| n.is_finite())
+                .map_or(0, |n| n.trunc().clamp(0.0, u32::MAX as f64) as u32)
+        };
+        let (rows, cols) = (split("ySplit"), split("xSplit"));
+        if rows > 0 || cols > 0 {
+            self.frozen = Some((rows, cols));
+        }
     }
 
     fn value_of(&self, p: &PendingCell, r: i64) -> Result<Raw> {
@@ -1087,6 +1124,8 @@ impl SheetParser<'_> {
 
 impl Handler for SheetParser<'_> {
     fn open(&mut self, name: &str, attrs: &Attrs, _: bool) -> Result<()> {
+        let depth = self.depth;
+        self.depth += 1;
         if self.cell.is_some() {
             self.open_in_cell(name);
             return Ok(());
@@ -1094,6 +1133,12 @@ impl Handler for SheetParser<'_> {
         match name {
             "row" => self.open_row(attrs),
             "c" => self.open_cell(attrs)?,
+            "sheetView" => self.sheet_views += 1,
+            "pane" if self.sheet_views == 1 => self.read_pane(attrs),
+            // Custom sheet views carry their own autofilters; only the sheet's own one counts.
+            "autoFilter" if depth == 1 => {
+                self.auto_filter = parse_range(attrs.get("ref").unwrap_or(""));
+            }
             "mergeCell" => {
                 let range = attrs.get("ref").and_then(parse_range);
                 if let Some(m) = range
@@ -1108,6 +1153,7 @@ impl Handler for SheetParser<'_> {
     }
 
     fn close(&mut self, name: &str) -> Result<()> {
+        self.depth -= 1;
         if self.cell.is_some() {
             return self.close_in_cell(name);
         }
@@ -1186,6 +1232,10 @@ fn parse_sheet(bytes: &[u8], part: &str, ctx: &SheetCtx) -> Result<Sheet> {
         in_inline: false,
         phonetic: 0,
         target: None,
+        depth: 0,
+        sheet_views: 0,
+        frozen: None,
+        auto_filter: None,
     };
     xml::parse(bytes, part, &mut p)?;
     let rows = if is_ordered(&p.rows) {
@@ -1198,6 +1248,8 @@ fn parse_sheet(bytes: &[u8], part: &str, ctx: &SheetCtx) -> Result<Sheet> {
         state: ctx.state,
         dimension: used_range(&rows),
         merges: p.merges,
+        frozen: p.frozen,
+        auto_filter: p.auto_filter,
         rows,
     })
 }

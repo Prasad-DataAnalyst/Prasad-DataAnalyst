@@ -1,11 +1,11 @@
 //! Validated export packages (SAD section 10), as the TypeScript export module builds them: write
-//! the data file, read it back through a separate reader and compare it with the output view by
-//! row count, header, Parquet types and per-column digests, assemble the package with its README,
-//! manifest, audit log, issues and checksums, re-open the package and verify everything again,
-//! and only then offer it. A package that fails any check is deleted, never offered.
+//! the data files the profile plans, read each back through a separate reader and compare it with
+//! the output view by row count, header, types and per-column digests, assemble the package with
+//! its README, manifest, audit log, issues and checksums, re-open the package and verify everything
+//! again, and only then offer it. A package that fails any check is deleted, never offered.
 //!
-//! The native engine writes the CSV and Parquet profiles; the profile list is the same JSON file
-//! as the TypeScript engine's.
+//! The native engine writes the Excel, CSV and Parquet profiles; the profile list is the same JSON
+//! file as the TypeScript engine's.
 
 use crate::canonical::{canonical_json, canonical_number, json_string, sha256_hex};
 use crate::csv::{TableLayout, TableReader};
@@ -16,6 +16,9 @@ use crate::import::{quote_ident, quote_text};
 use crate::parse::Kind;
 use crate::stream::each_batch;
 use crate::units::REGISTRY_JSON;
+use crate::xlsx::writer::{
+    Column as SheetColumn, EXCEL_MAX_CELL_CHARS, EXCEL_MAX_DATA_ROWS, SheetWriter, write_book,
+};
 use crate::zip::{Entry, ZipWriter, read_entries, read_entry};
 use duckdb::Connection;
 use duckdb::arrow::array::{AsArray, RecordBatch};
@@ -29,7 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
 /// Profiles this engine writes; the others are listed as not available yet.
-const NATIVE_PROFILES: [&str; 2] = ["csv", "parquet"];
+const NATIVE_PROFILES: [&str; 3] = ["excel", "csv", "parquet"];
 /// A package up to this size is handed back as bytes when the request names no file.
 pub const RETURN_BYTES_MAX: u64 = 256 << 20;
 const READ_BYTES: usize = 4 << 20;
@@ -50,16 +53,11 @@ pub fn profile_statuses() -> Vec<Value> {
             if NATIVE_PROFILES.contains(&id.as_str()) {
                 json!({ "profile": p, "available": true, "substitutions": [] })
             } else {
-                let what = if id == "excel" {
-                    "Excel workbooks"
-                } else {
-                    "GeoJSON files"
-                };
                 json!({
                     "profile": p,
                     "available": false,
-                    "reason": format!("The native engine does not write {what} yet."),
-                    "fix": "Export as CSV or Parquet instead.",
+                    "reason": "The native engine does not write GeoJSON files yet.",
+                    "fix": "Export as Excel, CSV or Parquet instead.",
                     "substitutions": [],
                 })
             }
@@ -69,6 +67,146 @@ pub fn profile_statuses() -> Vec<Value> {
 
 pub fn native_profile(id: &str) -> bool {
     NATIVE_PROFILES.contains(&id)
+}
+
+/// The profile statuses of one dataset (profileStatuses): the Excel profile lists the
+/// substitutions the dataset needs.
+pub fn profile_statuses_for(
+    conn: &Connection,
+    view: &str,
+    columns: &[OutColumn],
+    rows: u64,
+) -> Result<Vec<Value>> {
+    let mut statuses = profile_statuses();
+    for s in &mut statuses {
+        if s["profile"]["id"] == "excel" {
+            s["substitutions"] =
+                json!(plan_export(conn, view, columns, rows, "excel")?.substitutions);
+        }
+    }
+    Ok(statuses)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The plan (plan.ts)
+
+/// What a data file of a package is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum DataKind {
+    Csv,
+    Parquet,
+    Xlsx,
+}
+
+/// A data file a profile writes: its path in the package and the columns of the view it holds.
+struct DataFile {
+    path: &'static str,
+    kind: DataKind,
+    columns: Vec<usize>,
+}
+
+/// What an export writes: its data files and the format-limit substitutions (TW-EXP-002) it needs.
+struct Plan {
+    substitutions: Vec<Value>,
+    files: Vec<DataFile>,
+}
+
+/// Text columns holding a value longer than an Excel cell holds, counted in UTF-16 units as
+/// JavaScript counts them. A value that long has more UTF-8 bytes than that, which DuckDB counts.
+fn long_text_columns(conn: &Connection, view: &str, columns: &[OutColumn]) -> Result<Vec<usize>> {
+    let mut out = Vec::new();
+    for (j, c) in columns.iter().enumerate() {
+        if c.kind != Kind::String {
+            continue;
+        }
+        let col = quote_ident(&c.id);
+        let sql = format!("SELECT {col} FROM {view} WHERE strlen({col}) > {EXCEL_MAX_CELL_CHARS}");
+        let mut long = false;
+        each_batch(conn, &sql, |batch| {
+            let a = batch.column(0);
+            long = long
+                || (0..batch.num_rows()).any(|i| {
+                    matches!(cell_at(a, i, Kind::String), Cell::Text(t) if t.encode_utf16().count() > EXCEL_MAX_CELL_CHARS)
+                });
+            Ok(())
+        })?;
+        if long {
+            out.push(j);
+        }
+    }
+    Ok(out)
+}
+
+/// The data files a profile writes and the substitutions it needs (planExport).
+fn plan_export(
+    conn: &Connection,
+    view: &str,
+    columns: &[OutColumn],
+    rows: u64,
+    profile: &str,
+) -> Result<Plan> {
+    let all: Vec<usize> = (0..columns.len()).collect();
+    let single = |path, kind| Plan {
+        substitutions: Vec::new(),
+        files: vec![DataFile {
+            path,
+            kind,
+            columns: (0..columns.len()).collect(),
+        }],
+    };
+    if profile == "csv" {
+        return Ok(single("data.csv", DataKind::Csv));
+    }
+    if profile != "excel" {
+        return Ok(single("data.parquet", DataKind::Parquet));
+    }
+    if rows > EXCEL_MAX_DATA_ROWS {
+        return Ok(Plan {
+            substitutions: vec![json!({
+                "ruleId": "TW-EXP-002",
+                "what": format!("{rows} data rows"),
+                "why": format!("An Excel sheet holds at most {EXCEL_MAX_DATA_ROWS} data rows below its header."),
+                "instead": "The data is delivered as data.csv in the package; the workbook keeps the Report and Log sheets and a notice.",
+            })],
+            files: vec![
+                DataFile {
+                    path: "data.csv",
+                    kind: DataKind::Csv,
+                    columns: all,
+                },
+                DataFile {
+                    path: "data.xlsx",
+                    kind: DataKind::Xlsx,
+                    columns: Vec::new(),
+                },
+            ],
+        });
+    }
+    let long = long_text_columns(conn, view, columns)?;
+    if long.is_empty() {
+        return Ok(single("data.xlsx", DataKind::Xlsx));
+    }
+    let names: Vec<&str> = long.iter().map(|&j| columns[j].name.as_str()).collect();
+    Ok(Plan {
+        substitutions: vec![json!({
+            "ruleId": "TW-EXP-002",
+            "what": format!("the column{} {}", if long.len() > 1 { "s" } else { "" }, names.join(", ")),
+            "why": format!("Some values are longer than the {EXCEL_MAX_CELL_CHARS} characters an Excel cell can hold."),
+            "instead": "These columns are delivered in data-long-text.csv in the package, row for row with the Data sheet.",
+        })],
+        files: vec![
+            DataFile {
+                path: "data.xlsx",
+                kind: DataKind::Xlsx,
+                columns: all.into_iter().filter(|j| !long.contains(j)).collect(),
+            },
+            DataFile {
+                path: "data-long-text.csv",
+                kind: DataKind::Csv,
+                columns: long,
+            },
+        ],
+    })
 }
 
 /// A column of the output view.
@@ -404,16 +542,18 @@ fn format_rows(batches: &[RecordBatch], kinds: &[Kind], neutralize: bool, out: &
 fn write_csv(
     conn: &Connection,
     input: &ExportInput,
+    cols: &[usize],
     path: &Path,
     cancel: &AtomicBool,
 ) -> Result<()> {
+    let columns: Vec<&OutColumn> = cols.iter().map(|&j| &input.columns[j]).collect();
     let mut out = BufWriter::with_capacity(1 << 20, File::create(path)?);
-    let header: Vec<String> = input.columns.iter().map(OutColumn::header).collect();
+    let header: Vec<String> = columns.iter().map(|c| c.header()).collect();
     let mut head = Vec::new();
     csv_record(&header, true, &mut head);
     out.write_all(&head)?;
-    let kinds: Vec<Kind> = input.columns.iter().map(|c| c.kind).collect();
-    let select: Vec<String> = input.columns.iter().map(|c| quote_ident(&c.id)).collect();
+    let kinds: Vec<Kind> = columns.iter().map(|c| c.kind).collect();
+    let select: Vec<String> = columns.iter().map(|c| quote_ident(&c.id)).collect();
     let sql = format!(
         "SELECT {} FROM {}{}",
         select.join(", "),
@@ -501,6 +641,240 @@ fn write_parquet(conn: &Connection, input: &ExportInput, path: &Path) -> Result<
             quote_text(&path.to_string_lossy())
         ))
     })?;
+    Ok(())
+}
+
+/// The Report sheet: sources, rule packs, steps, assumptions, open issues, substitutions and the
+/// digest of every column of the view (reportRows).
+fn report_rows(
+    input: &ExportInput,
+    plan: &Plan,
+    digests: &[ColumnDigests],
+) -> Vec<(String, String)> {
+    let open = open_issues(&input.issues);
+    let mut rows: Vec<(String, String)> = vec![
+        (
+            "Project".into(),
+            format!(
+                "{} ({})",
+                text(&input.project["name"]),
+                text(&input.project["id"])
+            ),
+        ),
+        (
+            "Dataset".into(),
+            format!(
+                "{} ({}), {} rows",
+                input.dataset_name, input.dataset_id, input.row_count
+            ),
+        ),
+        (
+            "Export".into(),
+            format!(
+                "{}, profile {}, created {} by {}",
+                input.export_id, input.profile, input.at, input.owner
+            ),
+        ),
+    ];
+    for s in &input.sources {
+        rows.push((
+            "Source".into(),
+            format!(
+                "{}, {} bytes, SHA-256 {}",
+                text(&s["name"]),
+                text(&s["size"]),
+                text(&s["fileId"])
+            ),
+        ));
+    }
+    for r in &input.rule_packs {
+        rows.push((
+            "Rule pack".into(),
+            format!(
+                "{} {}, SHA-256 {}",
+                text(&r["id"]),
+                text(&r["version"]),
+                text(&r["sha256"])
+            ),
+        ));
+    }
+    rows.push((
+        "Unit registry".into(),
+        format!(
+            "{}, SHA-256 {}",
+            registry_version(),
+            sha256_hex(REGISTRY_JSON.as_bytes())
+        ),
+    ));
+    for (i, d) in input.step_descriptions.iter().enumerate() {
+        rows.push((format!("Step {}", i + 1), d.clone()));
+    }
+    rows.push(("Excluded rows".into(), input.excluded_rows.to_string()));
+    for a in &input.assumptions {
+        rows.push((
+            "Assumption".into(),
+            format!(
+                "{} {} = {} ({})",
+                a["columnId"].as_str().unwrap_or("dataset"),
+                text(&a["property"]),
+                stringify(&a["value"]),
+                text(&a["confidence"])
+            ),
+        ));
+    }
+    rows.push((
+        "Open issues".into(),
+        format!(
+            "errors {}, warnings {}, notes {}",
+            open["error"], open["warning"], open["note"]
+        ),
+    ));
+    for s in &plan.substitutions {
+        rows.push((
+            text(&s["ruleId"]),
+            format!(
+                "{}. {} {}",
+                text(&s["what"]),
+                text(&s["why"]),
+                text(&s["instead"])
+            ),
+        ));
+    }
+    for (c, d) in input.columns.iter().zip(digests) {
+        rows.push((format!("Column digest {}", c.header()), d.exported.clone()));
+    }
+    rows
+}
+
+/// One audit entry as a row of the Log sheet (logSheet); JSON members are written in sorted order.
+fn log_row(e: &Value) -> Vec<Cell> {
+    let actor = &e["actor"];
+    let who = if actor["kind"] == "user" {
+        format!("{} ({})", text(&actor["name"]), text(&actor["role"]))
+    } else {
+        format!("system: {}", text(&actor["component"]))
+    };
+    let json_of = |k: &str| e.get(k).map_or(Cell::Null, |v| Cell::Text(stringify(v)));
+    vec![
+        Cell::Num(e["seq"].as_f64().unwrap_or(0.0)),
+        crate::time::millis_from_iso(e["at"].as_str().unwrap_or(""))
+            .map_or(Cell::Null, Cell::DateTime),
+        Cell::Text(who),
+        Cell::Text(text(&e["action"])),
+        json_of("target"),
+        json_of("old"),
+        json_of("new"),
+        e["reason"]
+            .as_str()
+            .map_or(Cell::Null, |r| Cell::Text(r.to_string())),
+        e.get("method")
+            .and_then(|m| m["formula"].as_str())
+            .map_or(Cell::Null, |f| Cell::Text(f.to_string())),
+        Cell::Text(text(&e["hash"])),
+    ]
+}
+
+/// Writes the workbook of the Excel profile: a Data sheet of the columns given (none when the
+/// data goes to a CSV file instead), the Report sheet and the Log sheet.
+fn write_xlsx(
+    conn: &Connection,
+    input: &ExportInput,
+    plan: &Plan,
+    cols: &[usize],
+    digests: &[ColumnDigests],
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let parts = path.with_extension("parts");
+    std::fs::create_dir_all(&parts)?;
+    let mut sheets = Vec::new();
+    if !cols.is_empty() {
+        let columns: Vec<SheetColumn> = cols
+            .iter()
+            .map(|&j| SheetColumn {
+                header: input.columns[j].header(),
+                kind: input.columns[j].kind,
+                width: None,
+            })
+            .collect();
+        let mut sheet = SheetWriter::create(&parts.join("data.xml"), "Data", columns, true, true)?;
+        let kinds: Vec<Kind> = cols.iter().map(|&j| input.columns[j].kind).collect();
+        let select: Vec<String> = cols
+            .iter()
+            .map(|&j| quote_ident(&input.columns[j].id))
+            .collect();
+        let sql = format!(
+            "SELECT {} FROM {}{}",
+            select.join(", "),
+            input.view,
+            order_by(input.ordered)
+        );
+        let mut row = vec![Cell::Null; cols.len()];
+        each_batch(conn, &sql, |batch| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(cancelled());
+            }
+            for i in 0..batch.num_rows() {
+                for (j, kind) in kinds.iter().enumerate() {
+                    row[j] = cell_at(batch.column(j), i, *kind);
+                }
+                sheet.row(&row)?;
+            }
+            Ok(())
+        })?;
+        sheets.push(sheet.finish()?);
+    }
+    let text_column = |header: &str, width: f64| SheetColumn {
+        header: header.into(),
+        kind: Kind::String,
+        width: Some(width),
+    };
+    let mut report = SheetWriter::create(
+        &parts.join("report.xml"),
+        "Report",
+        vec![text_column("Item", 28.0), text_column("Value", 100.0)],
+        true,
+        false,
+    )?;
+    for (item, value) in report_rows(input, plan, digests) {
+        report.row(&[Cell::Text(item), Cell::Text(value)])?;
+    }
+    sheets.push(report.finish()?);
+    let column = |header: &str, kind| SheetColumn {
+        header: header.into(),
+        kind,
+        width: None,
+    };
+    let mut log = SheetWriter::create(
+        &parts.join("log.xml"),
+        "Log",
+        vec![
+            column("Seq", Kind::Integer),
+            column("Time (UTC)", Kind::DateTime),
+            column("Actor", Kind::String),
+            column("Action", Kind::String),
+            column("Target", Kind::String),
+            column("Old", Kind::String),
+            column("New", Kind::String),
+            column("Reason", Kind::String),
+            column("Method", Kind::String),
+            column("Hash", Kind::String),
+        ],
+        true,
+        true,
+    )?;
+    for e in &input.audit {
+        log.row(&log_row(e))?;
+    }
+    sheets.push(log.finish()?);
+    write_book(
+        path,
+        &sheets,
+        &input.at,
+        &input.owner,
+        Some(&input.dataset_name),
+    )?;
+    std::fs::remove_dir_all(&parts)?;
     Ok(())
 }
 
@@ -953,17 +1327,236 @@ fn read_back_parquet(
     Ok(checks)
 }
 
+/// A workbook cell re-typed by the column's type (retypeXlsx); None when it does not fit.
+fn retype_xlsx(v: &crate::parse::Raw, kind: Kind) -> Option<Cell> {
+    use crate::parse::Raw;
+    Some(match (kind, v) {
+        (_, Raw::Null) => Cell::Null,
+        (Kind::Number | Kind::Integer, Raw::Number(n)) => Cell::Num(*n),
+        (Kind::Boolean, Raw::Bool(b)) => Cell::Bool(*b),
+        (Kind::Date, Raw::Date(d)) => Cell::DateText(d.clone()),
+        (Kind::Date, Raw::DateTime(t)) if t.ends_with("T00:00:00.000Z") => {
+            Cell::DateText(t[..10].to_string())
+        }
+        (Kind::DateTime, Raw::DateTime(t)) => Cell::DateTimeText(t.clone()),
+        (Kind::DateTime, Raw::Date(d)) => Cell::DateTimeText(format!("{d}T00:00:00.000Z")),
+        (Kind::String, Raw::Text(t)) => Cell::Text(t.clone()),
+        _ => return None,
+    })
+}
+
+/// A header cell as JavaScript's String() writes it.
+fn header_text(v: &crate::parse::Raw) -> String {
+    use crate::parse::Raw;
+    match v {
+        Raw::Text(t) => t.clone(),
+        Raw::Number(_) | Raw::Bool(_) | Raw::Null => v.text(),
+        Raw::Date(_) | Raw::DateTime(_) | Raw::Error(_) => "[object Object]".into(),
+    }
+}
+
+/// Opens a workbook the export wrote with the product reader and checks its sheets, the Data
+/// sheet's header, rows, storage types and values, and its frozen header and filter (readXlsx).
+fn read_back_xlsx(
+    path: &Path,
+    expected: &Expected,
+    file: &str,
+    expect_data: bool,
+    expected_log_rows: u64,
+) -> Vec<Value> {
+    let mut book = match crate::xlsx::open(path) {
+        Ok(b) => b,
+        Err(e) => {
+            return vec![check(
+                "RB-OPEN",
+                false,
+                format!("The workbook does not open: {}", e.message),
+                Some(file),
+            )];
+        }
+    };
+    let mut checks = vec![check(
+        "RB-OPEN",
+        true,
+        "The workbook opens.".into(),
+        Some(file),
+    )];
+    let names: Vec<String> = book.sheets.iter().map(|(n, _)| n.clone()).collect();
+    let mut required: Vec<&str> = Vec::new();
+    if expect_data {
+        required.push("Data");
+    }
+    required.extend(["Report", "Log"]);
+    let mut problems: Vec<String> = required
+        .iter()
+        .filter(|n| !names.iter().any(|m| m == *n))
+        .map(|n| format!("the {n} sheet is missing"))
+        .collect();
+    let mut read = |name: &str, problems: &mut Vec<String>| match book.read_sheet(name) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            problems.push(format!("the {name} sheet cannot be read: {}", e.message));
+            None
+        }
+    };
+    if names.iter().any(|n| n == "Log")
+        && let Some(log) = read("Log", &mut problems)
+    {
+        let entries = log.rows.iter().filter(|r| r.r > 0).count() as u64;
+        if entries != expected_log_rows {
+            problems.push(format!(
+                "the Log sheet has {entries} entries instead of {expected_log_rows}"
+            ));
+        }
+    }
+    if expect_data
+        && names.iter().any(|n| n == "Data")
+        && let Some(sheet) = read("Data", &mut problems)
+    {
+        let width = expected.columns.len();
+        if sheet.frozen != Some((1, 0)) {
+            problems.push("the header is not frozen at A2".into());
+        }
+        let covered = sheet.auto_filter.is_some_and(|f| {
+            f.sr == 0
+                && f.sc == 0
+                && f.ec as i64 == width as i64 - 1
+                && f.er as u64 == expected.rows
+        });
+        if !covered {
+            problems.push("the filter does not cover the header and every data row".into());
+        }
+        if !sheet.merges.is_empty() {
+            problems.push(format!(
+                "the Data sheet has {} merged ranges",
+                sheet.merges.len()
+            ));
+        }
+        let header: Vec<String> = sheet
+            .rows
+            .iter()
+            .find(|r| r.r == 0)
+            .map(|r| r.cells.iter().map(|c| header_text(&c.v)).collect())
+            .unwrap_or_default();
+        checks.push(header_check(expected, &header, file));
+        // Rows without cells are left out by the reader and come back empty.
+        let last = sheet.rows.iter().map(|r| r.r).max().unwrap_or(0) as usize;
+        let mut dense: Vec<Vec<Option<&crate::xlsx::Cell>>> = vec![vec![None; width]; last];
+        let mut extra = 0u64;
+        for row in sheet.rows.iter().filter(|r| r.r > 0) {
+            for cell in &row.cells {
+                match dense[row.r as usize - 1].get_mut(cell.c as usize) {
+                    Some(slot) => *slot = Some(cell),
+                    None => extra += 1,
+                }
+            }
+        }
+        let data_rows = dense.len() as u64;
+        checks.push(rows_check(
+            if data_rows <= expected.rows {
+                expected.rows
+            } else {
+                data_rows
+            },
+            expected.rows,
+            file,
+        ));
+        if extra > 0 {
+            problems.push(format!("{extra} cells lie outside the data columns"));
+        }
+        let mut wrong: Vec<String> = Vec::new();
+        for (j, col) in expected.columns.iter().enumerate() {
+            let numeric = matches!(col.kind, Kind::Number | Kind::Integer);
+            let date = matches!(col.kind, Kind::Date | Kind::DateTime);
+            for (i, row) in dense.iter().enumerate() {
+                let Some(cell) = row[j] else { continue };
+                if matches!(cell.v, crate::parse::Raw::Null) {
+                    continue;
+                }
+                let bad_number =
+                    numeric && (cell.t != "n" || !matches!(cell.v, crate::parse::Raw::Number(_)));
+                if bad_number || (date && !cell.is_date) {
+                    wrong.push(format!("{} row {}", col.header(), i + 2));
+                }
+            }
+        }
+        checks.push(if wrong.is_empty() {
+            check(
+                "RB-XLSX-TYPES",
+                true,
+                "Numbers are stored as numbers and dates carry date formats.".into(),
+                Some(file),
+            )
+        } else {
+            check(
+                "RB-XLSX-TYPES",
+                false,
+                format!(
+                    "Cells with the wrong storage type: {}{}.",
+                    wrong[..wrong.len().min(5)].join(", "),
+                    if wrong.len() > 5 { ", …" } else { "" }
+                ),
+                Some(file),
+            )
+        });
+        let null = crate::parse::Raw::Null;
+        let got: Vec<Option<String>> = expected
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(j, col)| {
+                let mut d = ColumnDigest::default();
+                for i in 0..expected.rows as usize {
+                    let v = dense.get(i).and_then(|row| row[j]).map_or(&null, |c| &c.v);
+                    d.push(&retype_xlsx(v, col.kind)?);
+                }
+                Some(d.finish())
+            })
+            .collect();
+        checks.push(values_check(expected, &got, file));
+    }
+    let data_note = if expect_data {
+        "; header frozen at A2; filter over the data; no merged cells"
+    } else {
+        ""
+    };
+    checks.push(if problems.is_empty() {
+        check(
+            "RB-XLSX-STRUCTURE",
+            true,
+            format!("Sheets {} present{data_note}.", required.join(", ")),
+            Some(file),
+        )
+    } else {
+        check(
+            "RB-XLSX-STRUCTURE",
+            false,
+            format!("Workbook structure problems: {}.", problems.join("; ")),
+            Some(file),
+        )
+    });
+    checks
+}
+
+/// Reads one data file back with the product reader of its format.
 fn read_back(
     conn: &Connection,
     input: &ExportInput,
+    kind: DataKind,
     path: &Path,
     expected: &Expected,
     file: &str,
 ) -> Result<Vec<Value>> {
-    if input.profile == "csv" {
-        read_back_csv(path, expected, file, input.threads, input.neutralize)
-    } else {
-        read_back_parquet(conn, path, expected, file, input.threads)
+    match kind {
+        DataKind::Csv => read_back_csv(path, expected, file, input.threads, input.neutralize),
+        DataKind::Parquet => read_back_parquet(conn, path, expected, file, input.threads),
+        DataKind::Xlsx => Ok(read_back_xlsx(
+            path,
+            expected,
+            file,
+            !expected.columns.is_empty(),
+            input.audit.len() as u64,
+        )),
     }
 }
 
@@ -1271,12 +1864,7 @@ fn safe_base(name: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // Package verification
 
-fn verify_package(
-    zip: &Path,
-    manifest: &Value,
-    data_path: &str,
-    extract_to: &Path,
-) -> Result<Vec<Value>> {
+fn verify_package(zip: &Path, manifest: &Value, data: &[(String, PathBuf)]) -> Result<Vec<Value>> {
     let entries = match read_entries(zip) {
         Ok(e) => e,
         Err(e) => {
@@ -1312,15 +1900,15 @@ fn verify_package(
                 match find(path) {
                     None => problems.push(format!("{path} is listed but missing")),
                     Some(e) => {
-                        // The data file is extracted while it is checked, for the inside read-back.
-                        let actual = if *path == data_path {
-                            let mut out =
-                                BufWriter::with_capacity(1 << 20, File::create(extract_to)?);
-                            let sha = read_entry(zip, e, &mut |b| Ok(out.write_all(b)?));
-                            out.flush()?;
-                            sha
-                        } else {
-                            read_entry(zip, e, &mut |_| Ok(()))
+                        // Data files are extracted while they are checked, for the inside read-back.
+                        let actual = match data.iter().find(|(p, _)| p == path) {
+                            Some((_, to)) => {
+                                let mut out = BufWriter::with_capacity(1 << 20, File::create(to)?);
+                                let sha = read_entry(zip, e, &mut |b| Ok(out.write_all(b)?));
+                                out.flush()?;
+                                sha
+                            }
+                            None => read_entry(zip, e, &mut |_| Ok(())),
                         };
                         match actual {
                             Ok(a) if a == *sha => {}
@@ -1448,32 +2036,62 @@ pub fn build_export(
         progress(phase, done);
         Ok(())
     };
-    let ext = if input.profile == "csv" {
-        "csv"
-    } else {
-        "parquet"
-    };
-    let data_name = format!("data.{ext}");
+    let plan = plan_export(
+        conn,
+        &input.view,
+        &input.columns,
+        input.row_count,
+        &input.profile,
+    )?;
     let tmp = input.workdir.join(format!("export-{}", input.export_id));
     std::fs::create_dir_all(&tmp)?;
     let cleanup = scopeguard(tmp.clone());
 
     step("Writing", 0, progress)?;
     let digests = view_digests(conn, input)?;
-    let data_path = tmp.join(&data_name);
-    if input.profile == "csv" {
-        write_csv(conn, input, &data_path, cancel)?;
-    } else {
-        write_parquet(conn, input, &data_path)?;
+    // Each data file with the columns it holds and their digests over exported values.
+    let shapes: Vec<(Vec<OutColumn>, Vec<String>)> = plan
+        .files
+        .iter()
+        .map(|f| {
+            (
+                f.columns
+                    .iter()
+                    .map(|&j| input.columns[j].clone())
+                    .collect(),
+                f.columns
+                    .iter()
+                    .map(|&j| digests[j].exported.clone())
+                    .collect(),
+            )
+        })
+        .collect();
+    for f in &plan.files {
+        let path = tmp.join(f.path);
+        match f.kind {
+            DataKind::Csv => write_csv(conn, input, &f.columns, &path, cancel)?,
+            DataKind::Parquet => write_parquet(conn, input, &path)?,
+            DataKind::Xlsx => write_xlsx(conn, input, &plan, &f.columns, &digests, &path, cancel)?,
+        }
     }
 
     step("Reading back", 1, progress)?;
-    let expected = Expected {
+    let expected_of = |k: usize| Expected {
         rows: input.row_count,
-        columns: &input.columns,
-        digests: digests.iter().map(|d| d.exported.clone()).collect(),
+        columns: &shapes[k].0,
+        digests: shapes[k].1.clone(),
     };
-    let data_checks = read_back(conn, input, &data_path, &expected, &data_name)?;
+    let mut data_checks: Vec<Value> = Vec::new();
+    for (k, f) in plan.files.iter().enumerate() {
+        data_checks.extend(read_back(
+            conn,
+            input,
+            f.kind,
+            &tmp.join(f.path),
+            &expected_of(k),
+            f.path,
+        )?);
+    }
 
     let columns: Vec<Value> = input
         .columns
@@ -1494,7 +2112,11 @@ pub fn build_export(
         .map(|e| format!("{}\n", canonical_json(e)))
         .collect();
     let issues_bytes = issues_csv(&input.issues);
-    let (data_sha, data_size) = file_sha256(&data_path)?;
+    let mut data_files: Vec<(String, String, u64)> = Vec::new();
+    for f in &plan.files {
+        let (sha, size) = file_sha256(&tmp.join(f.path))?;
+        data_files.push((f.path.to_string(), sha, size));
+    }
     let entry = |path: &str, size: u64, sha: &str, role: &str| json!({ "path": path, "size": size, "sha256": sha, "role": role });
     let data_ok = !data_checks.is_empty() && data_checks.iter().all(|c| c["ok"] == true);
     let mut manifest = json!({
@@ -1521,34 +2143,38 @@ pub fn build_export(
         "excludedRows": input.excluded_rows,
         "openIssues": open_issues(&input.issues),
         "assumptions": input.assumptions,
-        "substitutions": [],
+        "substitutions": plan.substitutions,
         "options": { "neutralizeFormulas": input.neutralize },
         "validation": { "ok": data_ok, "checks": data_checks },
         "auditHead": input.audit_head,
         "files": [],
     });
     let readme = render_readme(&manifest, &input.step_descriptions);
-    manifest["files"] = json!([
-        entry(&data_name, data_size, &data_sha, "data"),
+    let mut files: Vec<Value> = data_files
+        .iter()
+        .map(|(path, sha, size)| entry(path, *size, sha, "data"))
+        .collect();
+    files.extend([
         entry(
             "README.txt",
             readme.len() as u64,
             &sha256_hex(readme.as_bytes()),
-            "readme"
+            "readme",
         ),
         entry(
             "audit.jsonl",
             audit_text.len() as u64,
             &sha256_hex(audit_text.as_bytes()),
-            "audit"
+            "audit",
         ),
         entry(
             "issues.csv",
             issues_bytes.len() as u64,
             &sha256_hex(&issues_bytes),
-            "issues"
+            "issues",
         ),
     ]);
+    manifest["files"] = json!(files);
     let manifest_text = format!("{}\n", canonical_json(&manifest));
 
     step("Packaging", 2, progress)?;
@@ -1562,7 +2188,11 @@ pub fn build_export(
         .iter()
         .map(|(p, b)| (p.clone(), sha256_hex(b)))
         .collect();
-    sums.push((data_name.clone(), data_sha.clone()));
+    sums.extend(
+        data_files
+            .iter()
+            .map(|(p, sha, _)| (p.clone(), sha.clone())),
+    );
     let checksums: String = sorted_paths(sums)
         .iter()
         .map(|(p, s)| format!("{s}  {p}\n"))
@@ -1575,14 +2205,18 @@ pub fn build_export(
     let mut zip = ZipWriter::create(&package_path)?;
     let mut entries: Vec<(String, Option<Vec<u8>>)> =
         small.into_iter().map(|(p, b)| (p, Some(b))).collect();
-    entries.push((data_name.clone(), None));
+    entries.extend(data_files.iter().map(|(p, _, _)| (p.clone(), None)));
     entries.push(("CHECKSUMS.sha256".into(), Some(checksums.into_bytes())));
     for (path, bytes) in sorted_paths(entries) {
         match bytes {
             Some(b) => zip.add_bytes(&path, &b)?,
             None => {
-                let copied = zip.add_file(&path, &data_path, &mut |_| {})?;
-                if copied != data_sha {
+                let copied = zip.add_file(&path, &tmp.join(&path), &mut |_| {})?;
+                let written = data_files
+                    .iter()
+                    .find(|(p, _, _)| *p == path)
+                    .map(|(_, sha, _)| sha);
+                if written != Some(&copied) {
                     return Err(EngineError::internal(format!(
                         "{path} changed while it was packaged."
                     )));
@@ -1591,18 +2225,32 @@ pub fn build_export(
         }
     }
     zip.finish()?;
-    std::fs::remove_file(&data_path)?;
+    for (path, _, _) in &data_files {
+        std::fs::remove_file(tmp.join(path))?;
+    }
 
     step("Verifying the package", 3, progress)?;
-    let extracted = tmp.join(format!("inside-{data_name}"));
-    let package_checks = verify_package(&package_path, &manifest, &data_name, &extracted)?;
-    let inside_name = format!("package:{data_name}");
-    let inside = if extracted.exists() {
-        read_back(conn, input, &extracted, &expected, &inside_name)?
-    } else {
-        Vec::new()
-    };
-    let _ = std::fs::remove_file(&extracted);
+    let extracted: Vec<(String, PathBuf)> = plan
+        .files
+        .iter()
+        .map(|f| (f.path.to_string(), tmp.join(format!("inside-{}", f.path))))
+        .collect();
+    let package_checks = verify_package(&package_path, &manifest, &extracted)?;
+    let mut inside = Vec::new();
+    for (k, (f, (_, path))) in plan.files.iter().zip(&extracted).enumerate() {
+        if path.exists() {
+            let name = format!("package:{}", f.path);
+            inside.extend(read_back(
+                conn,
+                input,
+                f.kind,
+                path,
+                &expected_of(k),
+                &name,
+            )?);
+            let _ = std::fs::remove_file(path);
+        }
+    }
     let mut checks = manifest["validation"]["checks"]
         .as_array()
         .cloned()
@@ -1686,6 +2334,69 @@ fn scopeguard(dir: PathBuf) -> TempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plans_excel_substitutions_for_rows_and_text_beyond_its_limits() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE v (c0 VARCHAR, c1 DOUBLE); INSERT INTO v VALUES ('{}', 1), ('short', 2);",
+            "é".repeat(16_384)
+        ))
+        .unwrap();
+        let column = |id: &str, name: &str, kind| OutColumn {
+            id: id.into(),
+            name: name.into(),
+            unit: None,
+            typ: if kind == Kind::String {
+                "string"
+            } else {
+                "number"
+            }
+            .into(),
+            kind,
+        };
+        let columns = [
+            column("c0", "note", Kind::String),
+            column("c1", "rate", Kind::Number),
+        ];
+        let files = |p: &Plan| {
+            p.files
+                .iter()
+                .map(|f| (f.path, f.kind, f.columns.clone()))
+                .collect::<Vec<_>>()
+        };
+        // 16,384 two-byte characters are 32,768 bytes but only 16,384 UTF-16 units: they fit.
+        let fits = plan_export(&conn, "v", &columns, 2, "excel").unwrap();
+        assert!(fits.substitutions.is_empty());
+        assert_eq!(files(&fits), [("data.xlsx", DataKind::Xlsx, vec![0, 1])]);
+        conn.execute_batch(&format!(
+            "INSERT INTO v VALUES ('{}', 3)",
+            "x".repeat(32_768)
+        ))
+        .unwrap();
+        let long = plan_export(&conn, "v", &columns, 3, "excel").unwrap();
+        assert_eq!(long.substitutions[0]["what"], "the column note");
+        assert_eq!(
+            files(&long),
+            [
+                ("data.xlsx", DataKind::Xlsx, vec![1]),
+                ("data-long-text.csv", DataKind::Csv, vec![0])
+            ]
+        );
+        let many = plan_export(&conn, "v", &columns, 1_048_576, "excel").unwrap();
+        assert_eq!(many.substitutions[0]["what"], "1048576 data rows");
+        assert_eq!(
+            many.substitutions[0]["why"],
+            "An Excel sheet holds at most 1048575 data rows below its header."
+        );
+        assert_eq!(
+            files(&many),
+            [
+                ("data.csv", DataKind::Csv, vec![0, 1]),
+                ("data.xlsx", DataKind::Xlsx, vec![])
+            ]
+        );
+    }
 
     #[test]
     fn writes_csv_records_as_the_typescript_writer() {

@@ -1122,9 +1122,16 @@ impl Engine {
         }))
     }
 
+    /// Every export profile, with what each needs for this dataset (profileStatuses).
     pub fn list_export_profiles(&self, dataset: &Value) -> Result<Value> {
-        self.dataset(dataset)?;
-        Ok(json!(crate::export::profile_statuses()))
+        let d = self.dataset(dataset)?;
+        let stages = d.stages()?;
+        Ok(json!(crate::export::profile_statuses_for(
+            &self.conn,
+            &quote_ident(&d.out_view()),
+            &out_columns(&stages.output),
+            d.output_rows,
+        )?))
     }
 
     pub fn list_audit(&self, q: &Value) -> Result<Value> {

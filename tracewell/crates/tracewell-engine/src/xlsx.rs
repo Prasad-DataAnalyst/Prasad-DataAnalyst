@@ -10,6 +10,7 @@
 mod book;
 mod layout;
 mod legacy;
+pub mod writer;
 mod xml;
 
 use crate::csv::Note;
@@ -47,6 +48,10 @@ pub struct Cell {
     pub c: u32,
     pub v: Raw,
     pub formula: bool,
+    /// The cell's storage type (ST_CellType): 'n', 's', 'b', 'e', 'str', 'inlineStr' or 'd'.
+    pub t: &'static str,
+    /// True when the value became a date or time by the cell's number format or ISO text.
+    pub is_date: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +70,9 @@ pub struct Sheet {
     /// The used range of the cells that hold a value, e.g. 'A1:F120'; 'A1' for an empty sheet.
     pub dimension: String,
     pub merges: Vec<CellRange>,
+    /// The frozen pane: the first unfrozen row and column (A2 is (1, 0)).
+    pub frozen: Option<(u32, u32)>,
+    pub auto_filter: Option<CellRange>,
     /// Rows that hold at least one cell, in row order.
     pub rows: Vec<Row>,
 }
@@ -76,6 +84,8 @@ impl Sheet {
             state,
             dimension: "A1".into(),
             merges: Vec::new(),
+            frozen: None,
+            auto_filter: None,
             rows: Vec::new(),
         }
     }

@@ -14,6 +14,7 @@ import { nodeFs } from '@tw/io/node';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
 import { readBack } from '@tw/export';
 import { readZip, writeZip } from '@tw/io';
+import { openWorkbook } from '@tw/formats-xlsx';
 import {
   canonicalJson,
   type AuditEntry,
@@ -66,6 +67,26 @@ function content(e: AuditEntry): Partial<AuditEntry> {
 const CSV_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(csv|tsv)$/.test(n));
 
 const EXCEL_FIXTURES = FIXTURE_NAMES.filter((n) => /\.xlsx?$/.test(n));
+
+/**
+ * A sheet of an exported workbook as rows of values by column, without what depends on when each
+ * engine wrote it: the export time in the Report sheet, and the times and hashes of the Log
+ * sheet's entries. JSON in the Log sheet is compared parsed: its members come in each engine's order.
+ */
+function workbookSheet(bytes: Uint8Array, name: string): unknown[][] | null {
+  const book = openWorkbook(bytes);
+  if (!book.sheets.some((s) => s.name === name)) return null;
+  return book.readSheet(name).rows.map((r) => {
+    const out: unknown[] = new Array(Math.max(0, ...r.cells.map((c) => c.c + 1))).fill(null);
+    for (const c of r.cells) {
+      let v: unknown = c.v;
+      if (name === 'Log' && r.r > 0 && c.c >= 4 && c.c <= 6 && typeof v === 'string') v = JSON.parse(v);
+      if (name === 'Report' && typeof v === 'string') v = v.replace(/created \S+ by/, 'created … by');
+      out[c.c] = v;
+    }
+    return name === 'Log' && r.r > 0 ? out.filter((_, k) => k !== 1 && k !== 9) : out;
+  });
+}
 
 const SPREADSHEET =
   'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
@@ -272,9 +293,9 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   });
 
-  it.each(CSV_FIXTURES)('%s exports CSV and Parquet packages that both engines verify', async (name) => {
+  it.each(CSV_FIXTURES)('%s exports Excel, CSV and Parquet packages that both engines verify', async (name) => {
     const { nat, ref } = pairs.get(name) as { nat: string; ref: string };
-    for (const profile of ['csv', 'parquet'] as const) {
+    for (const profile of ['excel', 'csv', 'parquet'] as const) {
       const a = await native.client.awaitJob<ExportResult>(await native.client.exportData({ datasetId: nat, profile }));
       const b = await reference.awaitJob<ExportResult>(await reference.exportData({ datasetId: ref, profile }));
       expect(
@@ -290,15 +311,26 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       // The reference engine's readers verify the native package and its data file independently.
       const zip = a.bytes as Uint8Array;
       expect(readBack.package(zip, a.manifest).filter((c) => !c.ok)).toEqual([]);
-      const dataFile = `data.${profile}`;
+      const dataFile = profile === 'excel' ? 'data.xlsx' : `data.${profile}`;
       const data = readZip(zip).read(dataFile);
       const shape = { rowCount: a.manifest.dataset.rowCount, columns: a.manifest.dataset.columns };
       const checks =
-        profile === 'csv' ? readBack.csv(data, shape, dataFile) : await readBack.parquet(data, shape, dataFile);
+        profile === 'csv'
+          ? readBack.csv(data, shape, dataFile)
+          : profile === 'excel'
+            ? readBack.xlsx(data, shape, dataFile, { expectData: true, expectedLogRows: a.manifest.auditHead.seq })
+            : await readBack.parquet(data, shape, dataFile);
       expect(
         checks.filter((c) => !c.ok),
         `${profile}: reference read-back of the native file`,
       ).toEqual([]);
+      // Both workbooks hold the same sheets, apart from what the engines' clocks put in them.
+      if (profile === 'excel') {
+        const other = readZip(b.bytes as Uint8Array).read(dataFile);
+        for (const sheet of ['Data', 'Report', 'Log']) {
+          expect(workbookSheet(data, sheet), `${sheet} sheet`).toEqual(workbookSheet(other, sheet));
+        }
+      }
       // Both engines write the same CSV, byte for byte.
       if (profile === 'csv') expect(data).toEqual(readZip(b.bytes as Uint8Array).read(dataFile));
     }
@@ -309,6 +341,85 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     expect([a.ok, b.ok, a.manifest.options]).toEqual([true, true, { neutralizeFormulas: true }]);
     const csv = (r: ExportResult) => readZip(r.bytes as Uint8Array).read('data.csv');
     expect(csv(a)).toEqual(csv(b));
+  });
+
+  it('exports Excel workbooks the same way: long text, early dates, workbook sources and profile statuses', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-excel-export-'));
+    // A note longer than an Excel cell holds, beside short text; and a date Excel cannot store.
+    writeFileSync(
+      join(folder, 'long-text.csv'),
+      `well,note,rate\nA,${'é'.repeat(16_000)}${'x'.repeat(17_000)},1.5\nB,short,2\n`,
+    );
+    writeFileSync(join(folder, 'early.csv'), 'well,day\nA,1899-12-01\nB,2020-01-02\n');
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const settle = (run: () => Promise<unknown>) =>
+      run().then(
+        (v) => v,
+        (err: { code: string; message: string; fix: string }) => ({
+          code: err.code,
+          message: err.message,
+          fix: err.fix,
+        }),
+      );
+    const exported = async (e: EngineClient, datasetId: string) =>
+      e.awaitJob<ExportResult>(await e.exportData({ datasetId, profile: 'excel' }));
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Excel', profile: { ...PROFILE } });
+      const files = [
+        join(folder, 'long-text.csv'),
+        join(folder, 'early.csv'),
+        fixturePath('xlsx_merged_two_row_header_units.xlsx'),
+        fixturePath('xls_date1904.xls'),
+      ];
+      for (const [i, path] of files.entries()) {
+        const file = { kind: 'path' as const, path };
+        for (const e of [nat.client, lite]) await e.awaitJob<DatasetSummary>(await e.importFile(file));
+        const id = `d${i + 1}`;
+        // The profile list says before the export what the Excel profile will substitute; GeoJSON
+        // export is not native yet.
+        const statuses = async (e: EngineClient) =>
+          (await e.listExportProfiles(id)).filter((p) => p.profile.id !== 'geojson');
+        expect(await statuses(nat.client), `${path}: profiles`).toEqual(await statuses(lite));
+        const [a, b] = [await settle(() => exported(nat.client, id)), await settle(() => exported(lite, id))];
+        if ('code' in (b as object)) {
+          expect(a, `${path}: refusal`).toEqual(b);
+          continue;
+        }
+        const [x, y] = [a as ExportResult, b as ExportResult];
+        expect(
+          x.validation.checks.filter((c) => !c.ok),
+          `${path}: native checks`,
+        ).toEqual([]);
+        expect([x.ok, y.ok]).toEqual([true, true]);
+        expect(x.manifest.substitutions, path).toEqual(y.manifest.substitutions);
+        expect(x.manifest.files.map((f) => [f.path, f.role])).toEqual(y.manifest.files.map((f) => [f.path, f.role]));
+        expect(x.validation.checks.map((c) => [c.id, c.file ?? '', c.detail])).toEqual(
+          y.validation.checks.map((c) => [c.id, c.file ?? '', c.detail]),
+        );
+        expect(readBack.package(x.bytes as Uint8Array, x.manifest).filter((c) => !c.ok)).toEqual([]);
+        const [zx, zy] = [readZip(x.bytes as Uint8Array), readZip(y.bytes as Uint8Array)];
+        for (const sheet of ['Data', 'Report', 'Log']) {
+          expect(workbookSheet(zx.read('data.xlsx'), sheet), `${path}: ${sheet} sheet`).toEqual(
+            workbookSheet(zy.read('data.xlsx'), sheet),
+          );
+        }
+        for (const extra of ['data-long-text.csv', 'data.csv']) {
+          expect(zx.has(extra), extra).toBe(zy.has(extra));
+          if (zy.has(extra)) expect(zx.read(extra), extra).toEqual(zy.read(extra));
+        }
+      }
+      // The long note went to its own file, row for row with the Data sheet.
+      const longText = await exported(nat.client, 'd1');
+      expect(longText.manifest.substitutions.map((s) => [s.ruleId, s.what])).toEqual([
+        ['TW-EXP-002', 'the column note'],
+      ]);
+      expect(longText.manifest.files.map((f) => f.path)).toContain('data-long-text.csv');
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   it('writes a large package to the file it is given rather than through the pipe', async () => {

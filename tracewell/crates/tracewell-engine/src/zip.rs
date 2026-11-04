@@ -86,6 +86,12 @@ struct Central {
     offset: u64,
 }
 
+/// A piece of an entry written with add_parts.
+pub enum Part<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
+}
+
 /// A package being written.
 pub struct ZipWriter {
     out: BufWriter<File>,
@@ -193,6 +199,58 @@ impl ZipWriter {
             offset,
         });
         Ok(hex(&hash.finalize()))
+    }
+
+    /// Adds an entry made of parts in order, bytes from memory and whole files, without joining
+    /// them first; a worksheet is a header, a body written to a file, and a footer.
+    pub fn add_parts(&mut self, name: &str, parts: &[Part]) -> Result<()> {
+        let mut size = 0u64;
+        for part in parts {
+            size += match part {
+                Part::Bytes(b) => b.len() as u64,
+                Part::File(p) => std::fs::metadata(p)?.len(),
+            };
+        }
+        let offset = self.pos;
+        self.local_header(name.as_bytes(), 0, size)?;
+        let (mut crc, mut copied) = (0u32, 0u64);
+        let mut buf = vec![0u8; COPY_BYTES];
+        for part in parts {
+            match part {
+                Part::Bytes(b) => {
+                    crc = crc32_update(crc, b);
+                    self.put(b)?;
+                    copied += b.len() as u64;
+                }
+                Part::File(p) => {
+                    let mut input = File::open(p)?;
+                    loop {
+                        let n = input.read(&mut buf)?;
+                        if n == 0 {
+                            break;
+                        }
+                        crc = crc32_update(crc, &buf[..n]);
+                        self.put(&buf[..n])?;
+                        copied += n as u64;
+                    }
+                }
+            }
+        }
+        if copied != size {
+            return Err(invalid(format!("{name} changed while it was packaged.")));
+        }
+        self.out.flush()?;
+        let file = self.out.get_mut();
+        file.seek(SeekFrom::Start(offset + 14))?;
+        file.write_all(&crc.to_le_bytes())?;
+        file.seek(SeekFrom::Start(self.pos))?;
+        self.entries.push(Central {
+            name: name.as_bytes().to_vec(),
+            crc,
+            size,
+            offset,
+        });
+        Ok(())
     }
 
     /// Adds an entry copied from `len` bytes of `src` at `offset` (an entry stored in another

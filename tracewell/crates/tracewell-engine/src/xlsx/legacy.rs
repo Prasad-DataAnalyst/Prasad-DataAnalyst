@@ -282,6 +282,8 @@ const BOOLERR: u16 = 0x0205;
 const FORMULA: u16 = 0x0006;
 const STRING: u16 = 0x0207;
 const MERGEDCELLS: u16 = 0x00E5;
+const WINDOW2: u16 = 0x023E;
+const PANE: u16 = 0x0041;
 const BIFF8: u16 = 0x0600;
 
 const RESAVE_FIX: &str = "Open the file in Excel or LibreOffice and save it as an Excel workbook (.xlsx), then import the new copy.";
@@ -652,26 +654,31 @@ impl LegacyBook {
         let mut pending: Option<(u32, u32)> = None;
         let mut depth = 0i64;
         let date_kind = |ixfe: u16| self.formats.get(ixfe as usize).and_then(|f| f.date_kind);
+        let mut frozen_flag = false;
+        let mut pane: Option<(u32, u32)> = None;
         fn put(
             cells: &mut BTreeMap<u32, BTreeMap<u32, Cell>>,
             r: u16,
             c: u16,
-            v: Raw,
+            (v, t): (Raw, &'static str),
             formula: bool,
         ) {
             cells.entry(r as u32).or_default().insert(
                 c as u32,
                 Cell {
                     c: c as u32,
+                    is_date: matches!(v, Raw::Date(_) | Raw::DateTime(_)),
                     v,
                     formula,
+                    t,
                 },
             );
         }
-        let number = |ixfe: u16, n: f64| -> Raw {
-            date_kind(ixfe)
+        let number = |ixfe: u16, n: f64| -> (Raw, &'static str) {
+            let v = date_kind(ixfe)
                 .and_then(|k| serial_to_date_value(n, self.date1904, k))
-                .unwrap_or(Raw::Number(n))
+                .unwrap_or(Raw::Number(n));
+            (v, "n")
         };
         for rec in records(&self.stream, entry.offset as usize) {
             let rec = rec?;
@@ -720,7 +727,7 @@ impl LegacyBook {
                         &mut cells,
                         u16_at(d, 0)?,
                         u16_at(d, 2)?,
-                        Raw::Text(text.clone()),
+                        (Raw::Text(text.clone()), "s"),
                         false,
                     );
                 }
@@ -730,16 +737,16 @@ impl LegacyBook {
                         &mut cells,
                         u16_at(d, 0)?,
                         u16_at(d, 2)?,
-                        Raw::Text(text),
+                        (Raw::Text(text), "str"),
                         false,
                     );
                 }
                 BOOLERR => {
                     let value = d.get(6).copied();
                     let v = if d.get(7) == Some(&1) {
-                        Raw::Error(error_text(value).to_string())
+                        (Raw::Error(error_text(value).to_string()), "e")
                     } else {
-                        Raw::Bool(value != Some(0))
+                        (Raw::Bool(value != Some(0)), "b")
                     };
                     put(&mut cells, u16_at(d, 0)?, u16_at(d, 2)?, v, false);
                 }
@@ -753,9 +760,9 @@ impl LegacyBook {
                             pending = Some((r as u32, c as u32));
                         }
                         let v = match kind {
-                            Some(1) => Raw::Bool(d.get(8).is_some_and(|b| *b != 0)),
-                            Some(2) => Raw::Error(error_text(d.get(8).copied()).to_string()),
-                            _ => Raw::Null,
+                            Some(1) => (Raw::Bool(d.get(8).is_some_and(|b| *b != 0)), "b"),
+                            Some(2) => (Raw::Error(error_text(d.get(8).copied()).to_string()), "e"),
+                            _ => (Raw::Null, "str"),
                         };
                         put(&mut cells, r, c, v, true);
                     } else {
@@ -771,6 +778,8 @@ impl LegacyBook {
                         }
                     }
                 }
+                WINDOW2 => frozen_flag = u16_at(d, 0)? & 0x0008 != 0,
+                PANE => pane = Some((u16_at(d, 2)? as u32, u16_at(d, 0)? as u32)),
                 MERGEDCELLS => {
                     let count = u16_at(d, 0)? as usize;
                     let mut i = 0;
@@ -804,6 +813,8 @@ impl LegacyBook {
             state: entry.state,
             dimension: used_range(&rows),
             merges,
+            frozen: pane.filter(|&(r, c)| frozen_flag && (r > 0 || c > 0)),
+            auto_filter: None,
             rows,
         })
     }
