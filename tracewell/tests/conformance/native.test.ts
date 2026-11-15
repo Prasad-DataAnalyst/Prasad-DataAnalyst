@@ -790,6 +790,17 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       value: { value: 'high' },
       reason: 'Text in a number',
     }));
+    // An edit that names no value is refused, not taken as one that empties the cell.
+    for (const none of [null, {}, { text: 5 }, 'high']) {
+      await refusal(nulls, (d) => ({
+        kind: 'edit_cell',
+        datasetId: d,
+        rowId: 0,
+        columnId: pressure,
+        value: none as unknown as { text: string },
+        reason: 'No value given',
+      }));
+    }
     await refusal(nulls, (d) => ({
       kind: 'edit_cell',
       datasetId: d,

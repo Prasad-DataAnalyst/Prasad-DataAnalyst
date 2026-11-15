@@ -141,6 +141,21 @@ function editDraft(state: ProjectState, d: Extract<Decision, { kind: 'edit_cell'
         });
   }
   const type = plan.type.value;
+  // A caller outside TypeScript can send anything, and an edit that names no value is not one that
+  // empties the cell.
+  const input: unknown = d.value;
+  const named =
+    typeof input === 'object' &&
+    input !== null &&
+    ('text' in input ? typeof input.text === 'string' : 'value' in input);
+  if (!named) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      `The edit gives no value for ${plan.name}.`,
+      'Give the new value as text or as a typed value.',
+      { columnId: plan.id },
+    );
+  }
   let value: CellValue;
   if ('text' in d.value) {
     const parsed = cellParser(plan, ds.spec.options)(d.value.text);

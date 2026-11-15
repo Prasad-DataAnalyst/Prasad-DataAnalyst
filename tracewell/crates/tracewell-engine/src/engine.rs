@@ -1996,7 +1996,8 @@ fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, V
         .ok_or_else(|| EngineError::internal(format!("Column {col} has no type.")))?;
     let typ = plan["type"]["value"].as_str().unwrap_or("string");
     let name = plan["name"].as_str().unwrap_or(col);
-    let value = if let Some(text) = d["value"]["text"].as_str() {
+    let input = &d["value"];
+    let value = if let Some(text) = input.get("text").and_then(Value::as_str) {
         let csv = import_plan(&ds.spec)?;
         let parser = &csv
             .columns
@@ -2013,8 +2014,8 @@ fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, V
                 ));
             }
         }
-    } else {
-        let v = d["value"]["value"].clone();
+    } else if let (None, Some(v)) = (input.get("text"), input.get("value")) {
+        let v = v.clone();
         let fits = match kind {
             _ if v.is_null() => true,
             Kind::Integer => v
@@ -2036,6 +2037,12 @@ fn edit_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<String, V
             ));
         }
         v
+    } else {
+        // An edit that names no value is not one that empties the cell.
+        return Err(EngineError::invalid(
+            format!("The edit gives no value for {name}."),
+            "Give the new value as text or as a typed value.",
+        ));
     };
     let mut stmt = conn.prepare(&format!(
         "SELECT __loc, {} FROM {} WHERE __rid = ?",

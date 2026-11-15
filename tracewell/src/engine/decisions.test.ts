@@ -48,6 +48,20 @@ describe('decisions', () => {
     expect(err).toMatchObject({ code: 'INVALID_INPUT', fix: expect.stringContaining('number') });
   });
 
+  it.each([null, {}, { text: 5 }, 'high'])('an edit whose value is %j names no value and is refused', async (value) => {
+    const { engine, id, pressure } = await setup();
+    const before = (await engine.getProject()).auditHead;
+    const err = await engine
+      .decide({ ...edit(id, pressure, '1'), value } as unknown as Decision)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'INVALID_INPUT',
+      message: 'The edit gives no value for Pressure.',
+      fix: 'Give the new value as text or as a typed value.',
+    });
+    expect((await engine.getProject()).auditHead).toEqual(before);
+  });
+
   it('a valid edit is logged with old, new, reason, actor and locator, and shows as edited', async () => {
     const { engine, id, pressure } = await setup();
     const [entry] = await engine.decide(edit(id, pressure, '1508.6'));
