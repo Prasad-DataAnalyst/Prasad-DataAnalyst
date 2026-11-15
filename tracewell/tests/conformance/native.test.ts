@@ -64,6 +64,27 @@ function content(e: AuditEntry): Partial<AuditEntry> {
   return rest;
 }
 
+/**
+ * Notes where two answers hold their members in a different order. Text made from an answer (a
+ * geometry in the grid, a value in the log) and lists made member by member (how a file is read)
+ * follow that order, and toEqual does not compare it.
+ */
+function orderDifferences(a: unknown, b: unknown, path: string, out: Map<string, string>): void {
+  if (a instanceof Uint8Array || b instanceof Uint8Array) return;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    a.forEach((x, i) => orderDifferences(x, b[i], `${path}[]`, out));
+    return;
+  }
+  if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
+  if (typeof b !== 'object' || b === null || Array.isArray(b)) return;
+  const [ka, kb] = [Object.keys(a), Object.keys(b)];
+  if (ka.join('\n') !== kb.join('\n') && !out.has(path)) {
+    out.set(path, `native: ${ka.join(', ')} | reference: ${kb.join(', ')}`);
+  }
+  const other = b as Record<string, unknown>;
+  for (const [k, v] of Object.entries(a)) orderDifferences(v, other[k], `${path}.${k}`, out);
+}
+
 const CSV_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(csv|tsv)$/.test(n));
 
 const EXCEL_FIXTURES = FIXTURE_NAMES.filter((n) => /\.xlsx?$/.test(n));
@@ -71,7 +92,7 @@ const EXCEL_FIXTURES = FIXTURE_NAMES.filter((n) => /\.xlsx?$/.test(n));
 /**
  * A sheet of an exported workbook as rows of values by column, without what depends on when each
  * engine wrote it: the export time in the Report sheet, and the times and hashes of the Log
- * sheet's entries. JSON in the Log sheet is compared parsed: its members come in each engine's order.
+ * sheet's entries. The JSON text of the Log sheet is compared as written, member order included.
  */
 function workbookSheet(bytes: Uint8Array, name: string): unknown[][] | null {
   const book = openWorkbook(bytes);
@@ -80,7 +101,6 @@ function workbookSheet(bytes: Uint8Array, name: string): unknown[][] | null {
     const out: unknown[] = new Array(Math.max(0, ...r.cells.map((c) => c.c + 1))).fill(null);
     for (const c of r.cells) {
       let v: unknown = c.v;
-      if (name === 'Log' && r.r > 0 && c.c >= 4 && c.c <= 6 && typeof v === 'string') v = JSON.parse(v);
       if (name === 'Report' && typeof v === 'string') v = v.replace(/created \S+ by/, 'created … by');
       out[c.c] = v;
     }
@@ -2473,6 +2493,167 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('gives the members of every answer in the order the TypeScript engine gives them', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    const both = async <T>(call: string, f: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [a, b] = [await f(nat.client), await f(lite)];
+      orderDifferences(a, b, call, found);
+      return [a, b];
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Order', profile: { ...PROFILE } });
+      await both('hello', (e) => e.hello());
+      await both('listUnits', (e) => e.listUnits());
+      await both('listRulePacks', (e) => e.listRulePacks());
+      const files = [
+        'csv_well_daily_golden.csv',
+        'csv_latlon_swapped_out_of_range.csv',
+        'xlsx_two_tables_one_sheet.xlsx',
+        'json_api_wrapper_nested.json',
+        'parquet_well_daily_typed.parquet',
+      ] as const;
+      for (const name of files) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        const at = (call: string) => `${call} (${name})`;
+        await both(at('sniff'), (e) => e.sniff(file));
+        const [d] = await both(at('importFile'), async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+        const id = d.id;
+        const [schema] = await both(at('getSchema'), (e) => e.getSchema(id));
+        const first = schema.columns[0]?.id as string;
+        await both(at('getRows'), (e) => e.getRows({ datasetId: id, stage: 'working', offset: 0, limit: 5 }));
+        for (const c of schema.columns.slice(0, 4)) {
+          await both(at('getColumnStats'), (e) => e.getColumnStats(id, c.id));
+          await both(at('explainCell'), (e) => e.explainCell(id, 0, c.id));
+        }
+        await both(at('runChecks'), async (e) => e.awaitJob<CheckSummary>(await e.runChecks(id)));
+        const [issues] = await both(at('listIssues'), (e) => e.listIssues({ datasetId: id, limit: 50 }));
+        for (const i of issues.items.slice(0, 3)) {
+          await both(at('listOccurrences'), (e) => e.listOccurrences(i.id, { offset: 0, limit: 5 }));
+        }
+        await both(at('getHealth'), (e) => e.getHealth(id));
+        // The native engine does not write GeoJSON yet, and says why where the other has nothing to say.
+        await both(at('listExportProfiles'), async (e) =>
+          (await e.listExportProfiles(id)).filter((p) => p.profile.id !== 'geojson'),
+        );
+        const measured = schema.columns.find((c) => c.type.value === 'number' && c.unit.value !== null);
+        const to = (await lite.listUnits({ compatibleWith: measured?.unit.value ?? 'psia' })).find(
+          (u) => u.code !== measured?.unit.value,
+        );
+        if (measured !== undefined && to !== undefined) {
+          const step: StepInput = { kind: 'convert_unit', columnId: measured.id, toUnit: to.code, mode: 'add_column' };
+          await both(at('previewStep'), (e) => e.previewStep(id, step));
+          await both(at('applyStep'), async (e) =>
+            e.awaitJob<StepResult>(await e.applyStep(id, step, 'Unit for the report')),
+          );
+        }
+        const kept: StepInput = { kind: 'filter', predicate: { column: first, op: 'not_null' }, label: 'Named rows' };
+        await both(at('previewStep, filter'), (e) => e.previewStep(id, kept));
+        await both(at('applyStep, filter'), async (e) =>
+          e.awaitJob<StepResult>(await e.applyStep(id, kept, 'Rows with a name')),
+        );
+        await both(at('getSchema, output'), (e) => e.getSchema(id, 'output'));
+        await both(at('getRows, output'), (e) => e.getRows({ datasetId: id, stage: 'output', offset: 0, limit: 5 }));
+        await both(at('decide, override_detection'), (e) =>
+          e.decide({
+            kind: 'override_detection',
+            datasetId: id,
+            columnId: first,
+            property: 'nullMarkers',
+            value: ['n/a', '-'],
+            reason: 'Checked by hand',
+          }),
+        );
+        await both(at('decide, edit_cell'), (e) =>
+          e.decide({
+            kind: 'edit_cell',
+            datasetId: id,
+            rowId: 0,
+            columnId: first,
+            value: { text: '' },
+            reason: 'Corrected by hand',
+          }),
+        );
+        await both(at('explainCell, edited'), (e) => e.explainCell(id, 0, first));
+        const issue = issues.items[0];
+        if (issue !== undefined) {
+          await both(at('decide, comment_issue'), (e) =>
+            e.decide({ kind: 'comment_issue', issueId: issue.id, text: 'Checked with the field team' }),
+          );
+          const [accepted] = await both(at('decide, accept_issue'), (e) =>
+            e.decide({ kind: 'accept_issue', issueId: issue.id, rows: 'all', reason: 'Confirmed by the operator' }),
+          );
+          await both(at('decide, exclude_rows'), (e) =>
+            e.decide({ kind: 'exclude_rows', datasetId: id, rows: [1, 2], reason: 'Test records only' }),
+          );
+          await both(at('decide, revert'), (e) =>
+            e.decide({ kind: 'revert', seq: accepted[0]?.seq as number, reason: 'Accepted by mistake' }),
+          );
+          await both(at('listIssues, decided'), (e) => e.listIssues({ datasetId: id, limit: 50 }));
+        }
+        await both(at('saveMappingTemplate'), (e) => e.saveMappingTemplate({ datasetId: id, name: `As ${name}` }));
+        await both(at('listMappingTemplates'), (e) => e.listMappingTemplates());
+        const [ra, rb] = await both(at('saveRecipe'), (e) =>
+          e.saveRecipe({ datasetId: id, name: `Run ${name}`, export: { profile: 'csv', neutralizeFormulas: true } }),
+        );
+        // The recipe files hold the same text, but for when each engine's clock says they were saved.
+        const text = (r: typeof ra) => new TextDecoder().decode(r.bytes).replace(/"savedAt": "[^"]*"/, '');
+        expect(text(ra), `${name}: recipe file`).toBe(text(rb));
+        await both(at('planRecipe'), (e) =>
+          e.planRecipe(id, { kind: 'bytes', bytes: (e === lite ? rb : ra).bytes, name: 'run.twr' }),
+        );
+        await both(at('exportData'), async (e) =>
+          e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile: 'csv' })),
+        );
+        await both(at('removeStep'), async (e) => {
+          const steps = (await e.getProject()).datasets.find((x) => x.id === id)?.steps ?? [];
+          return e.removeStep(id, steps[steps.length - 1]?.id as string, 'Every row again');
+        });
+        await both(at('getProject'), (e) => e.getProject());
+      }
+      await both('decide, set_project_area', (e) =>
+        e.decide({ kind: 'set_project_area', bbox: [0, 50, 10, 60], reason: 'North Sea block' }),
+      );
+      // A recipe run on a second copy of the first file, then the project saved and opened again.
+      const again = { kind: 'path' as const, path: fixturePath(files[0]) };
+      const [copy] = await both('importFile, again', async (e) =>
+        e.awaitJob<DatasetSummary>(await e.importFile(again)),
+      );
+      const [na, nb] = await both('saveRecipe, checked', (e) =>
+        e.saveRecipe({ datasetId: 'd1', name: 'Monthly', export: null }),
+      );
+      await both('applyRecipe', async (e) =>
+        e.awaitJob<RecipeRun>(
+          await e.applyRecipe(
+            copy.id,
+            { kind: 'bytes', bytes: (e === lite ? nb : na).bytes, name: 'monthly.twr' },
+            'December figures from the historian',
+          ),
+        ),
+      );
+      await both('listIssues, compared', (e) => e.listIssues({ datasetId: copy.id, limit: 50 }));
+      await both('listAudit', (e) => e.listAudit({ offset: 0, limit: 500 }));
+      await both('verifyAudit', (e) => e.verifyAudit());
+      const [sa, sb] = await both('saveProject', async (e) => e.awaitJob<SaveResult>(await e.saveProject()));
+      await both('openProject', async (e) =>
+        e.awaitJob<ProjectOpenReport>(
+          await e.openProject({
+            kind: 'bytes',
+            bytes: (e === lite ? sb : sa).bytes as Uint8Array,
+            name: 'Order.twp',
+          }),
+        ),
+      );
+      await both('getProject, opened', (e) => e.getProject());
+      await both('listAudit, opened', (e) => e.listAudit({ offset: 0, limit: 500 }));
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 90_000);
 
   it('refuses what it does not support yet with a reason and a fix', async () => {
     const geojson = { kind: 'path' as const, path: fixturePath('geojson_wells_points_wgs84.geojson') };

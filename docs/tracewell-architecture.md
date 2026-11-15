@@ -165,6 +165,7 @@ Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 2. Every engine maintains the same **audit log format**, the same **canonical value encoding** and the same **digests** (§9.4), so outputs can be compared bit for bit.
 3. Engines report `capabilities` (formats, memory budget, spill, CRS transform). The UI adapts to them rather than assuming.
 4. Protocol versions follow semantic versioning. A major mismatch is refused with a clear message.
+5. Every engine gives the **members of an answer in the same order**. The order shows wherever an answer is written out as JSON text (a geometry in the grid, an old or new value in the log, the Log sheet of an export) or listed member by member (how a file is read), so it is part of the contract, and the parity suite compares it for every kind of answer.
 
 ### 4.3 Path to 10 GB+ (G4, NFR-03, NFR-04)
 
@@ -635,6 +636,7 @@ interface AuditEntry {
 - `hash = SHA-256(utf8(canonicalJson(entry without hash)))`.
 - The genesis `prev` is `SHA-256('tracewell-audit-v1:' + projectId)`.
 - Timestamps come from the injected `Clock`.
+- An entry is held as its canonical text reads back and laid out as the interface above lists its members, with those of its actor, target, method and rule in the order of their own types; `old`, `new` and `payload` keep the sorted keys of the canonical text. Every engine holds it so, which is why a value from the log reads the same wherever it is written out.
 
 ### 9.2 Rules
 
@@ -752,7 +754,7 @@ On any failure, no package is offered. The validation report is shown, and `TW-E
 
 ZIP entries are sorted and use a fixed timestamp (1980-01-01). DEFLATE is pure JavaScript (fflate), so bytes are identical in Node and the browser.
 
-**Native engine (slice 2).** The native engine follows the same pipeline for the Excel, CSV and Parquet profiles. The CSV writer is ported, so both engines write the same `data.csv` byte for byte; Parquet is written by DuckDB `COPY`. The workbook writer is ported too: the Data sheet's rows are streamed to a file as they are read from the view, so a sheet of a million rows is never held in memory, and the Report and Log sheets, the frozen header, the filter and the date formats are the TypeScript writer's. The Excel plan is the same: more data rows than a sheet holds go to `data.csv`, and text longer than a cell holds to `data-long-text.csv`, each listed as a TW-EXP-002 substitution, which the profile list shows before the export. Read-back uses separate readers (the ported CSV reader in strict mode; DuckDB's Parquet reader; the ported workbook reader, which checks storage types, the frozen header and the filter as well as the values), and the package is re-opened, its checksums verified and every data file inside extracted and read back again. One known difference: the Log sheet writes the members of each entry's target, old and new values in sorted order, where the TypeScript writer keeps the order it built them in. Entries are STORED, with ZIP64 fields when an entry or offset reaches 4 GiB, so a package of any size opens in standard tools. A request may name a file (`target: {kind: 'path'}`); a package larger than 256 MiB that names none stays in the work folder, and `ExportResult.path` says where.
+**Native engine (slice 2).** The native engine follows the same pipeline for the Excel, CSV and Parquet profiles. The CSV writer is ported, so both engines write the same `data.csv` byte for byte; Parquet is written by DuckDB `COPY`. The workbook writer is ported too: the Data sheet's rows are streamed to a file as they are read from the view, so a sheet of a million rows is never held in memory, and the Report and Log sheets, the frozen header, the filter and the date formats are the TypeScript writer's. The Excel plan is the same: more data rows than a sheet holds go to `data.csv`, and text longer than a cell holds to `data-long-text.csv`, each listed as a TW-EXP-002 substitution, which the profile list shows before the export. Read-back uses separate readers (the ported CSV reader in strict mode; DuckDB's Parquet reader; the ported workbook reader, which checks storage types, the frozen header and the filter as well as the values), and the package is re-opened, its checksums verified and every data file inside extracted and read back again. The JSON text in the Log sheet is the same too, because both engines hold an entry's members in one order (section 9.1). Entries are STORED, with ZIP64 fields when an entry or offset reaches 4 GiB, so a package of any size opens in standard tools. A request may name a file (`target: {kind: 'path'}`); a package larger than 256 MiB that names none stays in the work folder, and `ExportResult.path` says where.
 
 **Formula neutralisation (slice 2, `ExportRequest.neutralizeFormulas`).** For CSV data files, text that a spreadsheet program would run as a formula (starting with `= + - @`, a tab or a carriage return) gets one more leading apostrophe, which spreadsheets show as text (OWASP CSV injection guidance). Text that already starts with apostrophes before such a character gets one more too, so read-back removes exactly one and the column digests still match. The manifest records `options.neutralizeFormulas`, and the README says how to restore the values.
 
@@ -978,7 +980,7 @@ Versions verified with `npm view <pkg> version license` on 19 October 2026. Each
 | Crate                 | Version   | Licence           | Purpose                                                                                            |
 | --------------------- | --------- | ----------------- | -------------------------------------------------------------------------------------------------- |
 | duckdb                | 1.10506.0 | MIT               | DuckDB 1.5 (bundled), Arrow appender, Parquet. Version 1.20000.0 was rejected: a development build |
-| serde_json            | 1.0.154   | MIT OR Apache-2.0 | Protocol messages; `float_roundtrip` for exact numbers                                             |
+| serde_json            | 1.0.154   | MIT OR Apache-2.0 | Protocol messages; `float_roundtrip` for exact numbers, `preserve_order` for the order of members  |
 | sha2                  | 0.11.1    | MIT OR Apache-2.0 | SHA-256 of files, audit chain and packs                                                            |
 | memchr                | 2.8.3     | Unlicense OR MIT  | Fast delimiter and quote search in the CSV reader                                                  |
 | unicode-normalization | 0.1.25    | MIT OR Apache-2.0 | NFKC for unit names, as the TypeScript `normalize('NFKC')`                                         |

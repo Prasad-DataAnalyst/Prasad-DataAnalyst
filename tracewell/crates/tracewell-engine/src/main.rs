@@ -318,9 +318,19 @@ fn serve(args: Args) -> io::Result<()> {
             .and_then(|mut e| e.reply_bytes.take());
         match (bytes, own) {
             (Some(b), _) => {
+                // The bytes go where the TypeScript engine has them: an export's package before
+                // its manifest, a saved project's file last.
                 let framed = framing::with_bytes(
                     &reply,
-                    |v, marker| v["value"]["result"]["bytes"] = marker,
+                    |v, marker| {
+                        if let Some(result) = v["value"]["result"].as_object_mut() {
+                            let at = result
+                                .keys()
+                                .position(|k| k == "manifest")
+                                .unwrap_or(result.len());
+                            result.shift_insert(at, "bytes".into(), marker);
+                        }
+                    },
                     b.len(),
                 );
                 shared.send_framed(&framed, &[&b]);

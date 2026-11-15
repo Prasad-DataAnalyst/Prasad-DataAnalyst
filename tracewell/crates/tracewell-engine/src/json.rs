@@ -8,6 +8,7 @@
 //! here are parsed by this module. Records are found by scanning the text a chunk at a time, so
 //! memory stays bounded by the largest single record, however large the file.
 
+use crate::canonical::array_index;
 use crate::csv::format_count;
 use crate::error::{EngineError, Result};
 use crate::parse::Raw;
@@ -66,18 +67,6 @@ fn not_an_object(place: &str, v: &J) -> EngineError {
 
 fn is_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
-}
-
-/// A key that is an array index (a canonical integer below 2^32 - 1), which JavaScript lists first.
-fn array_index(key: &str) -> Option<u32> {
-    let b = key.as_bytes();
-    if b.is_empty() || (b.len() > 1 && b[0] == b'0') || !b.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    key.parse::<u64>()
-        .ok()
-        .filter(|n| *n < u32::MAX as u64)
-        .map(|n| n as u32)
 }
 
 /// Members as a JavaScript object holds them: indices first, in order; a repeated key keeps its

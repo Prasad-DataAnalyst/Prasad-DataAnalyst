@@ -676,11 +676,11 @@ impl Engine {
             "datasetId": d.id,
             "name": d.name,
             "source": source_of(&d.spec),
-            "rowCount": if output { d.output_rows } else { d.visible_rows() },
             "columns": cols.iter().map(|c| c.schema.clone()).collect::<Vec<_>>(),
             "crs": d.spec["crs"],
             "geometryColumn": null,
             "partial": false,
+            "rowCount": if output { d.output_rows } else { d.visible_rows() },
         }))
     }
 
@@ -3320,6 +3320,15 @@ fn column_namer(d: &Dataset) -> impl Fn(&str) -> String + use<> {
     }
 }
 
+/// The rule packs a check.run entry records, as the log holds them: what a dataset was last
+/// checked with.
+fn recorded_packs(run: &Value) -> Vec<Value> {
+    run["payload"]["packs"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// The rule packs this engine checks with, as references.
 fn builtin_packs() -> Vec<Value> {
     check_packs().iter().map(|p| p.reference()).collect()
@@ -3553,14 +3562,15 @@ pub fn apply_recipe(
                 let packs = builtin_packs();
                 let mut run = draft("check.run", json!({ "datasetId": dataset_id }));
                 run.insert("payload".into(), json!({ "packs": packs }));
-                let seq = engine.append(run, None)?["seq"].as_u64().unwrap_or(0);
+                let run = engine.append(run, None)?;
+                let seq = run["seq"].as_u64().unwrap_or(0);
                 let p = engine.project.as_mut().ok_or_else(|| {
                     EngineError::internal("The project disappeared during the recipe.")
                 })?;
                 let d = dataset_mut(p, &dataset_id)?;
                 let n = d.row_count;
                 merge_check_run(&mut d.issues, drafts, seq, n);
-                d.check_packs = packs;
+                d.check_packs = recorded_packs(&run);
             }
             let d = engine.dataset(&json!(dataset_id))?;
             let mut result = json!({
@@ -3729,8 +3739,8 @@ pub fn remove_step(
     let dataset_id = d.id.clone();
     let mut input = step;
     if let Some(o) = input.as_object_mut() {
-        o.remove("id");
-        o.remove("seq");
+        o.shift_remove("id");
+        o.shift_remove("seq");
     }
     let mut entry = draft(
         "step.remove",
@@ -3851,7 +3861,8 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
             let packs: Vec<Value> = check_packs().iter().map(|p| p.reference()).collect();
             let mut entry = draft("check.run", json!({ "datasetId": dataset_id }));
             entry.insert("payload".into(), json!({ "packs": packs }));
-            let seq = engine.append(entry, None)?["seq"].as_u64().unwrap_or(0);
+            let run = engine.append(entry, None)?;
+            let seq = run["seq"].as_u64().unwrap_or(0);
             let (by_severity, by_rule) = summarize(&drafts);
             let issues = drafts.len();
             let duration = (engine.clock.now_ms() - started).max(0);
@@ -3863,7 +3874,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
                     EngineError::internal("The dataset disappeared during the checks.")
                 })?;
             merge_check_run(&mut ds.issues, drafts, seq, row_count);
-            ds.check_packs = packs.clone();
+            ds.check_packs = recorded_packs(&run);
             Ok(json!({
                 "datasetId": dataset_id,
                 "packs": packs,
@@ -4021,7 +4032,8 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
                         json!({ "packageName": out.result["packageName"] }),
                     );
                     entry.insert("payload".into(), json!({ "record": record }));
-                    engine.append(entry, None)?;
+                    // The project lists the record as the log holds it.
+                    let record = engine.append(entry, None)?["payload"]["record"].clone();
                     if let Some(p) = engine.project.as_mut() {
                         p.exports.push(record);
                     }
@@ -5343,7 +5355,7 @@ impl Reopen<'_> {
         let d = p.datasets.iter_mut().find(|d| d.id == id).ok_or_else(|| {
             EngineError::internal(format!("The log checks dataset {id} before importing it."))
         })?;
-        d.check_packs = packs;
+        d.check_packs = recorded_packs(e);
         if self.cached(id, seq) {
             return Ok(CheckReplay::Superseded);
         }

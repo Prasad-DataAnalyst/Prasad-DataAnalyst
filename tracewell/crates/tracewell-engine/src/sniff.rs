@@ -1522,11 +1522,11 @@ impl Sniffed {
             "detections": detections,
             "header": self.header,
             "sampleRows": rows,
-            "notes": self.notes,
         });
         if let Some(sheets) = &self.sheets {
             out["sheets"] = json!(sheets);
         }
+        out["notes"] = json!(self.notes);
         out
     }
 

@@ -4,7 +4,7 @@
 //! checked one after another against the dataset as the earlier ones leave it, so a recipe that
 //! does not fit is refused before anything changes.
 
-use crate::canonical::sha256_hex;
+use crate::canonical::{in_order, sha256_hex};
 use crate::error::{EngineError, Result};
 use crate::steps::StageColumn;
 use serde_json::{Value, json};
@@ -154,8 +154,8 @@ pub fn build(
         .map(|s| {
             let mut input = s.clone();
             if let Some(o) = input.as_object_mut() {
-                o.remove("id");
-                o.remove("seq");
+                o.shift_remove("id");
+                o.shift_remove("seq");
             }
             input
         })
@@ -311,7 +311,115 @@ pub fn parse(bytes: &[u8], file_name: &str) -> Result<Value> {
             fix(),
         ));
     }
-    Ok(doc)
+    Ok(in_schema_order(doc))
+}
+
+/// A predicate with its members as the predicate schema lists them, all the way down.
+fn predicate_in_order(p: Value) -> Value {
+    const MEMBERS: &[&str] = &[
+        "all",
+        "any",
+        "not",
+        "column",
+        "op",
+        "value",
+        "low",
+        "high",
+        "values",
+        "text",
+        "caseSensitive",
+        "bbox",
+        "geometry",
+        "lat",
+        "lon",
+    ];
+    let Value::Object(members) = in_order(p, MEMBERS) else {
+        unreachable!("a predicate is an object");
+    };
+    Value::Object(
+        members
+            .into_iter()
+            .map(|(k, v)| {
+                let v = match (k.as_str(), v) {
+                    ("all" | "any", Value::Array(items)) => {
+                        Value::Array(items.into_iter().map(predicate_in_order).collect())
+                    }
+                    ("not", inner @ Value::Object(_)) => predicate_in_order(inner),
+                    (_, v) => v,
+                };
+                (k, v)
+            })
+            .collect(),
+    )
+}
+
+/// The recipe with the members of each of its parts in the order the recipe schema lists them,
+/// which is how the TypeScript engine holds a recipe it has read, whatever order the file has.
+fn in_schema_order(doc: Value) -> Value {
+    const RECIPE: &[&str] = &[
+        "format",
+        "formatVersion",
+        "id",
+        "name",
+        "version",
+        "savedAt",
+        "savedBy",
+        "appVersion",
+        "columns",
+        "check",
+        "steps",
+        "export",
+        "baseline",
+    ];
+    const STEP: &[&str] = &[
+        "kind",
+        "columnId",
+        "toUnit",
+        "mode",
+        "predicate",
+        "label",
+        "columnIds",
+    ];
+    let each = |v: Value, f: &dyn Fn(Value) -> Value| match v {
+        Value::Array(items) => Value::Array(items.into_iter().map(f).collect()),
+        other => other,
+    };
+    let part = |v: Value, name: &str, f: &dyn Fn(Value) -> Value| match v {
+        Value::Object(mut o) => {
+            if let Some(slot) = o.get_mut(name) {
+                *slot = f(slot.take());
+            }
+            Value::Object(o)
+        }
+        other => other,
+    };
+    let Value::Object(members) = in_order(doc, RECIPE) else {
+        unreachable!("a recipe is an object");
+    };
+    Value::Object(
+        members
+            .into_iter()
+            .map(|(k, v)| {
+                let v = match k.as_str() {
+                    "columns" => each(v, &|c| in_order(c, &["key", "name", "type", "unit"])),
+                    "check" => part(in_order(v, &["packs"]), "packs", &|packs| {
+                        each(packs, &|p| in_order(p, &["id", "version", "sha256"]))
+                    }),
+                    "steps" => each(v, &|s| {
+                        part(in_order(s, STEP), "predicate", &predicate_in_order)
+                    }),
+                    "export" => in_order(v, &["profile", "neutralizeFormulas"]),
+                    "baseline" => part(in_order(v, &["rows", "issues"]), "issues", &|issues| {
+                        each(issues, &|i| {
+                            in_order(i, &["ruleId", "columns", "severity", "flagged"])
+                        })
+                    }),
+                    _ => v,
+                };
+                (k, v)
+            })
+            .collect(),
+    )
 }
 
 /// How the recipe maps onto a dataset, and the steps as they would be applied there (planRecipe).
@@ -475,6 +583,48 @@ mod tests {
         );
         assert_eq!(mapped["predicate"]["all"][0]["column"], "c9~kPa");
         assert_eq!(mapped["predicate"]["all"][1]["not"]["column"], "c1");
+    }
+
+    /// A recipe that was read holds its members as the schema lists them, as the TypeScript
+    /// engine's does, whatever order the file has them in.
+    #[test]
+    fn a_recipe_read_from_a_file_follows_the_order_of_the_schema() {
+        let file = json!({
+            "baseline": { "issues": [{ "flagged": 2, "severity": "warning", "columns": ["Pressure"], "ruleId": "DQ-1" }], "rows": 9 },
+            "export": { "neutralizeFormulas": true, "profile": "csv" },
+            "steps": [
+                { "columnId": "c4", "kind": "convert_unit", "mode": "replace", "toUnit": "kPa" },
+                { "label": "Good rows", "kind": "filter", "predicate": { "all": [
+                    { "high": 9, "low": 1, "op": "between", "column": "c4" },
+                    { "not": { "values": ["a"], "op": "in", "column": "c0" } },
+                    { "lon": "c2", "lat": "c1", "bbox": [0, 0, 1, 1] }
+                ] } },
+                { "columnIds": ["c0"], "kind": "select_columns" }
+            ],
+            "check": { "packs": [{ "sha256": "ab", "id": "tracewell.system", "version": "0.1.0" }] },
+            "columns": [{ "unit": "psia", "type": "number", "name": "Pressure", "key": "c4" }],
+            "appVersion": "0.1.0", "savedBy": "Prasad", "savedAt": "2026-01-01T00:00:00.000Z",
+            "version": 1, "name": "A", "id": recipe_id("A"), "formatVersion": 1, "format": "tracewell-recipe"
+        });
+        let text = serde_json::to_string(&in_schema_order(file)).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                concat!(
+                    r#"{{"format":"tracewell-recipe","formatVersion":1,"id":"{}","name":"A","version":1,"#,
+                    r#""savedAt":"2026-01-01T00:00:00.000Z","savedBy":"Prasad","appVersion":"0.1.0","#,
+                    r#""columns":[{{"key":"c4","name":"Pressure","type":"number","unit":"psia"}}],"#,
+                    r#""check":{{"packs":[{{"id":"tracewell.system","version":"0.1.0","sha256":"ab"}}]}},"#,
+                    r#""steps":[{{"kind":"convert_unit","columnId":"c4","toUnit":"kPa","mode":"replace"}},"#,
+                    r#"{{"kind":"filter","predicate":{{"all":[{{"column":"c4","op":"between","low":1,"high":9}},"#,
+                    r#"{{"not":{{"column":"c0","op":"in","values":["a"]}}}},{{"bbox":[0,0,1,1],"lat":"c1","lon":"c2"}}]}},"#,
+                    r#""label":"Good rows"}},{{"kind":"select_columns","columnIds":["c0"]}}],"#,
+                    r#""export":{{"profile":"csv","neutralizeFormulas":true}},"#,
+                    r#""baseline":{{"rows":9,"issues":[{{"ruleId":"DQ-1","columns":["Pressure"],"severity":"warning","flagged":2}}]}}}}"#
+                ),
+                recipe_id("A")
+            )
+        );
     }
 
     #[test]

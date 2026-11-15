@@ -1,8 +1,9 @@
 //! Canonical encodings and digests of SAD section 9.4 (normative): the same bytes as the
 //! TypeScript engine and the Python oracle, so audit hashes and column digests agree across engines.
 
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 
 /// ECMAScript Number.prototype.toString for a finite double, with -0 written as 0.
 pub fn canonical_number(x: f64) -> String {
@@ -162,6 +163,62 @@ pub fn canonical_cell(v: &Value) -> String {
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A key that is an array index (a canonical integer below 2^32 - 1), which JavaScript lists first.
+pub fn array_index(key: &str) -> Option<u32> {
+    let b = key.as_bytes();
+    if b.is_empty() || (b.len() > 1 && b[0] == b'0') || !b.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    key.parse::<u64>()
+        .ok()
+        .filter(|n| *n < u64::from(u32::MAX))
+        .map(|n| n as u32)
+}
+
+/// A value as JavaScript reads its canonical JSON text back: the members of every object in
+/// UTF-16 code unit order, with array indices first and in numeric order, and -0 as 0.
+pub fn round_tripped(v: Value) -> Value {
+    match v {
+        Value::Number(n) if n.as_f64().is_some_and(|x| x == 0.0 && x.is_sign_negative()) => {
+            json!(0)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(round_tripped).collect()),
+        Value::Object(o) => {
+            let mut members: Vec<(String, Value)> = o.into_iter().collect();
+            members.sort_by(|(a, _), (b, _)| match (array_index(a), array_index(b)) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => a.encode_utf16().cmp(b.encode_utf16()),
+            });
+            Value::Object(
+                members
+                    .into_iter()
+                    .map(|(k, v)| (k, round_tripped(v)))
+                    .collect(),
+            )
+        }
+        other => other,
+    }
+}
+
+/// The members named in `order` first and in that order, then whatever else the object holds.
+pub fn in_order(v: Value, order: &[&str]) -> Value {
+    let Value::Object(o) = v else {
+        return v;
+    };
+    let mut rest: Vec<(String, Value)> = o.into_iter().collect();
+    let mut out = Map::new();
+    for name in order {
+        if let Some(at) = rest.iter().position(|(k, _)| k == name) {
+            let (k, v) = rest.remove(at);
+            out.insert(k, v);
+        }
+    }
+    out.extend(rest);
+    Value::Object(out)
 }
 
 #[cfg(test)]
