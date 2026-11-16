@@ -1,0 +1,9 @@
+~ The smallest Tamas program. A line starting with ~ is a note for humans.
+name: "world"
+show "Hello, {name}!"
+
+square(n) -> n * n
+[1, 2, 3, 4]
+  |> map(square)
+  |> filter(n -> n > 3)
+  |> show

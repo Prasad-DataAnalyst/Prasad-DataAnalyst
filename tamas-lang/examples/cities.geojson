@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "properties": {"name": "Chennai", "population": 6748000},
+     "geometry": {"type": "Point", "coordinates": [80.2707, 13.0827]}},
+    {"type": "Feature", "properties": {"name": "Hyderabad", "population": 6810000},
+     "geometry": {"type": "Point", "coordinates": [78.4867, 17.385]}},
+    {"type": "Feature", "properties": {"name": "Dubai", "population": 3331000},
+     "geometry": {"type": "Point", "coordinates": [55.2708, 25.2048]}},
+    {"type": "Feature", "properties": {"name": "Singapore", "population": 5454000},
+     "geometry": {"type": "Point", "coordinates": [103.8198, 1.3521]}}
+  ]
+}

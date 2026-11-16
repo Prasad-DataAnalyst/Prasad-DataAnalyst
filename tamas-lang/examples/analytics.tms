@@ -1,0 +1,14 @@
+~ Data analytics: read a CSV, group it, total it - with money as a real unit.
+sales: read("sales.csv")
+
+revenue(row) -> row.units * row.price as INR
+
+total: sum(map(sales, revenue))
+show "Total revenue: {total}"
+
+each region, rows in group(sales, r -> r.region) {
+  show "  {region}: {sum(map(rows, revenue))} from {len(rows)} sale(s)"
+}
+
+best: sort(sales, r -> 0 - r.units * r.price)[0]
+show "Best line: {best.product} in {best.region}"

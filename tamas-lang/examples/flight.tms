@@ -1,0 +1,18 @@
+~ Aviation: numbers carry their units, so mixing them up is an error, not a crash landing.
+flight: {
+  id: "TM-101"
+  route: ["MAA", "DXB"]
+  distance: 1580 nmi
+  cruise: 460 kn
+  fuel_burn: 2400 kg/h
+}
+
+time: flight.distance / flight.cruise as h
+fuel: time * flight.fuel_burn as t
+
+show "Flight {flight.id}: {round(time, 2)} in the air, {round(fuel, 1)} of fuel"
+show "Distance in km:", round(flight.distance as km)
+
+~ Define your own unit in one line.
+unit furlong: 201.168 m
+show "The same trip is", round(flight.distance as furlong), "- for the nostalgic"

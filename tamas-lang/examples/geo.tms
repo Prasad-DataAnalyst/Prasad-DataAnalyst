@@ -1,0 +1,16 @@
+~ GeoJSON is read as ordinary Tamas data - no conversion step, no special library.
+cities: read("cities.geojson").features
+home: cities[0]
+
+each city in cities {
+  when city.properties.name = home.properties.name { skip }
+  d: geo.distance(home, city)
+  show "{home.properties.name} -> {city.properties.name}: {round(d)}"
+}
+
+~ Build new GeoJSON and save it.
+route: geo.feature(
+  geo.line(map(cities, c -> c.geometry.coordinates)),
+  {name: "Grand tour", length_km: round(number(geo.length(map(cities, c -> c.geometry.coordinates))))}
+)
+show "Route length: {route.properties.length_km} km"

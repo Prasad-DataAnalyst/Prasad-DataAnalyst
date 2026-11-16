@@ -1,0 +1,6 @@
+~ Borrow any installed Python library through a bridge. Tamas stays Tamas.
+math: bridge("python", "math")
+stats: bridge("python", "statistics")
+
+show "pi is roughly", round(math.pi, 5)
+show "median:", stats.median([3, 9, 4, 1, 7])
