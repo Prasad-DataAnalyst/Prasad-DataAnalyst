@@ -539,6 +539,64 @@ pub fn detect_layout(text: &str, complete: bool) -> Result<Detected> {
 // ---------------------------------------------------------------------------------------------
 // Records (records.ts)
 
+/// The end of the whole value starting at `i` (after white space), or None when the text stops
+/// inside it and more may come.
+pub fn value_extent(b: &[u8], i: usize, complete: bool) -> Option<usize> {
+    let mut j = i;
+    match b.get(j)? {
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            let mut in_string = false;
+            while j < b.len() {
+                let c = b[j];
+                if in_string {
+                    if c == b'\\' {
+                        j += 1;
+                    } else if c == b'"' {
+                        in_string = false;
+                    }
+                } else if c == b'"' {
+                    in_string = true;
+                } else if c == b'{' || c == b'[' {
+                    depth += 1;
+                } else if c == b'}' || c == b']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j + 1);
+                    }
+                }
+                j += 1;
+            }
+            None
+        }
+        b'"' => {
+            j += 1;
+            while j < b.len() {
+                match b[j] {
+                    b'\\' => j += 2,
+                    b'"' => return Some(j + 1),
+                    _ => j += 1,
+                }
+            }
+            None
+        }
+        _ => {
+            while j < b.len() && !matches!(b[j], b',' | b']' | b'}') && !is_ws(b[j]) {
+                j += 1;
+            }
+            (j < b.len() || complete).then_some(j)
+        }
+    }
+}
+
+/// Skips JSON white space from `i`.
+pub fn skip_space(b: &[u8], mut i: usize) -> usize {
+    while i < b.len() && is_ws(b[i]) {
+        i += 1;
+    }
+    i
+}
+
 /// Where a tree scan stands, between whole values.
 #[derive(Clone, Debug, PartialEq)]
 enum At {
@@ -635,63 +693,12 @@ impl TreeScan {
         ))
     }
 
-    /// The end of the whole value starting at `i` (after white space), or None when the text
-    /// stops inside it and more may come.
     fn extent(&self, i: usize, complete: bool) -> Option<usize> {
-        let b = &self.buf;
-        let mut j = i;
-        match b.get(j)? {
-            b'{' | b'[' => {
-                let mut depth = 0usize;
-                let mut in_string = false;
-                while j < b.len() {
-                    let c = b[j];
-                    if in_string {
-                        if c == b'\\' {
-                            j += 1;
-                        } else if c == b'"' {
-                            in_string = false;
-                        }
-                    } else if c == b'"' {
-                        in_string = true;
-                    } else if c == b'{' || c == b'[' {
-                        depth += 1;
-                    } else if c == b'}' || c == b']' {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(j + 1);
-                        }
-                    }
-                    j += 1;
-                }
-                None
-            }
-            b'"' => {
-                j += 1;
-                while j < b.len() {
-                    match b[j] {
-                        b'\\' => j += 2,
-                        b'"' => return Some(j + 1),
-                        _ => j += 1,
-                    }
-                }
-                None
-            }
-            _ => {
-                while j < b.len() && !matches!(b[j], b',' | b']' | b'}') && !is_ws(b[j]) {
-                    j += 1;
-                }
-                (j < b.len() || complete).then_some(j)
-            }
-        }
+        value_extent(&self.buf, i, complete)
     }
 
-    /// Skips JSON white space from `i`.
-    fn skip_ws(&self, mut i: usize) -> usize {
-        while i < self.buf.len() && is_ws(self.buf[i]) {
-            i += 1;
-        }
-        i
+    fn skip_ws(&self, i: usize) -> usize {
+        skip_space(&self.buf, i)
     }
 
     /// After a value in a container: the separator ',' and the start of the next item, or None

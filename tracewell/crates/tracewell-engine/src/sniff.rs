@@ -8,8 +8,11 @@
 //! analysis acts on (delimiters, quotes, CR and LF) is ASCII, so byte offsets and code-unit
 //! offsets find the same splits. Lengths the TypeScript measures in code units are measured so.
 
+use crate::canonical::stringify;
 use crate::csv::{TableLayout, TableReader, format_count, plural};
-use crate::detect::{DetectOptions, collect_assumptions, det, detect_columns, detect_lat_lon_crs};
+use crate::detect::{
+    DetectOptions, collect_assumptions, det, detect_columns, detect_lat_lon_crs, is_geometry_plan,
+};
 use crate::encoding::TextDecoder;
 use crate::error::{EngineError, Result};
 use crate::import::column_parser;
@@ -21,6 +24,7 @@ use serde_json::{Map, Value, json};
 use std::io::Read;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// The bytes the first preview reads, so it is fast for any file size.
 pub const PREVIEW_MAX_BYTES: usize = 1_048_576;
@@ -376,14 +380,8 @@ fn top_level_type(text: &str) -> Option<String> {
     None
 }
 
-/// The source format from the first bytes and the file name (format.ts detectFormat): CSV, TSV,
-/// Parquet or JSON; Excel and GeoJSON files, which the native engine does not read yet, are refused.
+/// The source format from the first bytes and the file name (format.ts detectFormat).
 fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
-    let refuse = |what: &str| {
-        Err(EngineError::unsupported(format!(
-            "the import preview of {what} files"
-        )))
-    };
     // A ZIP archive is read as an .xlsx workbook, no other ZIP-based format being supported, and
     // an OLE compound file as a legacy .xls; the reader refuses what is not a workbook.
     if head.starts_with(&[0x50, 0x4B, 0x03, 0x04])
@@ -405,11 +403,7 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
         let geojson = ext == "geojson"
             || (first == Some('{')
                 && top_level_type(body).is_some_and(|t| GEOJSON_TYPES.contains(&t.as_str())));
-        return if geojson {
-            refuse("GeoJSON")
-        } else {
-            Ok("json")
-        };
+        return Ok(if geojson { "geojson" } else { "json" });
     }
     if ext == "tsv" || ext == "tab" {
         return Ok("tsv");
@@ -1503,6 +1497,8 @@ pub struct Sniffed {
     thousands: String,
     /// A workbook's sheets with their tables (SheetInfo); None for other formats.
     sheets: Option<Vec<Value>>,
+    /// A GeoJSON file's geometries, one per sample row, as JSON text; None for other formats.
+    geometries: Option<Vec<Option<String>>>,
 }
 
 impl Sniffed {
@@ -1511,9 +1507,14 @@ impl Sniffed {
         let rows: Vec<Value> = self
             .rows
             .iter()
-            .map(|(loc, fields)| {
+            .enumerate()
+            .map(|(i, (loc, fields))| {
                 let fields: Vec<Value> = fields.iter().map(Raw::to_json).collect();
-                json!({ "srcLoc": loc, "fields": fields })
+                let mut row = json!({ "srcLoc": loc, "fields": fields });
+                if let Some(geometries) = &self.geometries {
+                    row["geometry"] = geometry_json(geometries.get(i).and_then(|g| g.as_deref()));
+                }
+                row
             })
             .collect();
         let mut out = json!({
@@ -1537,6 +1538,15 @@ impl Sniffed {
             .map(|(_, v)| v)
     }
 }
+
+/// A geometry held as JSON text, as the value an answer gives: its members in the order written.
+pub fn geometry_json(text: Option<&str>) -> Value {
+    text.and_then(|t| serde_json::from_str(t).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// A sample row: its locator and its fields.
+type SampleRow = (u64, Vec<Raw>);
 
 /// A sample's header rows, data rows with their lines, and the reader's notes on them.
 type Sample = (Vec<Vec<String>>, Vec<(u64, Vec<Raw>)>, Vec<Value>);
@@ -1693,6 +1703,7 @@ fn sniff_text(
         decimal: decimal_value.chars().next().unwrap_or('.'),
         thousands: thousands_value,
         sheets: None,
+        geometries: None,
     })
 }
 
@@ -1804,7 +1815,7 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         detect_format(&head, src.name)?.to_string()
     } else {
         match options["format"].as_str() {
-            Some(f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json")) => f.to_string(),
+            Some(f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson")) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
                     "the import preview of {} files",
@@ -1815,6 +1826,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     };
     if format == "json" {
         return sniff_json(src, &head, options);
+    }
+    if format == "geojson" {
+        return sniff_geojson(src, &head, options);
     }
     if format == "xlsx" {
         return sniff_xlsx(src, options);
@@ -1954,11 +1968,73 @@ fn sniff_json(src: &Source, head: &[u8], options: &Value) -> Result<Sniffed> {
         decimal: '.',
         thousands: String::new(),
         sheets: None,
+        geometries: None,
     };
     // Settings chosen for the file read it again with them (resniffByReading).
     if !options.is_null() && &s.options != options {
         let layout = crate::json::Layout::of_options(&options["json"]);
         s.rows = json_rows(src.path, &layout, SAMPLE_MAX_ROWS)?;
+        s.options = options.clone();
+    }
+    Ok(s)
+}
+
+/// The first features of a GeoJSON file as rows, read from the start of the file.
+fn geojson_rows(path: &Path, limit: usize) -> Result<Vec<crate::geojson::Row>> {
+    let stop = EngineError::new("FOUND", "", "");
+    let mut rows = Vec::new();
+    let read = crate::import::read_geojson(
+        path,
+        &mut |row| {
+            rows.push(row);
+            // The sample stops at its last row, as the TypeScript reader stops reading there.
+            if rows.len() >= limit {
+                return Err(stop.clone());
+            }
+            Ok(())
+        },
+        &AtomicBool::new(false),
+        &AtomicU64::new(0),
+    );
+    match read {
+        Err(e) if e.code != "FOUND" => Err(e),
+        _ => Ok(rows),
+    }
+}
+
+/// A GeoJSON file's sniff (geojson/importer.ts sniff): the property keys, the geometry types and
+/// the CRS from at most its first MiB, with those features as the sample.
+fn sniff_geojson(src: &Source, head: &[u8], options: &Value) -> Result<Sniffed> {
+    let complete = head.len() as u64 >= src.size;
+    let e = sniff_encoding(head);
+    let text = decode_all(head, e.value, e.bom_length)?;
+    let found = crate::geojson::sniff(&text, head.len() as u64, complete, SAMPLE_MAX_ROWS)?;
+    let mut detections = vec![("encoding".to_string(), e.detection)];
+    detections.extend(found.detections);
+    let split = |rows: Vec<crate::geojson::Row>| -> (Vec<SampleRow>, Vec<Option<String>>) {
+        rows.into_iter()
+            .map(|(loc, fields, geometry)| ((loc, fields), geometry))
+            .unzip()
+    };
+    let (rows, geometries) = split(found.rows);
+    let mut s = Sniffed {
+        format: "geojson".into(),
+        options: json!({ "format": "geojson", "geojson": { "nested": "json-text" } }),
+        detections,
+        header: vec![found.keys],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+        sheets: None,
+        geometries: Some(geometries),
+    };
+    // Settings that differ in any way read the file again with them (resniffByReading); the
+    // TypeScript engine compares the settings as text, so the order of their members counts.
+    if !options.is_null() && stringify(&s.options) != stringify(options) {
+        let (rows, geometries) = split(geojson_rows(src.path, SAMPLE_MAX_ROWS)?);
+        s.rows = rows;
+        s.geometries = Some(geometries);
         s.options = options.clone();
     }
     Ok(s)
@@ -1982,6 +2058,7 @@ fn sniff_xlsx(src: &Source, options: &Value) -> Result<Sniffed> {
         decimal: '.',
         thousands: String::new(),
         sheets: Some(x.sheets),
+        geometries: None,
     })
 }
 
@@ -2010,6 +2087,7 @@ fn sniff_parquet(conn: &Connection, src: &Source) -> Result<Sniffed> {
         decimal: '.',
         thousands: String::new(),
         sheets: None,
+        geometries: None,
     })
 }
 
@@ -2187,7 +2265,7 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
         // The footer states the row count exactly.
         return s.detection("rowCount").and_then(|d| d["value"].as_u64());
     }
-    if s.format == "json" {
+    if s.format == "json" || s.format == "geojson" {
         return None;
     }
     if s.format == "xlsx" {
@@ -2235,6 +2313,7 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
     let o = DetectOptions {
         decimal: s.decimal,
         thousands: s.thousands.clone(),
+        geometry_column: s.format == "geojson",
     };
     let fields: Vec<Vec<Raw>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
     let planned = detect_columns(&s.header, &fields, &o);
@@ -2252,11 +2331,19 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
         .rows
         .iter()
         .take(PREVIEW_ROWS)
-        .map(|(_, f)| {
+        .enumerate()
+        .map(|(i, (_, f))| {
             let cells: Vec<Value> = columns
                 .iter()
                 .zip(&parsers)
                 .map(|(c, parser)| {
+                    // A geometry comes beside the fields, never from one (rowParser).
+                    if let (Some(geometries), true) = (&s.geometries, is_geometry_plan(c)) {
+                        return match geometries.get(i).and_then(|g| g.as_deref()) {
+                            Some(text) => json!({ "geometry": geometry_json(Some(text)) }),
+                            None => Value::Null,
+                        };
+                    }
                     let index = c["sourceIndex"].as_u64().unwrap_or(0) as usize;
                     match parser.parse_raw(f.get(index).unwrap_or(&Raw::Null)) {
                         Parsed::Value(cell, _) => crate::engine::cell_json(&cell),
@@ -2267,10 +2354,14 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
             Value::from(cells)
         })
         .collect();
+    // The dataset's CRS takes the place of the file's own detection, where there is one.
     let mut extra: Vec<(&str, &Value)> =
         s.detections.iter().map(|(k, v)| (k.as_str(), v)).collect();
     if let Some(c) = &crs {
-        extra.push(("crs", c));
+        match extra.iter_mut().find(|(k, _)| *k == "crs") {
+            Some(slot) => slot.1 = c,
+            None => extra.push(("crs", c)),
+        }
     }
     let assumptions = collect_assumptions("preview", &columns, &extra);
     let estimated = estimate_rows(src, s);

@@ -5,7 +5,7 @@
  *
  * The `engine` option says which engine the page gets: the TypeScript one in its worker (`lite`),
  * or the native one through the host bridge (`native`, SAD decision D-14). Tests tagged @lite use
- * what only the Lite engine has, such as workbooks, and run in the Lite project only.
+ * what only the Lite engine has, such as a lowered memory budget, and run in the Lite project only.
  */
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import type { FixtureName } from '@tw/fixtures';

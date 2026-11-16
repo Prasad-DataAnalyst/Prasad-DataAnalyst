@@ -13,6 +13,9 @@ pub enum Kind {
     Boolean,
     Date,
     DateTime,
+    /// A GeoJSON geometry, held as the JSON text JavaScript writes for it. Geometries come from
+    /// a GeoJSON feature's geometry, never from a field; a field under this type does not fit.
+    Geometry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +165,7 @@ impl ColumnParser {
             }
             Kind::Date => parse_date(raw, self.format).map(Cell::Date),
             Kind::DateTime => parse_datetime(raw, self.format).map(Cell::DateTime),
+            Kind::Geometry => None,
         };
         match value {
             Some(v) => Parsed::Value(v, None),

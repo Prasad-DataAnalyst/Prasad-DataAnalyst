@@ -2,7 +2,7 @@
 //! UTF-8 byte length of its canonical encoding in ASCII decimal, ':', then the encoding itself.
 //! The canonical encoding is canonical.rs canonical_cell, written here straight from typed values.
 
-use crate::canonical::{canonical_number, write_canonical_number};
+use crate::canonical::{canonical_json, canonical_number, write_canonical_number};
 use crate::parse::Kind;
 use crate::time::{date_text, iso_from_millis};
 use duckdb::arrow::array::{Array, ArrayRef, AsArray};
@@ -24,6 +24,8 @@ pub enum Cell {
     DateText(String),
     /// A date-time read back from text, kept as written.
     DateTimeText(String),
+    /// A geometry as the JSON text JavaScript writes for it.
+    Geometry(String),
 }
 
 impl Cell {
@@ -56,6 +58,14 @@ impl Cell {
                 out.push_str("t:");
                 out.push_str(t);
             }
+            Cell::Geometry(text) => {
+                out.push_str("g:");
+                // The canonical form sorts the members; text that is not JSON stands as it is.
+                match serde_json::from_str::<serde_json::Value>(text) {
+                    Ok(v) => out.push_str(&canonical_json(&v)),
+                    Err(_) => out.push_str(text),
+                }
+            }
         }
     }
 
@@ -68,7 +78,7 @@ impl Cell {
             Cell::Text(s) => s.clone(),
             Cell::Date(d) => date_text(*d),
             Cell::DateTime(t) => iso_from_millis(*t),
-            Cell::DateText(s) | Cell::DateTimeText(s) => s.clone(),
+            Cell::DateText(s) | Cell::DateTimeText(s) | Cell::Geometry(s) => s.clone(),
         }
     }
 
@@ -98,6 +108,15 @@ pub fn cell_at(a: &ArrayRef, i: usize, kind: Kind) -> Cell {
             Cell::Text(a.as_string::<i64>().value(i).to_string())
         }
         (Kind::String, DataType::Utf8View) => Cell::Text(a.as_string_view().value(i).to_string()),
+        (Kind::Geometry, DataType::Utf8) => {
+            Cell::Geometry(a.as_string::<i32>().value(i).to_string())
+        }
+        (Kind::Geometry, DataType::LargeUtf8) => {
+            Cell::Geometry(a.as_string::<i64>().value(i).to_string())
+        }
+        (Kind::Geometry, DataType::Utf8View) => {
+            Cell::Geometry(a.as_string_view().value(i).to_string())
+        }
         _ => Cell::Null,
     }
 }
@@ -157,6 +176,18 @@ pub fn read_back_cell(a: &ArrayRef, i: usize, kind: Kind) -> Option<Cell> {
             Cell::Text(a.as_string::<i64>().value(i).to_string())
         }
         (Kind::String, DataType::Utf8View) => Cell::Text(a.as_string_view().value(i).to_string()),
+        // JSON text of an object with a type member (retypeText).
+        (Kind::Geometry, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+            let text = match a.data_type() {
+                DataType::Utf8 => a.as_string::<i32>().value(i),
+                DataType::LargeUtf8 => a.as_string::<i64>().value(i),
+                _ => a.as_string_view().value(i),
+            };
+            serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .filter(|g| g.get("type").is_some())?;
+            Cell::Geometry(text.to_string())
+        }
         _ => return None,
     })
 }

@@ -396,10 +396,8 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         const file = { kind: 'path' as const, path };
         for (const e of [nat.client, lite]) await e.awaitJob<DatasetSummary>(await e.importFile(file));
         const id = `d${i + 1}`;
-        // The profile list says before the export what the Excel profile will substitute; GeoJSON
-        // export is not native yet.
-        const statuses = async (e: EngineClient) =>
-          (await e.listExportProfiles(id)).filter((p) => p.profile.id !== 'geojson');
+        // The profile list says before the export what the Excel profile will substitute.
+        const statuses = async (e: EngineClient) => e.listExportProfiles(id);
         expect(await statuses(nat.client), `${path}: profiles`).toEqual(await statuses(lite));
         const [a, b] = [await settle(() => exported(nat.client, id)), await settle(() => exported(lite, id))];
         if ('code' in (b as object)) {
@@ -2545,10 +2543,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
           await both(at('listOccurrences'), (e) => e.listOccurrences(i.id, { offset: 0, limit: 5 }));
         }
         await both(at('getHealth'), (e) => e.getHealth(id));
-        // The native engine does not write GeoJSON yet, and says why where the other has nothing to say.
-        await both(at('listExportProfiles'), async (e) =>
-          (await e.listExportProfiles(id)).filter((p) => p.profile.id !== 'geojson'),
-        );
+        await both(at('listExportProfiles'), (e) => e.listExportProfiles(id));
         const measured = schema.columns.find((c) => c.type.value === 'number' && c.unit.value !== null);
         const to = (await lite.listUnits({ compatibleWith: measured?.unit.value ?? 'psia' })).find(
           (u) => u.code !== measured?.unit.value,
@@ -2666,17 +2661,359 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   }, 90_000);
 
-  it('refuses what it does not support yet with a reason and a fix', async () => {
-    const geojson = { kind: 'path' as const, path: fixturePath('geojson_wells_points_wgs84.geojson') };
-    await expect(native.client.sniff(geojson)).rejects.toMatchObject({
-      code: 'PROTOCOL_MISMATCH',
-      fix: expect.any(String),
-    });
-    await expect(native.client.importFile(geojson)).rejects.toMatchObject({
-      code: 'PROTOCOL_MISMATCH',
-      message: expect.stringContaining('GeoJSON'),
-    });
-  });
+  /** An answer, or the code, message and fix of the error that refused it. */
+  const settled = (run: () => Promise<unknown>) =>
+    run().then(
+      (v) => v,
+      (err: { code: string; message: string; fix: string }) => ({
+        code: err.code,
+        // Why a JSON parser stopped is the parser's own wording; the rest of the message is not.
+        message: err.message.replace(
+          /^(The GeoJSON file is not valid JSON: ).*?( \(after [\d,]+ features\)\.)?$/,
+          '$1…$2',
+        ),
+        fix: err.fix,
+      }),
+    );
+
+  /** Every answer the engines give about a dataset that a user can see, compared in full. */
+  const sameDataset = async (
+    a: EngineClient,
+    b: EngineClient,
+    id: string,
+    label: string,
+    found: Map<string, string>,
+  ) => {
+    const pair = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(a)), await settled(() => run(b))];
+      expect(x, `${label}: ${what}`).toEqual(y);
+      orderDifferences(x, y, `${label}: ${what}`, found);
+      return [x as T, y as T];
+    };
+    const [schema] = await pair('schema', (e) => e.getSchema(id));
+    const [rows] = await pair('rows', (e) => allRows(e, id));
+    for (const c of schema.columns) {
+      await pair(`statistics of ${c.name}`, (e) => e.getColumnStats(id, c.id));
+      for (let r = 0; r < rows.length; r++)
+        await pair(`lineage of ${c.name} row ${r}`, (e) => e.explainCell(id, r, c.id));
+    }
+    const [issues] = await pair('issues', async (e) => (await e.listIssues({ datasetId: id, limit: 1000 })).items);
+    for (const i of issues) {
+      await pair(`occurrences of ${i.ruleId}`, (e) => e.listOccurrences(i.id, { offset: 0, limit: 1000 }));
+    }
+    await pair('health', (e) => e.getHealth(id));
+    await pair('profiles', (e) => e.listExportProfiles(id));
+  };
+
+  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => n.endsWith('.geojson'));
+
+  it('reads GeoJSON files as the TypeScript engine does: preview, rows, lineage, statistics and checks', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'GeoJSON', profile: { ...PROFILE } });
+      for (const name of GEOJSON_FIXTURES) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        const [pa, pb] = [await nat.client.sniff(file), await lite.sniff(file)];
+        expect(pa, `${name}: preview`).toEqual(pb);
+        orderDifferences(pa, pb, `${name}: preview`, found);
+        const [da, db] = [
+          await nat.client.awaitJob<DatasetSummary>(await nat.client.importFile(file)),
+          await lite.awaitJob<DatasetSummary>(await lite.importFile(file)),
+        ];
+        expect(da, `${name}: import`).toEqual(db);
+        const [ca, cb] = [
+          await nat.client.awaitJob<CheckSummary>(await nat.client.runChecks(da.id)),
+          await lite.awaitJob<CheckSummary>(await lite.runChecks(db.id)),
+        ];
+        expect({ ...ca, durationMs: 0 }, `${name}: checks`).toEqual({ ...cb, durationMs: 0 });
+        await sameDataset(nat.client, lite, da.id, name, found);
+      }
+      const content = async (e: EngineClient) =>
+        (await e.listAudit({ offset: 0, limit: 500 })).items.map(({ at: _a, prev: _p, hash: _h, ...rest }) => rest);
+      expect(await content(nat.client)).toEqual(await content(lite));
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 90_000);
+
+  it('reads unusual GeoJSON as the TypeScript engine does, and refuses what is not GeoJSON alike', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-geojson-'));
+    const files: [string, string][] = [
+      // Numbers past what a double holds, -0, repeated keys, keys that are array indices, nested
+      // values, missing and null properties and geometries, and a member the reader ignores.
+      [
+        'numbers.geojson',
+        '{"type":"FeatureCollection","features":[' +
+          '{"type":"Feature","properties":{"n":1e999,"10":"ten","2":"two","a":{"b":[1,2]},"a":-0},' +
+          '"geometry":{"type":"Point","coordinates":[1e999,-0],"bbox":[-0,0,1,1]}},' +
+          '{"type":"Feature","properties":null,"geometry":null},' +
+          '{"type":"Feature","geometry":{"coordinates":[[2,58],[2.5,58.5]],"type":"LineString","type":"MultiPoint"}},' +
+          '{"type":"Feature","properties":{"n":"x"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,1],[1,0]]]},"id":7}]}',
+      ],
+      [
+        'feature.geojson',
+        '{"properties":{"well":"A","depth":12.5},"geometry":{"coordinates":[2,58],"type":"Point"},"type":"Feature"}',
+      ],
+      ['geometry.geojson', '{"coordinates":[[1,2],[3,4]],"bbox":[1,2,3,4],"type":"LineString"}'],
+      ['empty.geojson', '{"type":"FeatureCollection","features":[]}'],
+      [
+        'bom.geojson',
+        '﻿{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"é":"ü"},"geometry":null}]}',
+      ],
+      [
+        'urn.geojson',
+        '{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::27700"}},' +
+          '"features":[{"type":"Feature","properties":{"id":1},"geometry":{"type":"Point","coordinates":[400000,80000]}}]}',
+      ],
+      [
+        'crs84.geojson',
+        '{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"urn:ogc:def:crs:OGC:1.3:CRS84"}},' +
+          '"features":[{"type":"Feature","properties":{"id":1},"geometry":{"type":"Point","coordinates":[2,58]}}]}',
+      ],
+      [
+        'odd-crs.geojson',
+        '{"type":"FeatureCollection","crs":{"type":"link","properties":{"href":"x"}},' +
+          '"features":[{"type":"Feature","properties":{"id":1},"geometry":{"type":"Point","coordinates":[2,58]}}]}',
+      ],
+      [
+        'collection.geojson',
+        '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"geometry":"named like the column"},' +
+          '"geometry":{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[2,58]},' +
+          '{"type":"GeometryCollection","geometries":[]}]}}]}',
+      ],
+      ['array.geojson', '[{"type":"Feature"}]'],
+      ['topology.geojson', '{"type":"Topology","objects":{}}'],
+      ['untyped.geojson', '{"features":[]}'],
+      ['features.geojson', '{"type":"FeatureCollection","features":{"a":1}}'],
+      ['broken.geojson', '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"a":1},]}'],
+      ['cut.geojson', '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"a":1}'],
+      ['blank.geojson', '   '],
+    ];
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Unusual', profile: { ...PROFILE } });
+      for (const [name, text] of files) {
+        writeFileSync(join(folder, name), text);
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        const [pa, pb] = [await settled(() => nat.client.sniff(file)), await settled(() => lite.sniff(file))];
+        expect(pa, `${name}: preview`).toEqual(pb);
+        orderDifferences(pa, pb, `${name}: preview`, found);
+        const imported = async (e: EngineClient) => e.awaitJob<DatasetSummary>(await e.importFile(file));
+        const [da, db] = [await settled(() => imported(nat.client)), await settled(() => imported(lite))];
+        expect(da, `${name}: import`).toEqual(db);
+        if ('code' in (db as object)) continue;
+        const id = (da as DatasetSummary).id;
+        const checked = async (e: EngineClient) => ({
+          ...(await e.awaitJob<CheckSummary>(await e.runChecks(id))),
+          durationMs: 0,
+        });
+        expect(await checked(nat.client), `${name}: checks`).toEqual(await checked(lite));
+        await sameDataset(nat.client, lite, id, name, found);
+      }
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it('filters, edits and checks geometries against the project area as the TypeScript engine does', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    const both = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+      expect(x, what).toEqual(y);
+      orderDifferences(x, y, what, found);
+      return [x as T, y as T];
+    };
+    const withoutTimes = (entries: AuditEntry[]) => entries.map(content);
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Area', profile: { ...PROFILE } });
+      const ids: string[] = [];
+      for (const name of [
+        'geojson_swapped_lonlat.geojson',
+        'geojson_invalid_geometries.geojson',
+        'geojson_wells_points_wgs84.geojson',
+      ] as const) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        const [d] = await both(`import ${name}`, async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+        ids.push(d.id);
+      }
+      const [swapped, invalid, wells] = ids as [string, string, string];
+      const geometryOf = async (id: string) => (await lite.getSchema(id)).geometryColumn as string;
+      // The checks against an area, and against an area that crosses the antimeridian.
+      for (const bbox of [
+        [114, -22, 117, -19],
+        [170, -60, -170, 60],
+        [0, 50, 10, 60],
+      ] as [number, number, number, number][]) {
+        await both(`area ${bbox.join(' ')}`, async (e) =>
+          withoutTimes(await e.decide({ kind: 'set_project_area', bbox, reason: 'Licence area' })),
+        );
+        for (const id of ids) {
+          await both(`checks of ${id} in ${bbox.join(' ')}`, async (e) => ({
+            ...(await e.awaitJob<CheckSummary>(await e.runChecks(id))),
+            durationMs: 0,
+          }));
+          await both(
+            `issues of ${id} in ${bbox.join(' ')}`,
+            async (e) => (await e.listIssues({ datasetId: id, limit: 1000 })).items,
+          );
+        }
+      }
+      // The area filter on geometries: valid or not, a geometry with a place that meets the box is
+      // kept; one without a place is not.
+      for (const [id, bbox] of [
+        [invalid, [1.7, 57.4, 1.95, 57.65]],
+        [invalid, [-180, -90, 180, 90]],
+        [swapped, [115, -21, 116, -20]],
+        [wells, [170, -60, -170, 60]],
+      ] as [string, [number, number, number, number]][]) {
+        const step: StepInput = { kind: 'filter', predicate: { bbox, geometry: await geometryOf(id) } };
+        await both(`preview of the area filter ${bbox.join(' ')} on ${id}`, (e) => e.previewStep(id, step));
+      }
+      const kept: StepInput = {
+        kind: 'filter',
+        predicate: { bbox: [1.7, 57.4, 1.95, 57.65], geometry: await geometryOf(invalid) },
+      };
+      await both('apply the area filter', async (e) => {
+        const r = await e.awaitJob<StepResult>(await e.applyStep(invalid, kept, 'Rows in the block'));
+        return { ...r, audit: content(r.audit) };
+      });
+      await both('output rows after the filter', async (e) => {
+        const rows: RowWindow['rows'] = [];
+        const w = await e.getRows({ datasetId: invalid, stage: 'output', offset: 0, limit: 1000 });
+        rows.push(...w.rows);
+        return rows;
+      });
+      // A filter on a column that holds no geometries is refused alike (the native engine's
+      // errors carry no detail).
+      await both('area filter on a property', async (e) => {
+        const p = await e.previewStep(wells, { kind: 'filter', predicate: { bbox: [0, 0, 1, 1], geometry: 'c0' } });
+        return { ...p, error: { code: p.error?.code, message: p.error?.message, fix: p.error?.fix } };
+      });
+      // Edits of a geometry: a typed geometry, an emptied cell, and text, which no geometry is.
+      const g = await geometryOf(wells);
+      const point = { type: 'Point', coordinates: [1.5, 57.25] };
+      for (const [what, value] of [
+        ['a geometry', { value: { geometry: point } }],
+        ['an unknown member order', { value: { geometry: { coordinates: [2, 58], type: 'Point' } } }],
+        ['no value', { text: '' }],
+        ['text', { text: 'POINT (1 2)' }],
+        ['a number', { value: 5 }],
+        ['an object without a type', { value: { geometry: { coordinates: [1, 2] } } }],
+      ] as [
+        string,
+        Decision extends infer D ? (D extends { kind: 'edit_cell'; value: infer V } ? V : never) : never,
+      ][]) {
+        await both(`edit to ${what}`, async (e) =>
+          withoutTimes(
+            await e.decide({
+              kind: 'edit_cell',
+              datasetId: wells,
+              rowId: 1,
+              columnId: g,
+              value,
+              reason: `Set to ${what}`,
+            }),
+          ),
+        );
+        await both(`rows after the edit to ${what}`, (e) => allRows(e, wells));
+        // The times in the history are each engine's clock.
+        await both(`lineage after the edit to ${what}`, async (e) => {
+          const l = await e.explainCell(wells, 1, g);
+          return { ...l, history: l.history.map(({ at: _at, ...rest }) => rest) };
+        });
+        await both(`statistics after the edit to ${what}`, (e) => e.getColumnStats(wells, g));
+      }
+      await both('checks after the edits', async (e) => ({
+        ...(await e.awaitJob<CheckSummary>(await e.runChecks(wells))),
+        durationMs: 0,
+      }));
+      // The project opens again with the same geometries, decisions and issues.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const { report, opened } = await openNatively(saved.bytes as Uint8Array);
+      try {
+        expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+        await sameState(opened.client, lite);
+      } finally {
+        stopNative(opened);
+      }
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 90_000);
+
+  it('exports GeoJSON datasets, and points from latitude and longitude, as the TypeScript engine does', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Export', profile: { ...PROFILE } });
+      for (const name of [
+        'geojson_wells_points_wgs84.geojson',
+        'geojson_mixed_geometry_nested_props.geojson',
+        'geojson_invalid_geometries.geojson',
+        'geojson_legacy_crs_27700.geojson',
+        'csv_latlon_swapped_out_of_range.csv',
+        'csv_well_daily_golden.csv',
+      ] as const) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        const [da, db] = [
+          await nat.client.awaitJob<DatasetSummary>(await nat.client.importFile(file)),
+          await lite.awaitJob<DatasetSummary>(await lite.importFile(file)),
+        ];
+        expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
+          await lite.listExportProfiles(db.id),
+        );
+        for (const profile of ['geojson', 'csv', 'parquet', 'excel'] as const) {
+          const run = async (e: EngineClient, id: string) =>
+            e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
+          const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
+          if ('code' in (b as object)) {
+            expect(a, `${name} as ${profile}: refusal`).toEqual(b);
+            continue;
+          }
+          const [x, y] = [a as ExportResult, b as ExportResult];
+          expect(
+            x.validation.checks.filter((c) => !c.ok),
+            `${name} as ${profile}: native checks`,
+          ).toEqual([]);
+          expect([x.ok, y.ok]).toEqual([true, true]);
+          expect(x.validation.checks.map((c) => [c.id, c.file ?? '', c.detail])).toEqual(
+            y.validation.checks.map((c) => [c.id, c.file ?? '', c.detail]),
+          );
+          expect(x.manifest.dataset.columns, `${name} as ${profile}`).toEqual(y.manifest.dataset.columns);
+          // The reference engine's readers verify the native package and its data file.
+          const zip = x.bytes as Uint8Array;
+          expect(readBack.package(zip, x.manifest).filter((c) => !c.ok)).toEqual([]);
+          const dataFile = profile === 'excel' ? 'data.xlsx' : `data.${profile}`;
+          const [fx, fy] = [readZip(zip).read(dataFile), readZip(y.bytes as Uint8Array).read(dataFile)];
+          if (profile === 'geojson' || profile === 'csv') {
+            // Both engines write the same file, byte for byte.
+            expect(new TextDecoder().decode(fx), `${name} as ${profile}`).toBe(new TextDecoder().decode(fy));
+          } else if (profile === 'parquet') {
+            const shape = { rowCount: x.manifest.dataset.rowCount, columns: x.manifest.dataset.columns };
+            expect((await readBack.parquet(fx, shape, dataFile)).filter((c) => !c.ok)).toEqual([]);
+          } else {
+            expect(workbookSheet(fx, 'Data'), `${name}: Data sheet`).toEqual(workbookSheet(fy, 'Data'));
+          }
+        }
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 90_000);
 });
 
 if (!nativeBuilt) {

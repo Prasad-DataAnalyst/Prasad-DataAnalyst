@@ -6,6 +6,7 @@ use crate::audit::AuditLog;
 use crate::canonical::sha256_hex;
 use crate::checks::{CheckCtx, Col, summarize};
 use crate::csv::Note;
+use crate::detect::geometry_column_of;
 use crate::error::{EngineError, Result};
 use crate::framing::{Incoming, write_message};
 use crate::import::{
@@ -193,7 +194,8 @@ fn sheet_ref(name: &str) -> String {
 
 /// A row's or a cell's source locator (locator.ts): 'line 4, field 3' for delimited text,
 /// 'Sheet1!C17' for workbooks (the column's source index read as its sheet column), 'record 12,
-/// key "rate"' for JSON and 'row 4, column "rate"' for Parquet, columns named as the file names them.
+/// key "rate"' for JSON, 'row 4, column "rate"' for Parquet and 'feature 7, property "rate"' or
+/// 'feature 7, geometry' for GeoJSON, columns named as the file names them.
 fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
     let source_name = |c: &Value| {
         c["sourceHeader"][0]
@@ -235,6 +237,17 @@ fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
             "row {loc}, column {}",
             serde_json::to_string(&source_name(c)).unwrap_or_default()
         ),
+        (Some("geojson"), None) => format!("feature {loc}"),
+        (Some("geojson"), Some(c)) => {
+            if c["id"].as_str().is_some() && c["id"].as_str() == geometry_column_of(spec) {
+                format!("feature {loc}, geometry")
+            } else {
+                format!(
+                    "feature {loc}, property {}",
+                    serde_json::to_string(&source_name(c)).unwrap_or_default()
+                )
+            }
+        }
         (_, None) => format!("line {loc}"),
         (_, Some(c)) => format!(
             "line {loc}, field {}",
@@ -255,8 +268,20 @@ fn out_columns(cols: &[StageColumn]) -> Vec<crate::export::OutColumn> {
                 .unwrap_or_default()
                 .to_string(),
             kind: c.kind,
+            role: c.schema["role"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
         })
         .collect()
+}
+
+/// Where a dataset's places are, for its exports.
+fn spatial_of(spec: &Value) -> crate::export::Spatial {
+    crate::export::Spatial {
+        geometry_column: geometry_column_of(spec).map(String::from),
+        crs: spec["crs"]["value"]["code"].as_str().map(String::from),
+    }
 }
 
 pub struct Project {
@@ -543,8 +568,8 @@ impl Engine {
             "version": self.version,
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
-                "formats": ["csv", "tsv", "xlsx", "parquet", "json"],
-                "exportProfiles": ["csv", "parquet"],
+                "formats": ["csv", "tsv", "xlsx", "geojson", "json", "parquet"],
+                "exportProfiles": crate::export::NATIVE_PROFILES,
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
                 "crsTransform": false,
@@ -678,7 +703,7 @@ impl Engine {
             "source": source_of(&d.spec),
             "columns": cols.iter().map(|c| c.schema.clone()).collect::<Vec<_>>(),
             "crs": d.spec["crs"],
-            "geometryColumn": null,
+            "geometryColumn": geometry_column_of(&d.spec),
             "partial": false,
             "rowCount": if output { d.output_rows } else { d.visible_rows() },
         }))
@@ -701,6 +726,9 @@ impl Engine {
             Kind::DateTime => row
                 .get::<_, Option<i64>>(i)?
                 .map_or(Value::Null, |t| json!({ "datetime": iso_from_millis(t) })),
+            Kind::Geometry => row
+                .get::<_, Option<String>>(i)?
+                .map_or(Value::Null, |text| geometry_cell(&text)),
         })
     }
 
@@ -855,9 +883,15 @@ impl Engine {
             quote_ident(&format!("{}{EXCEPTIONS_SUFFIX}", d.view)),
         );
         let numeric = matches!(kind, Kind::Integer | Kind::Number);
+        // Equal values are one value: for a geometry, whatever order its members are written in.
+        let key = if kind == Kind::Geometry {
+            format!("tw_geo_canonical({v})")
+        } else {
+            v.clone()
+        };
         let sql = format!(
             "SELECT count(*), count(*) FILTER (WHERE {v} IS NULL), \
-             (SELECT count(*) FROM {exc} WHERE col = {col} AND raw IS NOT NULL), count(DISTINCT {v}), {mean} FROM {view}",
+             (SELECT count(*) FROM {exc} WHERE col = {col} AND raw IS NOT NULL), count(DISTINCT {key}), {mean} FROM {view}",
             col = quote_text(id),
             mean = if numeric {
                 format!("avg({v})")
@@ -877,16 +911,37 @@ impl Engine {
                 None => Ok(Value::Null),
             }
         };
-        let min = one(format!("SELECT min({v}) FROM {view}"))?;
-        let max = one(format!("SELECT max({v}) FROM {view}"))?;
-        let mut top = Vec::new();
+        // Geometries have no order, so no least and no greatest.
+        let (min, max) = if kind == Kind::Geometry {
+            (Value::Null, Value::Null)
+        } else {
+            (
+                one(format!("SELECT min({v}) FROM {view}"))?,
+                one(format!("SELECT max({v}) FROM {view}"))?,
+            )
+        };
+        // The values counted are the first DISTINCT_CAP in row order, each shown as first written;
+        // the most frequent come first, and equally frequent ones in the order of their canonical
+        // text (columnStats).
+        let mut counted: Vec<(Vec<u16>, Value, i64)> = Vec::new();
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {v}, count(*) AS n FROM {view} WHERE {v} IS NOT NULL GROUP BY {v} ORDER BY n DESC, {v} LIMIT 5"
+            "SELECT arg_min({v}, __rid), count(*) FROM {view} WHERE {v} IS NOT NULL \
+             GROUP BY {key} ORDER BY min(__rid) LIMIT {DISTINCT_CAP}"
         ))?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
-            top.push(json!({ "value": Self::cell(row, 0, kind)?, "count": row.get::<_, i64>(1)? }));
+            let value = Self::cell(row, 0, kind)?;
+            let order = crate::canonical::canonical_cell(&value)
+                .encode_utf16()
+                .collect();
+            counted.push((order, value, row.get::<_, i64>(1)?));
         }
+        counted.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        let top: Vec<Value> = counted
+            .into_iter()
+            .take(5)
+            .map(|(_, value, n)| json!({ "value": value, "count": n }))
+            .collect();
         Ok(json!({
             "columnId": id,
             "count": n,
@@ -1131,6 +1186,7 @@ impl Engine {
             &quote_ident(&d.out_view()),
             &out_columns(&stages.output),
             d.output_rows,
+            &spatial_of(&d.spec),
         )?))
     }
 
@@ -1201,10 +1257,15 @@ impl Engine {
     }
 }
 
+/// A geometry held as JSON text, as the cell an answer gives: its members in the order written.
+pub fn geometry_cell(text: &str) -> Value {
+    json!({ "geometry": crate::sniff::geometry_json(Some(text)) })
+}
+
 /// The DuckDB type a column of the working Parquet file has, which an edits table repeats.
 fn sql_type(kind: Kind) -> &'static str {
     match kind {
-        Kind::String => "VARCHAR",
+        Kind::String | Kind::Geometry => "VARCHAR",
         Kind::Integer | Kind::Number => "DOUBLE",
         Kind::Boolean => "BOOLEAN",
         Kind::Date => "INTEGER",
@@ -1228,6 +1289,12 @@ fn sql_literal(v: &Value, kind: Kind) -> Option<String> {
         Kind::Boolean => if v.as_bool()? { "TRUE" } else { "FALSE" }.into(),
         Kind::Date => parse_date(v["date"].as_str()?, DateFormat::Iso)?.to_string(),
         Kind::DateTime => parse_datetime(v["datetime"].as_str()?, DateFormat::Iso)?.to_string(),
+        // A geometry cell holds one member, an object that names its type (isGeometryCell).
+        Kind::Geometry => {
+            let cell = v.as_object().filter(|o| o.len() == 1)?;
+            let geometry = cell.get("geometry").filter(|g| g["type"].is_string())?;
+            quote_text(&crate::canonical::stringify(geometry))
+        }
     })
 }
 
@@ -1367,6 +1434,7 @@ fn check_drafts(
         row_count: d.row_count,
         columns: d.check_columns(),
         crs: d.spec["crs"]["value"]["code"].as_str().map(String::from),
+        geometry_column: geometry_column_of(&d.spec).map(String::from),
         notes: &d.notes,
         assumptions: &d.assumptions,
         project_area,
@@ -3146,6 +3214,35 @@ impl Engine {
                                 _ => found.flatten(),
                             }
                         }
+                        // The features are read again until the one at this locator; its
+                        // geometry is the source of the geometry column.
+                        crate::import::Reading::GeoJson => {
+                            let path =
+                                crate::overrides::original_file(source, &self.workdir, file_id)?;
+                            let of_geometry = geometry_column_of(&d.spec) == Some(root.as_str());
+                            let mut found = None;
+                            let stop = EngineError::new("FOUND", "", "");
+                            let read = crate::import::read_geojson(
+                                &path,
+                                &mut |(at, fields, geometry)| {
+                                    if at as i64 == loc {
+                                        found = Some(if of_geometry {
+                                            geometry
+                                        } else {
+                                            fields.get(index).map(Raw::text)
+                                        });
+                                        return Err(stop.clone());
+                                    }
+                                    Ok(())
+                                },
+                                &AtomicBool::new(false),
+                                &std::sync::atomic::AtomicU64::new(0),
+                            );
+                            match read {
+                                Err(e) if e.code != "FOUND" => return Err(e),
+                                _ => found.flatten(),
+                            }
+                        }
                         // The chosen table is read again until the row at this locator.
                         crate::import::Reading::Xlsx(options) => {
                             let path =
@@ -3363,9 +3460,9 @@ impl Engine {
         }
         let exported = o.get("export").cloned().unwrap_or(Value::Null);
         if !exported.is_null() {
-            let known = crate::export::profile_statuses()
-                .iter()
-                .any(|s| s["profile"]["id"] == exported["profile"]);
+            let known = exported["profile"]
+                .as_str()
+                .is_some_and(crate::export::profile_exists);
             if !known || !exported["neutralizeFormulas"].is_boolean() {
                 return Err(EngineError::invalid(
                     format!(
@@ -3811,6 +3908,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
     let row_count = d.row_count;
     let columns = d.check_columns();
     let crs = d.spec["crs"]["value"]["code"].as_str().map(String::from);
+    let geometry_column = geometry_column_of(&d.spec).map(String::from);
     let notes = d.notes.clone();
     let assumptions = d.assumptions.clone();
     let project_area = area_of(&engine.project()?.project_area);
@@ -3849,6 +3947,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
             row_count,
             columns,
             crs,
+            geometry_column,
             notes: &notes,
             assumptions: &assumptions,
             project_area,
@@ -3911,31 +4010,30 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
     let project_id = engine.writable()?.id.clone();
     let profile = req["profile"].as_str().unwrap_or("").to_string();
-    let statuses = crate::export::profile_statuses();
-    let status = statuses
-        .iter()
-        .find(|s| s["profile"]["id"] == profile.as_str())
-        .ok_or_else(|| {
-            EngineError::invalid(
-                format!("The export profile {} does not exist.", req["profile"]),
-                "Choose Excel, CSV, Parquet or GeoJSON.",
-            )
-        })?;
     let d = engine.dataset(&req["datasetId"])?;
-    if !crate::export::native_profile(&profile) {
-        return Err(EngineError::new(
-            "EXPORT_REFUSED",
-            status["reason"]
-                .as_str()
-                .unwrap_or("This export is not available."),
-            status["fix"]
-                .as_str()
-                .unwrap_or("Choose another export profile."),
+    if !crate::export::profile_exists(&profile) {
+        return Err(EngineError::invalid(
+            format!(
+                "The export profile {} does not exist.",
+                req["profile"].as_str().map_or_else(
+                    || if req["profile"].is_null() {
+                        "undefined".to_string()
+                    } else {
+                        req["profile"].to_string()
+                    },
+                    String::from
+                )
+            ),
+            "Choose Excel, CSV, Parquet or GeoJSON.",
         ));
     }
     let target = target_path(&req["target"])?;
     let stages = d.stages()?;
     let columns = out_columns(&stages.output);
+    let spatial = spatial_of(&d.spec);
+    if let Some((reason, fix)) = crate::export::refusal(&columns, &spatial, &profile) {
+        return Err(EngineError::new("EXPORT_REFUSED", reason, fix));
+    }
     let step_descriptions: Vec<String> = d
         .steps
         .iter()
@@ -3994,6 +4092,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         threads: engine.threads,
         ordered: !d.edits.is_empty(),
         neutralize: req["neutralizeFormulas"] == true,
+        spatial,
     };
     // In the order the TypeScript engine draws them, so seeded runs give the same IDs and times.
     input.export_id = engine.ids.new_export_id();
@@ -4819,6 +4918,7 @@ fn commit_import(
         Some("tsv") => "text/tab-separated-values",
         Some("parquet") => "application/vnd.apache.parquet",
         Some("json") => "application/json",
+        Some("geojson") => "application/geo+json",
         // A workbook in an OLE compound file is a legacy .xls (mediaTypeOf).
         Some("xlsx") if crate::xlsx::is_legacy(&file_head(original)) => "application/vnd.ms-excel",
         Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

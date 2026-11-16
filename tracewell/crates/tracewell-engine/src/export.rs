@@ -7,12 +7,13 @@
 //! The native engine writes the Excel, CSV and Parquet profiles; the profile list is the same JSON
 //! file as the TypeScript engine's.
 
-use crate::canonical::{canonical_json, canonical_number, json_string, sha256_hex};
+use crate::canonical::{canonical_json, json_string, sha256_hex, stringify};
 use crate::csv::{TableLayout, TableReader};
 use crate::digest::{Cell, ColumnDigest, cell_at, read_back_cell};
 use crate::encoding::TextDecoder;
 use crate::error::{EngineError, Result};
 use crate::import::{quote_ident, quote_text};
+use crate::json::J;
 use crate::parse::Kind;
 use crate::stream::each_batch;
 use crate::units::REGISTRY_JSON;
@@ -31,8 +32,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
-/// Profiles this engine writes; the others are listed as not available yet.
-const NATIVE_PROFILES: [&str; 3] = ["excel", "csv", "parquet"];
+/// The profiles this engine writes: every one.
+pub const NATIVE_PROFILES: [&str; 4] = ["excel", "csv", "parquet", "geojson"];
 /// A package up to this size is handed back as bytes when the request names no file.
 pub const RETURN_BYTES_MAX: u64 = 256 << 20;
 const READ_BYTES: usize = 4 << 20;
@@ -44,47 +45,93 @@ pub fn profiles() -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// What listExportProfiles answers: every profile, those this engine cannot write yet with why.
-pub fn profile_statuses() -> Vec<Value> {
-    profiles()
-        .into_iter()
-        .map(|p| {
-            let id = p["id"].as_str().unwrap_or("").to_string();
-            if NATIVE_PROFILES.contains(&id.as_str()) {
-                json!({ "profile": p, "available": true, "substitutions": [] })
-            } else {
-                json!({
-                    "profile": p,
-                    "available": false,
-                    "reason": "The native engine does not write GeoJSON files yet.",
-                    "fix": "Export as Excel, CSV or Parquet instead.",
-                    "substitutions": [],
-                })
-            }
-        })
-        .collect()
+/// Whether a profile of this ID exists.
+pub fn profile_exists(id: &str) -> bool {
+    profiles().iter().any(|p| p["id"] == id)
 }
 
-pub fn native_profile(id: &str) -> bool {
-    NATIVE_PROFILES.contains(&id)
+/// Where a dataset's places are: its geometry column, when it has one, and its coordinate system.
+#[derive(Clone, Default)]
+pub struct Spatial {
+    pub geometry_column: Option<String>,
+    pub crs: Option<String>,
 }
 
-/// The profile statuses of one dataset (profileStatuses): the Excel profile lists the
-/// substitutions the dataset needs.
+const WGS84: [&str; 2] = ["OGC:CRS84", "EPSG:4326"];
+
+/// Where the features of a GeoJSON export take their geometries from (geometrySource).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum GeoSource {
+    /// The geometry column, at this place among the columns.
+    Column(usize),
+    /// A point from the latitude and longitude columns.
+    LatLon,
+}
+
+fn geometry_source(columns: &[OutColumn], spatial: &Spatial) -> Option<GeoSource> {
+    if let Some(j) = spatial
+        .geometry_column
+        .as_deref()
+        .and_then(|g| columns.iter().position(|c| c.id == g))
+    {
+        return Some(GeoSource::Column(j));
+    }
+    let has = |role: &str| columns.iter().any(|c| c.role == role);
+    (has("latitude") && has("longitude")).then_some(GeoSource::LatLon)
+}
+
+/// Why the profile cannot write this dataset, with what to do instead; None when it can.
+pub fn refusal(
+    columns: &[OutColumn],
+    spatial: &Spatial,
+    profile: &str,
+) -> Option<(String, String)> {
+    if profile != "geojson" {
+        return None;
+    }
+    if geometry_source(columns, spatial).is_none() {
+        return Some((
+            "The dataset has no geometry column and no latitude and longitude columns.".into(),
+            "Set the latitude and longitude roles on the coordinate columns, or export as CSV or Excel.".into(),
+        ));
+    }
+    match spatial.crs.as_deref() {
+        Some(code) if WGS84.contains(&code) => None,
+        other => Some((
+            format!(
+                "GeoJSON requires WGS84 coordinates (TW-EXP-003); this dataset is in {}.",
+                other.unwrap_or("an undeclared coordinate system")
+            ),
+            "Coordinate transformation is not available in this edition. Export as CSV or Excel instead, or transform the data to WGS84 before importing it.".into(),
+        )),
+    }
+}
+
+/// The profile statuses of one dataset (profileStatuses): whether each profile can write it, and
+/// the substitutions the Excel profile needs.
 pub fn profile_statuses_for(
     conn: &Connection,
     view: &str,
     columns: &[OutColumn],
     rows: u64,
+    spatial: &Spatial,
 ) -> Result<Vec<Value>> {
-    let mut statuses = profile_statuses();
-    for s in &mut statuses {
-        if s["profile"]["id"] == "excel" {
-            s["substitutions"] =
-                json!(plan_export(conn, view, columns, rows, "excel")?.substitutions);
-        }
-    }
-    Ok(statuses)
+    profiles()
+        .into_iter()
+        .map(|p| {
+            let id = p["id"].as_str().unwrap_or("").to_string();
+            let plan = plan_export(conn, view, columns, rows, &id, spatial)?;
+            let mut status = Map::new();
+            status.insert("profile".into(), p);
+            status.insert("available".into(), json!(plan.refusal.is_none()));
+            if let Some((reason, fix)) = &plan.refusal {
+                status.insert("reason".into(), json!(reason));
+                status.insert("fix".into(), json!(fix));
+            }
+            status.insert("substitutions".into(), json!(plan.substitutions));
+            Ok(Value::Object(status))
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -96,6 +143,7 @@ enum DataKind {
     Csv,
     Parquet,
     Xlsx,
+    GeoJson,
 }
 
 /// A data file a profile writes: its path in the package and the columns of the view it holds.
@@ -105,10 +153,12 @@ struct DataFile {
     columns: Vec<usize>,
 }
 
-/// What an export writes: its data files and the format-limit substitutions (TW-EXP-002) it needs.
+/// What an export writes: its data files and the format-limit substitutions (TW-EXP-002) it
+/// needs, or why it cannot be written.
 struct Plan {
     substitutions: Vec<Value>,
     files: Vec<DataFile>,
+    refusal: Option<(String, String)>,
 }
 
 /// Text columns holding a value longer than an Excel cell holds, counted in UTF-16 units as
@@ -116,7 +166,8 @@ struct Plan {
 fn long_text_columns(conn: &Connection, view: &str, columns: &[OutColumn]) -> Result<Vec<usize>> {
     let mut out = Vec::new();
     for (j, c) in columns.iter().enumerate() {
-        if c.kind != Kind::String {
+        // A geometry is written as its JSON text, which may be as long.
+        if c.kind != Kind::String && c.kind != Kind::Geometry {
             continue;
         }
         let col = quote_ident(&c.id);
@@ -126,7 +177,7 @@ fn long_text_columns(conn: &Connection, view: &str, columns: &[OutColumn]) -> Re
             let a = batch.column(0);
             long = long
                 || (0..batch.num_rows()).any(|i| {
-                    matches!(cell_at(a, i, Kind::String), Cell::Text(t) if t.encode_utf16().count() > EXCEL_MAX_CELL_CHARS)
+                    matches!(cell_at(a, i, c.kind), Cell::Text(t) | Cell::Geometry(t) if t.encode_utf16().count() > EXCEL_MAX_CELL_CHARS)
                 });
             Ok(())
         })?;
@@ -144,6 +195,7 @@ fn plan_export(
     columns: &[OutColumn],
     rows: u64,
     profile: &str,
+    spatial: &Spatial,
 ) -> Result<Plan> {
     let all: Vec<usize> = (0..columns.len()).collect();
     let single = |path, kind| Plan {
@@ -153,15 +205,24 @@ fn plan_export(
             kind,
             columns: (0..columns.len()).collect(),
         }],
+        refusal: None,
     };
-    if profile == "csv" {
-        return Ok(single("data.csv", DataKind::Csv));
+    if let Some(why) = refusal(columns, spatial, profile) {
+        return Ok(Plan {
+            substitutions: Vec::new(),
+            files: Vec::new(),
+            refusal: Some(why),
+        });
     }
-    if profile != "excel" {
-        return Ok(single("data.parquet", DataKind::Parquet));
+    match profile {
+        "csv" => return Ok(single("data.csv", DataKind::Csv)),
+        "parquet" => return Ok(single("data.parquet", DataKind::Parquet)),
+        "geojson" => return Ok(single("data.geojson", DataKind::GeoJson)),
+        _ => {}
     }
     if rows > EXCEL_MAX_DATA_ROWS {
         return Ok(Plan {
+            refusal: None,
             substitutions: vec![json!({
                 "ruleId": "TW-EXP-002",
                 "what": format!("{rows} data rows"),
@@ -188,6 +249,7 @@ fn plan_export(
     }
     let names: Vec<&str> = long.iter().map(|&j| columns[j].name.as_str()).collect();
     Ok(Plan {
+        refusal: None,
         substitutions: vec![json!({
             "ruleId": "TW-EXP-002",
             "what": format!("the column{} {}", if long.len() > 1 { "s" } else { "" }, names.join(", ")),
@@ -217,6 +279,7 @@ pub struct OutColumn {
     pub unit: Option<String>,
     pub typ: String,
     pub kind: Kind,
+    pub role: String,
 }
 
 impl OutColumn {
@@ -262,6 +325,8 @@ pub struct ExportInput {
     pub ordered: bool,
     /// CSV data files: an apostrophe in front of text a spreadsheet would run as a formula.
     pub neutralize: bool,
+    /// The dataset's geometry column and coordinate system, for a GeoJSON file.
+    pub spatial: Spatial,
 }
 
 pub struct ExportOutcome {
@@ -615,6 +680,8 @@ fn write_parquet(conn: &Connection, input: &ExportInput, path: &Path) -> Result<
         .map(|c| {
             let v = quote_ident(&c.id);
             let expr = match c.kind {
+                // JSON text with the JSON annotation, as the TypeScript writer stores a geometry.
+                Kind::Geometry => format!("CAST({v} AS JSON)"),
                 Kind::String => format!("NULLIF({v}, '')"),
                 Kind::Number | Kind::Boolean => v,
                 Kind::Integer => format!("CAST({v} AS BIGINT)"),
@@ -624,23 +691,14 @@ fn write_parquet(conn: &Connection, input: &ExportInput, path: &Path) -> Result<
             format!("{expr} AS {}", quote_ident(&c.header()))
         })
         .collect();
+    // The engine links no time zone support, so a TIMESTAMPTZ is an instant in UTC.
     conn.execute_batch(&format!(
-        "SET TimeZone = 'UTC'; COPY (SELECT {} FROM {}{}) TO {} (FORMAT parquet, COMPRESSION snappy)",
+        "COPY (SELECT {} FROM {}{}) TO {} (FORMAT parquet, COMPRESSION snappy)",
         select.join(", "),
         input.view,
         order_by(input.ordered),
         quote_text(&path.to_string_lossy())
-    ))
-    .or_else(|_| {
-        // A build without time zone support keeps TIMESTAMPTZ in UTC anyway.
-        conn.execute_batch(&format!(
-            "COPY (SELECT {} FROM {}{}) TO {} (FORMAT parquet, COMPRESSION snappy)",
-            select.join(", "),
-            input.view,
-            order_by(input.ordered),
-            quote_text(&path.to_string_lossy())
-        ))
-    })?;
+    ))?;
     Ok(())
 }
 
@@ -1046,6 +1104,11 @@ fn retype_text(text: &str, kind: Kind) -> Option<Cell> {
         },
         Kind::Date => is_date_text(text).then(|| Cell::DateText(text.to_string())),
         Kind::DateTime => is_datetime_text(text).then(|| Cell::DateTimeText(text.to_string())),
+        // JSON text of an object with a type member.
+        Kind::Geometry => serde_json::from_str::<Value>(text)
+            .ok()
+            .filter(|g| g.get("type").is_some())
+            .map(|_| Cell::Geometry(text.to_string())),
     }
 }
 
@@ -1211,6 +1274,7 @@ fn read_back_csv(
 fn parquet_accepts(kind: Kind) -> (&'static str, &'static [&'static str]) {
     match kind {
         Kind::String => ("BYTE_ARRAY", &["UTF8", "STRING"]),
+        Kind::Geometry => ("BYTE_ARRAY", &["JSON"]),
         Kind::Number => ("DOUBLE", &[""]),
         Kind::Integer => ("INT64", &["", "INT_64"]),
         Kind::Boolean => ("BOOLEAN", &[""]),
@@ -1341,6 +1405,7 @@ fn retype_xlsx(v: &crate::parse::Raw, kind: Kind) -> Option<Cell> {
         (Kind::DateTime, Raw::DateTime(t)) => Cell::DateTimeText(t.clone()),
         (Kind::DateTime, Raw::Date(d)) => Cell::DateTimeText(format!("{d}T00:00:00.000Z")),
         (Kind::String, Raw::Text(t)) => Cell::Text(t.clone()),
+        (Kind::Geometry, Raw::Text(t)) => return retype_text(t, Kind::Geometry),
         _ => return None,
     })
 }
@@ -1557,49 +1622,345 @@ fn read_back(
             !expected.columns.is_empty(),
             input.audit.len() as u64,
         )),
+        DataKind::GeoJson => read_back_geojson(path, expected, file, &input.spatial),
     }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Package text: README, issues and checksums
+// GeoJSON (formats/geojson/writer.ts, export/writers.ts features, readback.ts readGeoJson)
 
-/// JSON as JavaScript's JSON.stringify writes it (numbers as JavaScript writes them).
-fn json_stringify(v: &Value, out: &mut String) {
-    match v {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&canonical_number(n.as_f64().unwrap_or(0.0))),
-        Value::String(s) => json_string(s, out),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, x) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                json_stringify(x, out);
-            }
-            out.push(']');
+/// Members as a JavaScript object holds them: keys that are array indices first, in numeric
+/// order; a repeated key keeps its first place and takes its last value.
+fn js_members(members: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::with_capacity(members.len());
+    for (k, v) in members {
+        match out.iter_mut().find(|(x, _)| *x == k) {
+            Some(slot) => slot.1 = v,
+            None => out.push((k, v)),
         }
-        Value::Object(o) => {
-            out.push('{');
-            for (i, (k, x)) in o.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                json_string(k, out);
-                out.push(':');
-                json_stringify(x, out);
-            }
-            out.push('}');
-        }
+    }
+    let (mut indices, rest): (Vec<_>, Vec<_>) = out
+        .into_iter()
+        .partition(|(k, _)| crate::canonical::array_index(k).is_some());
+    indices.sort_by_key(|(k, _)| crate::canonical::array_index(k));
+    indices.extend(rest);
+    indices
+}
+
+/// A property value as the writer writes it: numbers in their canonical form, dates, times and
+/// geometries as text, and empty text as no value, as read-back takes it.
+fn property_json(cell: Cell, out: &mut String) {
+    match cell.exportable() {
+        Cell::Null => out.push_str("null"),
+        Cell::Num(x) => crate::canonical::write_canonical_number(x, out),
+        Cell::Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        other => json_string(&other.text(), out),
     }
 }
 
-fn stringify(v: &Value) -> String {
-    let mut s = String::new();
-    json_stringify(v, &mut s);
-    s
+/// Writes the GeoJSON data file: an RFC 7946 FeatureCollection, one feature per row and per line,
+/// with the geometry column's geometries, or points built from latitude and longitude, and every
+/// other column as a property in column order. There is no `crs` member.
+fn write_geojson(
+    conn: &Connection,
+    input: &ExportInput,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let columns = &input.columns;
+    let source = geometry_source(columns, &input.spatial)
+        .ok_or_else(|| EngineError::internal("The dataset has no geometries to write."))?;
+    let lat = columns.iter().position(|c| c.role == "latitude");
+    let lon = columns.iter().position(|c| c.role == "longitude");
+    let props: Vec<usize> = (0..columns.len())
+        .filter(|j| source != GeoSource::Column(*j))
+        .collect();
+    let keys: Vec<String> = props.iter().map(|&j| columns[j].header()).collect();
+    let select: Vec<String> = columns.iter().map(|c| quote_ident(&c.id)).collect();
+    let sql = format!(
+        "SELECT {} FROM {}{}",
+        select.join(", "),
+        input.view,
+        order_by(input.ordered)
+    );
+    let mut out = BufWriter::with_capacity(1 << 20, File::create(path)?);
+    out.write_all(b"{\"type\":\"FeatureCollection\",\"features\":[\n")?;
+    let mut first = true;
+    let mut line = String::new();
+    each_batch(conn, &sql, |batch| {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        for i in 0..batch.num_rows() {
+            let cell = |j: usize| cell_at(batch.column(j), i, columns[j].kind);
+            line.clear();
+            if !first {
+                line.push_str(",\n");
+            }
+            first = false;
+            line.push_str("{\"type\":\"Feature\",\"geometry\":");
+            match source {
+                GeoSource::Column(j) => match cell(j) {
+                    Cell::Geometry(text) => line.push_str(&text),
+                    _ => line.push_str("null"),
+                },
+                GeoSource::LatLon => match (lat.map(cell), lon.map(cell)) {
+                    (Some(Cell::Num(y)), Some(Cell::Num(x))) if x.is_finite() && y.is_finite() => {
+                        line.push_str("{\"type\":\"Point\",\"coordinates\":[");
+                        crate::canonical::write_canonical_number(x, &mut line);
+                        line.push(',');
+                        crate::canonical::write_canonical_number(y, &mut line);
+                        line.push_str("]}");
+                    }
+                    _ => line.push_str("null"),
+                },
+            }
+            line.push_str(",\"properties\":{");
+            let members: Vec<(String, String)> = props
+                .iter()
+                .zip(&keys)
+                .map(|(&j, key)| {
+                    let mut v = String::new();
+                    property_json(cell(j), &mut v);
+                    (key.clone(), v)
+                })
+                .collect();
+            for (k, (key, value)) in js_members(members).into_iter().enumerate() {
+                if k > 0 {
+                    line.push(',');
+                }
+                json_string(&key, &mut line);
+                line.push(':');
+                line.push_str(&value);
+            }
+            line.push_str("}}");
+            out.write_all(line.as_bytes())?;
+        }
+        Ok(())
+    })?;
+    out.write_all(if first { b"]}\n" as &[u8] } else { b"\n]}\n" })?;
+    out.flush()?;
+    Ok(())
 }
+
+/// A property read back with the column's type (retypeProperty); None when it does not fit.
+fn retype_property(v: Option<&J>, kind: Kind) -> Option<Cell> {
+    let v = match v {
+        None | Some(J::Null) => return Some(Cell::Null),
+        Some(v) => v,
+    };
+    match (kind, v) {
+        (Kind::Integer | Kind::Number, J::Num(x)) => Some(Cell::Num(*x)),
+        (Kind::Integer | Kind::Number, _) => None,
+        (Kind::Boolean, J::Bool(b)) => Some(Cell::Bool(*b)),
+        (Kind::Boolean, _) => None,
+        (Kind::String, J::Str(t)) => Some(Cell::Text(t.clone())),
+        (Kind::String, _) => None,
+        (_, J::Str(t)) => retype_text(t, kind),
+        _ => None,
+    }
+}
+
+/// Reads a GeoJSON data file back (readGeoJson), a feature at a time: RB-OPEN, the structure of
+/// an RFC 7946 FeatureCollection (RB-GEOJSON-STRUCTURE), the property names (RB-HEADER), the
+/// features (RB-ROWS) and every property's values (RB-VALUES); the geometries are compared with
+/// the geometry column, or with the latitude and longitude properties.
+fn read_back_geojson(
+    path: &Path,
+    expected: &Expected,
+    file: &str,
+    spatial: &Spatial,
+) -> Result<Vec<Value>> {
+    let columns = expected.columns;
+    let source = geometry_source(columns, spatial);
+    let geometry_col = match source {
+        Some(GeoSource::Column(j)) => Some(j),
+        _ => None,
+    };
+    let props: Vec<usize> = (0..columns.len())
+        .filter(|j| Some(*j) != geometry_col)
+        .collect();
+    let headers: Vec<String> = props.iter().map(|&j| columns[j].header()).collect();
+    let lat = columns
+        .iter()
+        .find(|c| c.role == "latitude")
+        .map(OutColumn::header);
+    let lon = columns
+        .iter()
+        .find(|c| c.role == "longitude")
+        .map(OutColumn::header);
+    let mut scan = crate::geojson::Scan::default();
+    let mut features: u64 = 0;
+    let mut first_keys: Option<Vec<String>> = None;
+    let mut geometries = ColumnDigest::default();
+    let mut values: Vec<(ColumnDigest, bool)> = props
+        .iter()
+        .map(|_| (ColumnDigest::default(), true))
+        .collect();
+    let mut mismatched_points: u64 = 0;
+    let read = (|| -> Result<()> {
+        let mut take = |f: crate::geojson::Feature| -> Result<()> {
+            features += 1;
+            let no_members: Vec<(String, J)> = Vec::new();
+            let members = match &f.properties {
+                Some(J::Obj(m)) => m,
+                _ => &no_members,
+            };
+            let property = |key: &str| members.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v);
+            if first_keys.is_none() {
+                first_keys = Some(members.iter().map(|(k, _)| k.clone()).collect());
+            }
+            let geometry = f.geometry.as_ref().filter(|g| !matches!(g, J::Null));
+            if geometry_col.is_some() {
+                geometries.push(
+                    &geometry.map_or(Cell::Null, |g| Cell::Geometry(crate::json::stringify(g))),
+                );
+            } else if let (Some(lat), Some(lon)) = (&lat, &lon) {
+                let bad = match (property(lat), property(lon)) {
+                    (Some(J::Num(y)), Some(J::Num(x))) => {
+                        let point = match geometry {
+                            Some(J::Obj(g)) => {
+                                let member =
+                                    |k: &str| g.iter().rev().find(|(m, _)| m == k).map(|(_, v)| v);
+                                let at = |i: usize| match member("coordinates") {
+                                    Some(J::Arr(c)) => match c.get(i) {
+                                        Some(J::Num(n)) => Some(*n),
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+                                matches!(member("type"), Some(J::Str(t)) if t == "Point")
+                                    && at(0) == Some(*x)
+                                    && at(1) == Some(*y)
+                            }
+                            _ => false,
+                        };
+                        !point
+                    }
+                    _ => geometry.is_some(),
+                };
+                if bad {
+                    mismatched_points += 1;
+                }
+            }
+            for ((digest, typed), (&j, header)) in values.iter_mut().zip(props.iter().zip(&headers))
+            {
+                if !*typed {
+                    continue;
+                }
+                match retype_property(property(header), columns[j].kind) {
+                    Some(cell) => digest.push(&cell),
+                    None => *typed = false,
+                }
+            }
+            Ok(())
+        };
+        let mut file = File::open(path)?;
+        let mut buf = vec![0u8; READ_BYTES];
+        let mut decoder = crate::encoding::TextDecoder::new("utf-8", 0)?;
+        let mut text = Vec::with_capacity(READ_BYTES);
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            text.clear();
+            decoder.decode(&buf[..n], &mut text);
+            scan.push(&text, &mut take)?;
+        }
+        text.clear();
+        decoder.finish(&mut text);
+        scan.push(&text, &mut take)?;
+        scan.finish(&mut take)
+    })();
+    if let Err(e) = read {
+        return Ok(vec![check(
+            "RB-OPEN",
+            false,
+            format!("The file does not parse as GeoJSON: {}", e.message),
+            Some(file),
+        )]);
+    }
+    let mut checks = vec![check(
+        "RB-OPEN",
+        true,
+        "The file parses as GeoJSON.".into(),
+        Some(file),
+    )];
+    let mut problems: Vec<String> = Vec::new();
+    if !matches!(scan.root_type(), Some(J::Str(t)) if t == "FeatureCollection") {
+        problems.push("the top level is not a FeatureCollection".into());
+    }
+    if scan.crs().is_some() {
+        problems.push("it has a crs member, which RFC 7946 removed".into());
+    }
+    if features != expected.rows {
+        problems.push(format!(
+            "it has {features} features instead of {}",
+            expected.rows
+        ));
+    }
+    if let Some(j) = geometry_col {
+        if geometries.finish() != expected.digests[j] {
+            problems.push("the geometries or their coordinate order differ from the source".into());
+        }
+    } else if mismatched_points > 0 {
+        problems.push(format!(
+            "{mismatched_points} points do not match their longitude/latitude columns in lon, lat order"
+        ));
+    }
+    checks.push(if problems.is_empty() {
+        check(
+            "RB-GEOJSON-STRUCTURE",
+            true,
+            "An RFC 7946 FeatureCollection with one feature per row, no crs member and coordinates in the source order.".into(),
+            Some(file),
+        )
+    } else {
+        check(
+            "RB-GEOJSON-STRUCTURE",
+            false,
+            format!("GeoJSON structure problems: {}.", problems.join("; ")),
+            Some(file),
+        )
+    });
+    let keys = first_keys.unwrap_or_default();
+    checks.push(if features == 0 || keys == headers {
+        check(
+            "RB-HEADER",
+            true,
+            "Every property is present with the expected name and unit.".into(),
+            Some(file),
+        )
+    } else {
+        check(
+            "RB-HEADER",
+            false,
+            format!(
+                "The properties are {} instead of {}.",
+                stringify(&json!(keys)),
+                stringify(&json!(headers))
+            ),
+            Some(file),
+        )
+    });
+    checks.push(rows_check(features, expected.rows, file));
+    let prop_columns: Vec<OutColumn> = props.iter().map(|&j| columns[j].clone()).collect();
+    let prop_expected = Expected {
+        rows: expected.rows,
+        columns: &prop_columns,
+        digests: props.iter().map(|&j| expected.digests[j].clone()).collect(),
+    };
+    let got: Vec<Option<String>> = values
+        .into_iter()
+        .map(|(d, typed)| typed.then(|| d.finish()))
+        .collect();
+    checks.push(values_check(&prop_expected, &got, file));
+    Ok(checks)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Package text: README, issues and checksums
 
 fn text(v: &Value) -> String {
     match v {
@@ -2042,7 +2403,11 @@ pub fn build_export(
         &input.columns,
         input.row_count,
         &input.profile,
+        &input.spatial,
     )?;
+    if let Some((reason, fix)) = plan.refusal {
+        return Err(EngineError::new("EXPORT_REFUSED", reason, fix));
+    }
     let tmp = input.workdir.join(format!("export-{}", input.export_id));
     std::fs::create_dir_all(&tmp)?;
     let cleanup = scopeguard(tmp.clone());
@@ -2072,6 +2437,7 @@ pub fn build_export(
             DataKind::Csv => write_csv(conn, input, &f.columns, &path, cancel)?,
             DataKind::Parquet => write_parquet(conn, input, &path)?,
             DataKind::Xlsx => write_xlsx(conn, input, &plan, &f.columns, &digests, &path, cancel)?,
+            DataKind::GeoJson => write_geojson(conn, input, &path, cancel)?,
         }
     }
 
@@ -2354,6 +2720,7 @@ mod tests {
             }
             .into(),
             kind,
+            role: "text".into(),
         };
         let columns = [
             column("c0", "note", Kind::String),
@@ -2366,7 +2733,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         // 16,384 two-byte characters are 32,768 bytes but only 16,384 UTF-16 units: they fit.
-        let fits = plan_export(&conn, "v", &columns, 2, "excel").unwrap();
+        let fits = plan_export(&conn, "v", &columns, 2, "excel", &Spatial::default()).unwrap();
         assert!(fits.substitutions.is_empty());
         assert_eq!(files(&fits), [("data.xlsx", DataKind::Xlsx, vec![0, 1])]);
         conn.execute_batch(&format!(
@@ -2374,7 +2741,7 @@ mod tests {
             "x".repeat(32_768)
         ))
         .unwrap();
-        let long = plan_export(&conn, "v", &columns, 3, "excel").unwrap();
+        let long = plan_export(&conn, "v", &columns, 3, "excel", &Spatial::default()).unwrap();
         assert_eq!(long.substitutions[0]["what"], "the column note");
         assert_eq!(
             files(&long),
@@ -2383,7 +2750,15 @@ mod tests {
                 ("data-long-text.csv", DataKind::Csv, vec![0])
             ]
         );
-        let many = plan_export(&conn, "v", &columns, 1_048_576, "excel").unwrap();
+        let many = plan_export(
+            &conn,
+            "v",
+            &columns,
+            1_048_576,
+            "excel",
+            &Spatial::default(),
+        )
+        .unwrap();
         assert_eq!(many.substitutions[0]["what"], "1048576 data rows");
         assert_eq!(
             many.substitutions[0]["why"],

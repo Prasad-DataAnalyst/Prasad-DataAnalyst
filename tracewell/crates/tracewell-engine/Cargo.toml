@@ -11,7 +11,7 @@ publish = false
 # Direct dependencies are pinned exactly. Cargo.lock is generated on each machine and not kept in
 # the repository: it lists crates for every target platform, including ones Tracewell never builds.
 [dependencies]
-duckdb = { version = "=1.10506.0", features = ["bundled", "parquet", "appender-arrow"] }
+duckdb = { version = "=1.10506.0", features = ["bundled", "parquet", "json", "appender-arrow", "vscalar", "vscalar-arrow"] }
 serde_json = { version = "=1.0.154", features = ["float_roundtrip", "preserve_order"] }
 memchr = "=2.8.3"
 sha2 = "=0.11.1"

@@ -62,7 +62,8 @@ pub struct Column {
 
 fn kind_name(kind: Kind) -> &'static str {
     match kind {
-        Kind::String => "string",
+        // A geometry is written as its JSON text.
+        Kind::String | Kind::Geometry => "string",
         Kind::Number => "number",
         Kind::Integer => "integer",
         Kind::Boolean => "boolean",
@@ -208,7 +209,7 @@ fn serial_cell(reference: &str, serial: f64, style: u32) -> String {
 
 fn describe(v: &Cell) -> String {
     match v {
-        Cell::Text(_) => "text".into(),
+        Cell::Text(_) | Cell::Geometry(_) => "text".into(),
         Cell::Num(n) if n.is_finite() => "a number".into(),
         Cell::Num(n) => format!(
             "the non-finite number {}",
@@ -230,7 +231,10 @@ fn describe(v: &Cell) -> String {
 /// The XML of one cell and the characters it shows; None when the value does not fit the kind.
 fn cell_out(v: &Cell, kind: Kind, reference: &str) -> Result<Option<(String, usize)>> {
     Ok(match (kind, v) {
-        (Kind::String, Cell::Text(t)) => Some((inline_string(reference, t, ""), utf16_len(t))),
+        // A geometry is written as its JSON text, in a text cell.
+        (Kind::String | Kind::Geometry, Cell::Text(t) | Cell::Geometry(t)) => {
+            Some((inline_string(reference, t, ""), utf16_len(t)))
+        }
         (Kind::Number | Kind::Integer, Cell::Num(n)) if n.is_finite() => {
             let text = number_text(*n);
             let style = if kind == Kind::Integer {

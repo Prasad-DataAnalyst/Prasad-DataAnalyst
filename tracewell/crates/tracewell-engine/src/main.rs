@@ -24,6 +24,9 @@ mod engine;
 mod error;
 mod export;
 mod framing;
+mod geo;
+mod geofn;
+mod geojson;
 mod import;
 mod issues;
 mod json;
@@ -125,6 +128,8 @@ fn half_of_ram() -> u64 {
 fn open(args: &Args) -> Result<Engine> {
     std::fs::create_dir_all(&args.workdir)?;
     let conn = duckdb::Connection::open(args.workdir.join("engine.duckdb"))?;
+    // The spatial checks and the area filter call these from SQL.
+    geofn::register(&conn)?;
     let limit = if args.memory_limit == 0 {
         half_of_ram()
     } else {
@@ -132,6 +137,12 @@ fn open(args: &Args) -> Result<Engine> {
     };
     let duckdb_limit = memory::duckdb_limit(limit);
     let temp = args.workdir.join("spill");
+    // Tracewell works offline: DuckDB must never fetch an extension, nor load one it finds on the
+    // machine. Everything the engine uses is linked into it.
+    conn.execute_batch(
+        "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false; \
+         SET allow_community_extensions = false;",
+    )?;
     conn.execute_batch(&format!(
         "SET memory_limit = '{duckdb_limit}B'; SET temp_directory = {}; SET preserve_insertion_order = true;{}",
         import::quote_text(&temp.to_string_lossy()),

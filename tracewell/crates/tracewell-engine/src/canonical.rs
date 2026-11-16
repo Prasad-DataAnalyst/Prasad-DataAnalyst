@@ -165,6 +165,45 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn write_js(v: &Value, out: &mut String) {
+    match v {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => write_canonical_number(n.as_f64().unwrap_or(0.0), out),
+        Value::String(s) => json_string(s, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, x) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_js(x, out);
+            }
+            out.push(']');
+        }
+        Value::Object(o) => {
+            out.push('{');
+            for (i, (k, x)) in o.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                json_string(k, out);
+                out.push(':');
+                write_js(x, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// JSON text as JavaScript's JSON.stringify writes it: the members of an object in the order it
+/// holds them, numbers as JavaScript writes them.
+pub fn stringify(v: &Value) -> String {
+    let mut s = String::new();
+    write_js(v, &mut s);
+    s
+}
+
 /// A key that is an array index (a canonical integer below 2^32 - 1), which JavaScript lists first.
 pub fn array_index(key: &str) -> Option<u32> {
     let b = key.as_bytes();

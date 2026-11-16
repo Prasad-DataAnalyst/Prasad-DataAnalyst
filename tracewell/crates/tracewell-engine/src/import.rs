@@ -39,6 +39,8 @@ pub struct ColumnSpec {
     pub id: String,
     pub kind: Kind,
     pub parser: ColumnParser,
+    /// The column holds each feature's geometry, which comes beside the fields and not from one.
+    pub from_geometry: bool,
 }
 
 /// How an original is read.
@@ -55,6 +57,8 @@ pub enum Reading {
     Json(crate::json::Layout),
     /// A table of a workbook sheet, as the format options choose it.
     Xlsx(Value),
+    /// The features of a GeoJSON file: their properties as fields, their geometries beside them.
+    GeoJson,
 }
 
 /// What an import does: how the file is read, and how each column is parsed.
@@ -84,10 +88,9 @@ fn kind_of(t: &str) -> Result<Kind> {
         "boolean" => Kind::Boolean,
         "date" => Kind::Date,
         "datetime" => Kind::DateTime,
+        "geometry" => Kind::Geometry,
         other => {
-            return Err(EngineError::unsupported(format!(
-                "{other} columns in CSV files"
-            )));
+            return Err(EngineError::unsupported(format!("{other} columns")));
         }
     })
 }
@@ -127,6 +130,7 @@ pub fn column_parser(c: &Value, decimal: char, thousands: &str) -> Result<Column
 }
 
 fn plan_columns(spec: &Value, decimal: char, thousands: &str) -> Result<Vec<ColumnSpec>> {
+    let geojson = spec["options"]["format"] == "geojson";
     let mut columns = Vec::new();
     for c in spec["columns"].as_array().into_iter().flatten() {
         let parser = column_parser(c, decimal, thousands)?;
@@ -134,6 +138,7 @@ fn plan_columns(spec: &Value, decimal: char, thousands: &str) -> Result<Vec<Colu
             id: c["id"].as_str().unwrap_or_default().to_string(),
             kind: parser.kind,
             parser,
+            from_geometry: geojson && crate::detect::is_geometry_plan(c),
         });
     }
     Ok(columns)
@@ -158,6 +163,12 @@ pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
     if format == "xlsx" {
         return Ok(ImportPlan {
             reading: Reading::Xlsx(options.clone()),
+            columns: plan_columns(spec, '.', "")?,
+        });
+    }
+    if format == "geojson" {
+        return Ok(ImportPlan {
+            reading: Reading::GeoJson,
             columns: plan_columns(spec, '.', "")?,
         });
     }
@@ -206,7 +217,7 @@ pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
 
 pub fn sql_type(kind: Kind) -> &'static str {
     match kind {
-        Kind::String => "VARCHAR",
+        Kind::String | Kind::Geometry => "VARCHAR",
         Kind::Integer | Kind::Number => "DOUBLE",
         Kind::Boolean => "BOOLEAN",
         Kind::Date => "INTEGER",
@@ -216,7 +227,7 @@ pub fn sql_type(kind: Kind) -> &'static str {
 
 fn arrow_type(kind: Kind) -> DataType {
     match kind {
-        Kind::String => DataType::Utf8,
+        Kind::String | Kind::Geometry => DataType::Utf8,
         Kind::Integer | Kind::Number => DataType::Float64,
         Kind::Boolean => DataType::Boolean,
         Kind::Date => DataType::Int32,
@@ -243,7 +254,9 @@ enum Values {
 impl Values {
     fn new(kind: Kind, rows: usize) -> Self {
         match kind {
-            Kind::String => Values::Text(StringBuilder::with_capacity(rows, rows * 8)),
+            Kind::String | Kind::Geometry => {
+                Values::Text(StringBuilder::with_capacity(rows, rows * 8))
+            }
             Kind::Integer | Kind::Number => Values::Num(Float64Builder::with_capacity(rows)),
             Kind::Boolean => Values::Bool(BooleanBuilder::with_capacity(rows)),
             Kind::Date => Values::Day(Int32Builder::with_capacity(rows)),
@@ -344,6 +357,8 @@ pub enum Batch {
 pub struct TypedBatch {
     pub rows: Vec<Vec<Raw>>,
     pub locs: Vec<i64>,
+    /// Each row's geometry as JSON text, for a GeoJSON file; empty for every other format.
+    pub geometries: Vec<Option<String>>,
 }
 
 impl Batch {
@@ -358,6 +373,14 @@ impl Batch {
         match self {
             Batch::Text(b) => b.locs[i],
             Batch::Typed(b) => b.locs[i],
+        }
+    }
+
+    /// The geometry of row `i`, when the rows carry geometries and this one has one.
+    fn geometry(&self, i: usize) -> Option<&str> {
+        match self {
+            Batch::Text(_) => None,
+            Batch::Typed(b) => b.geometries.get(i).and_then(|g| g.as_deref()),
         }
     }
 
@@ -399,6 +422,17 @@ fn parse_rows(
     let mut exceptions = Exceptions::default();
     for (j, c) in plan.columns.iter().enumerate() {
         let mut values = Values::new(c.kind, n);
+        if c.from_geometry {
+            // A geometry is kept as written: whether it is valid is the checks' question.
+            for i in from..to {
+                match batch.geometry(i) {
+                    Some(text) => values.push(Some(&Cell::Text(text.to_string()))),
+                    None => values.push(None),
+                }
+            }
+            arrays.push(values.finish());
+            continue;
+        }
         for i in from..to {
             let row = rid + (i - from) as i64;
             match batch.parse(i, j, &c.parser) {
@@ -585,6 +619,53 @@ pub fn read_json(
     decoder.finish(&mut utf8);
     records.push(&utf8, &mut take)?;
     records.finish(&mut take)?;
+    let digest = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Ok((Vec::new(), digest, size))
+}
+
+/// Hashes and decodes a GeoJSON file and reads its features as rows of typed fields with their
+/// geometries, one at a time (geojson/importer.ts read). The encoding is the one its first MiB
+/// shows, as the sniff decided.
+pub fn read_geojson(
+    path: &Path,
+    send: &mut dyn FnMut(crate::geojson::Row) -> Result<()>,
+    cancel: &AtomicBool,
+    bytes_read: &AtomicU64,
+) -> Result<(Vec<Note>, String, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut head = Vec::new();
+    (&mut file).take(1 << 20).read_to_end(&mut head)?;
+    let e = crate::sniff::sniff_encoding(&head);
+    let mut decoder = TextDecoder::new(e.value, e.bom_length)?;
+    let mut scan = crate::geojson::Scan::default();
+    let mut columns = crate::geojson::PropertyColumns::default();
+    let mut take = |f: crate::geojson::Feature| -> Result<()> { send(columns.row_of(f)) };
+    let mut hash = Sha256::new();
+    hash.update(&head);
+    let mut size = head.len() as u64;
+    let mut utf8 = Vec::with_capacity(READ_BYTES * 3);
+    decoder.decode(&head, &mut utf8);
+    scan.push(&utf8, &mut take)?;
+    let mut buf = vec![0u8; READ_BYTES];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+        size += n as u64;
+        bytes_read.store(size, Ordering::Relaxed);
+        utf8.clear();
+        decoder.decode(&buf[..n], &mut utf8);
+        scan.push(&utf8, &mut take)?;
+    }
+    utf8.clear();
+    decoder.finish(&mut utf8);
+    scan.push(&utf8, &mut take)?;
+    scan.finish(&mut take)?;
     let digest = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
     Ok((Vec::new(), digest, size))
 }
@@ -794,6 +875,30 @@ fn load(
                     Reading::Csv { .. } => read_file(path, plan, &send, cancel, bytes_read),
                     Reading::Parquet => read_parquet(&reader_conn, path, &send, cancel, bytes_read),
                     Reading::Xlsx(options) => read_xlsx(path, options, &send, cancel, bytes_read),
+                    Reading::GeoJson => {
+                        let mut batch = TypedBatch::default();
+                        let read = read_geojson(
+                            path,
+                            &mut |(loc, fields, geometry)| {
+                                batch.rows.push(fields);
+                                batch.locs.push(loc as i64);
+                                batch.geometries.push(geometry);
+                                if batch.locs.len() == BATCH_ROWS
+                                    && !send(Batch::Typed(std::mem::take(&mut batch)))
+                                {
+                                    return Err(cancelled());
+                                }
+                                Ok(())
+                            },
+                            cancel,
+                            bytes_read,
+                        );
+                        match read {
+                            Ok(r) if batch.locs.is_empty() || send(Batch::Typed(batch)) => Ok(r),
+                            Ok(_) => Err(cancelled()),
+                            Err(e) => Err(e),
+                        }
+                    }
                     Reading::Json(layout) => {
                         let mut batch = TypedBatch::default();
                         let read = read_json(

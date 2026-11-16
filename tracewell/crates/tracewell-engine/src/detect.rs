@@ -36,6 +36,8 @@ pub fn det(
 pub struct DetectOptions {
     pub decimal: char,
     pub thousands: String,
+    /// A final geometry column follows the fields (GeoJSON files).
+    pub geometry_column: bool,
 }
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
@@ -1103,8 +1105,12 @@ pub fn detect_columns(
             (name, source, unit)
         })
         .collect();
-    let names = unique_names(&named.iter().map(|c| c.0.clone()).collect::<Vec<_>>());
-    named
+    let mut wanted: Vec<String> = named.iter().map(|c| c.0.clone()).collect();
+    if o.geometry_column {
+        wanted.push("geometry".into());
+    }
+    let names = unique_names(&wanted);
+    let mut plans: Vec<Value> = named
         .into_iter()
         .enumerate()
         .map(|(i, (name, source, unit))| {
@@ -1121,7 +1127,46 @@ pub fn detect_columns(
                 o,
             )
         })
-        .collect()
+        .collect();
+    if o.geometry_column {
+        plans.push(geometry_plan(
+            width,
+            names.get(width).map_or("geometry", String::as_str),
+        ));
+    }
+    plans
+}
+
+/// The plan of a GeoJSON file's geometry column, which follows the property columns
+/// (geometryPlan).
+fn geometry_plan(index: usize, name: &str) -> Value {
+    json!({
+        "id": format!("c{index}"),
+        "name": name,
+        "sourceHeader": ["geometry"],
+        "sourceIndex": index,
+        "type": det(json!("geometry"), "high", "source-format", "Feature geometries from the GeoJSON file.", false),
+        "role": det(json!("geometry"), "high", "type", "The column holds geometries.", false),
+        "unit": det(Value::Null, "high", "type", "Geometries have no unit.", false),
+        "quantity": null,
+        "nullMarkers": det(json!([]), "high", "type", "Missing geometries are null.", false),
+    })
+}
+
+/// Whether a column plan is the geometry column of a GeoJSON file: its type and its role both
+/// say geometry (isGeometryPlan).
+pub fn is_geometry_plan(plan: &Value) -> bool {
+    plan["type"]["value"] == "geometry" && plan["role"]["value"] == "geometry"
+}
+
+/// The first column whose plan says geometry by type and by role, in any format
+/// (geometryColumnOf).
+pub fn geometry_column_of(spec: &Value) -> Option<&str> {
+    spec["columns"]
+        .as_array()?
+        .iter()
+        .find(|c| is_geometry_plan(c))
+        .and_then(|c| c["id"].as_str())
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -77,6 +77,8 @@ pub struct CheckCtx<'a> {
     pub row_count: u64,
     pub columns: Vec<Col>,
     pub crs: Option<String>,
+    /// The dataset's geometry column, as its schema names it.
+    pub geometry_column: Option<String>,
     pub notes: &'a [Note],
     pub assumptions: &'a [Value],
     pub project_area: Option<[f64; 4]>,
@@ -385,10 +387,21 @@ impl CheckCtx<'_> {
         Some((lat, lon))
     }
 
+    /// The dataset's geometry column, when the view has it (geometryColumn).
+    fn geometry(&self) -> Option<&Col> {
+        self.geometry_column
+            .as_deref()
+            .and_then(|id| self.column(id))
+    }
+
+    /// The geometry column, then the latitude and longitude columns (spatialColumns).
     fn spatial_columns(&self) -> Vec<String> {
-        self.lat_lon().map_or(Vec::new(), |(lat, lon)| {
-            vec![lat.id.clone(), lon.id.clone()]
-        })
+        let mut out: Vec<String> = self.geometry().map(|g| g.id.clone()).into_iter().collect();
+        if let Some((lat, lon)) = self.lat_lon() {
+            out.push(lat.id.clone());
+            out.push(lon.id.clone());
+        }
+        out
     }
 
     fn is_wgs84(&self) -> bool {
@@ -999,7 +1012,87 @@ impl CheckCtx<'_> {
     }
 
     // -----------------------------------------------------------------------------------------
-    // Spatial (latitude and longitude columns; the native engine imports no geometry columns yet)
+    // Spatial: the geometry column through the functions of geofn.rs, and the latitude and
+    // longitude columns in plain SQL
+
+    /// Geometries that break the GeoJSON rules, with the kinds of defect found (geometryValid).
+    fn geometry_valid(&self, rule: &Rule, pack: &Pack, cols: &[&Col]) -> Result<Vec<Draft>> {
+        let mut out = Vec::new();
+        for c in cols.iter().filter(|c| c.kind == Kind::Geometry) {
+            let mut rows = RowSet::new(self.row_count);
+            // Each kind of defect once, in the order the rows show them.
+            let mut codes: Vec<String> = Vec::new();
+            self.each_text(
+                &format!(
+                    "SELECT __rid, d FROM (SELECT __rid, tw_geo_defects({c}) AS d FROM {v})                      WHERE d <> '' ORDER BY __rid",
+                    c = c.q(),
+                    v = self.view
+                ),
+                |rid, found| {
+                    rows.insert(rid as u64);
+                    for code in found.split(',') {
+                        if !codes.iter().any(|x| x == code) {
+                            codes.push(code.to_string());
+                        }
+                    }
+                },
+            )?;
+            if rows.count() > 0 {
+                let detail = examples(codes.iter().map(String::as_str), 4);
+                out.push(self.draft(
+                    rule,
+                    pack,
+                    &[c],
+                    "rows",
+                    rows,
+                    vec![("detail", Var::Text(detail))],
+                    None,
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Features without a geometry (geometryPresent).
+    fn geometry_present(&self, rule: &Rule, pack: &Pack, cols: &[&Col]) -> Result<Vec<Draft>> {
+        let mut out = Vec::new();
+        for c in cols {
+            let rows = self.rows(&format!(
+                "SELECT __rid FROM {v} WHERE {c} IS NULL",
+                v = self.view,
+                c = c.q()
+            ))?;
+            if rows.count() > 0 {
+                out.push(self.draft(rule, pack, &[c], "rows", rows, vec![], None));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The geometry column as SQL text, when the dataset has one that holds geometries.
+    fn geometry_expr(&self) -> Option<String> {
+        self.geometry()
+            .filter(|g| g.kind == Kind::Geometry)
+            .map(Col::q)
+    }
+
+    /// The rows either test flags: one on the row's geometry, one on its latitude and longitude
+    /// (spatialRows). A test is left out when the dataset lacks what it reads.
+    fn spatial_rows(&self, geometry: Option<String>, point: Option<String>) -> Result<RowSet> {
+        let tests: Vec<String> = [geometry, point]
+            .into_iter()
+            .flatten()
+            .map(|t| format!("({t})"))
+            .collect();
+        if tests.is_empty() {
+            return Ok(RowSet::new(self.row_count));
+        }
+        self.rows(&format!(
+            "SELECT __rid FROM {v} WHERE {}",
+            tests.join(" OR "),
+            v = self.view
+        ))
+    }
 
     fn lat_lon_exprs(&self) -> Option<(String, String)> {
         let (lat, lon) = self.lat_lon()?;
@@ -1044,33 +1137,45 @@ impl CheckCtx<'_> {
     }
 
     fn coord_range(&self, rule: &Rule, pack: &Pack) -> Result<Vec<Draft>> {
-        let Some((lat, lon)) = self.lat_lon_exprs().filter(|_| self.is_wgs84()) else {
+        if !self.is_wgs84() {
             return Ok(vec![]);
-        };
-        let rows = self.rows(&format!(
-            "SELECT __rid FROM {v} WHERE abs({lat}) > 90 OR abs({lon}) > 180",
-            v = self.view
-        ))?;
+        }
+        let geometry = self
+            .geometry_expr()
+            .map(|g| format!("COALESCE(tw_geo_out_of_range({g}), false)"));
+        let point = self
+            .lat_lon_exprs()
+            .map(|(lat, lon)| format!("abs({lat}) > 90 OR abs({lon}) > 180"));
+        let rows = self.spatial_rows(geometry, point)?;
         Ok(self.spatial_draft(rule, pack, rows))
     }
 
     fn latlon_swapped(&self, rule: &Rule, pack: &Pack) -> Result<Vec<Draft>> {
-        let Some((lat, lon)) = self.lat_lon_exprs().filter(|_| self.is_wgs84()) else {
+        if !self.is_wgs84() {
             return Ok(vec![]);
-        };
-        let outside_but_swapped_inside = match &self.project_area {
+        }
+        let geometry = self.geometry_expr().map(|g| match &self.project_area {
             Some(a) => format!(
-                "(NOT {} AND {})",
-                Self::contains_sql(a, &lon, &lat),
-                Self::contains_sql(a, &lat, &lon)
+                "COALESCE(tw_geo_swapped({g}, {}), false)",
+                a.map(dbl).join(", ")
             ),
-            None => "false".into(),
-        };
-        let rows = self.rows(&format!(
-            "SELECT __rid FROM {v} WHERE {lat} IS NOT NULL AND {lon} IS NOT NULL AND \
-             ((abs({lat}) > 90 AND abs({lon}) <= 90 AND abs({lat}) <= 180) OR (abs({lat}) <= 90 AND {outside_but_swapped_inside}))",
-            v = self.view
-        ))?;
+            None => format!("COALESCE(tw_geo_swapped({g}), false)"),
+        });
+        let point = self.lat_lon_exprs().map(|(lat, lon)| {
+            let outside_but_swapped_inside = match &self.project_area {
+                Some(a) => format!(
+                    "(NOT {} AND {})",
+                    Self::contains_sql(a, &lon, &lat),
+                    Self::contains_sql(a, &lat, &lon)
+                ),
+                None => "false".into(),
+            };
+            format!(
+                "{lat} IS NOT NULL AND {lon} IS NOT NULL AND \
+                 ((abs({lat}) > 90 AND abs({lon}) <= 90 AND abs({lat}) <= 180) OR (abs({lat}) <= 90 AND {outside_but_swapped_inside}))"
+            )
+        });
+        let rows = self.spatial_rows(geometry, point)?;
         Ok(self.spatial_draft(rule, pack, rows))
     }
 
@@ -1078,14 +1183,19 @@ impl CheckCtx<'_> {
         let (Some(area), true) = (&self.project_area, self.is_wgs84()) else {
             return Ok(vec![]);
         };
-        let Some((lat, lon)) = self.lat_lon_exprs() else {
-            return Ok(vec![]);
-        };
-        let rows = self.rows(&format!(
-            "SELECT __rid FROM {v} WHERE {lat} IS NOT NULL AND {lon} IS NOT NULL AND NOT {inside}",
-            v = self.view,
-            inside = Self::contains_sql(area, &lon, &lat)
-        ))?;
+        let geometry = self.geometry_expr().map(|g| {
+            format!(
+                "COALESCE(tw_geo_outside({g}, {}), false)",
+                area.map(dbl).join(", ")
+            )
+        });
+        let point = self.lat_lon_exprs().map(|(lat, lon)| {
+            format!(
+                "{lat} IS NOT NULL AND {lon} IS NOT NULL AND NOT {}",
+                Self::contains_sql(area, &lon, &lat)
+            )
+        });
+        let rows = self.spatial_rows(geometry, point)?;
         Ok(self.spatial_draft(rule, pack, rows))
     }
 
@@ -1252,8 +1362,9 @@ impl CheckCtx<'_> {
             "within_area" => self.within_area(rule, pack)?,
             "crs_wgs84" => self.crs_wgs84(rule, pack),
             "import_note" => self.import_note(rule, pack)?,
-            // Geometry columns are not imported by the native engine yet, so no column has them.
-            "geometry_valid" | "geometry_present" | "system" => vec![],
+            "geometry_valid" => self.geometry_valid(rule, pack, cols)?,
+            "geometry_present" => self.geometry_present(rule, pack, cols)?,
+            "system" => vec![],
             other => {
                 return Err(EngineError::unsupported(format!("the check {other}")));
             }

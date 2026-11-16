@@ -409,9 +409,20 @@ pub fn predicate_sql(p: &Value, cols: &[StageColumn]) -> Result<String> {
         let at = |i: usize| b.get(i).copied().unwrap_or(f64::NAN);
         if let Some(g) = p.get("geometry") {
             let g = column_of(cols, g.as_str().unwrap_or_default())?;
-            return Err(invalid(
-                format!("{} does not hold geometries.", g.name()),
-                "Choose the geometry column.",
+            if g.typ() != "geometry" {
+                return Err(invalid(
+                    format!("{} does not hold geometries.", g.name()),
+                    "Choose the geometry column.",
+                ));
+            }
+            // A value with the shape of a geometry that shares a point with the box (geofn.rs).
+            return Ok(format!(
+                "coalesce(tw_geo_meets({}, {}, {}, {}, {}), false)",
+                quote_ident(g.id()),
+                double(at(0)),
+                double(at(1)),
+                double(at(2)),
+                double(at(3))
             ));
         }
         let lat = column_of(cols, p["lat"].as_str().unwrap_or_default())?;

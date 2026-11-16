@@ -544,6 +544,41 @@ mod tests {
         );
     }
 
+    /// Lists, structs and maps become JSON text through DuckDB's JSON functions, which the engine
+    /// links in: nothing is fetched or loaded from the machine, as the engine itself runs DuckDB.
+    #[test]
+    fn reads_nested_values_as_json_text_without_fetching_an_extension() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;",
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("tw-parquet-nested-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nested.parquet");
+        conn.execute_batch(&format!(
+            "COPY (SELECT [1, 2] AS list, {{'b': 'x', 'a': 1.5}} AS rec, 'w' AS name) TO {} (FORMAT parquet)",
+            crate::import::quote_text(&path.to_string_lossy())
+        ))
+        .unwrap();
+        let meta = metadata(&conn, &path).unwrap();
+        let mut rows = Vec::new();
+        read_rows(&conn, &path, &meta, None, &mut |_, fields| {
+            rows.push(fields);
+            Ok(true)
+        })
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            rows,
+            vec![vec![
+                Raw::Text("[1,2]".into()),
+                Raw::Text("{\"b\":\"x\",\"a\":1.5}".into()),
+                Raw::Text("w".into())
+            ]]
+        );
+    }
+
     #[test]
     fn keeps_every_stored_digit_of_a_timestamp() {
         assert_eq!(
