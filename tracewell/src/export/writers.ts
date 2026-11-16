@@ -151,7 +151,8 @@ export function* features(view: View, source: 'column' | 'latlon'): IterableIter
     }
     const properties: GeoJsonFeatureOut['properties'] = {};
     for (const c of props) {
-      const v = view.value(r, c.id);
+      // Empty text is no value here too, as read-back and the other formats take it.
+      const v = exportable(view.value(r, c.id));
       properties[headerFor(c)] =
         v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean' ? v : textOf(v);
     }

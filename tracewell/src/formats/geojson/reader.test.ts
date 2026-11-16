@@ -201,6 +201,40 @@ describe('document shapes', () => {
     expect(sniff.sampleRows).toHaveLength(1);
   });
 
+  it('holds a geometry as its JSON text reads back: no infinity and no -0', async () => {
+    // 1e999 is beyond the double range and parses as an infinity, which JSON cannot write.
+    const src = bytesSource(
+      utf8(
+        '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"n":1e999},' +
+          '"geometry":{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1e999,-0]},' +
+          '{"type":"LineString","coordinates":[[-1e999,2],[3,-0.0]],"bbox":[-0,0,1e999,1]}]}}]}',
+      ),
+      'test.geojson',
+    );
+    const expected = {
+      type: 'GeometryCollection',
+      geometries: [
+        { type: 'Point', coordinates: [null, 0] },
+        {
+          type: 'LineString',
+          coordinates: [
+            [null, 2],
+            [3, 0],
+          ],
+          bbox: [0, 0, null, 1],
+        },
+      ],
+    };
+    const { rows } = await readAll(src);
+    // The property keeps the number visible as text; the geometry is what JSON.stringify writes of it.
+    expect(rows[0]?.fields).toEqual(['Infinity']);
+    expect(rows[0]?.geometry).toStrictEqual(expected);
+    expect(JSON.parse(JSON.stringify(rows[0]?.geometry))).toStrictEqual(rows[0]?.geometry);
+    expect(canonicalJson(rows[0]?.geometry as unknown as JsonValue)).toBe(canonicalJson(expected));
+    const sniff = await geojsonImporter.sniff(src);
+    expect(sniff.sampleRows[0]?.geometry).toStrictEqual(expected);
+  });
+
   it('a single Feature gives one row', async () => {
     const src = text({ properties: { id: 'W1', depth: 12 }, geometry: null, type: 'Feature' });
     const { rows } = await readAll(src);

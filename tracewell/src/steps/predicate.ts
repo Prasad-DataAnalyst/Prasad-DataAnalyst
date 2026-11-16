@@ -4,7 +4,7 @@
  * case-insensitive contains unless asked otherwise. Compiled once against the schema, so a bad
  * column or a value of the wrong type is reported before any row is read.
  */
-import { bboxContains, bboxIntersectsGeometry } from '@tw/geo';
+import { bboxContains, bboxIntersectsGeometry, isGeometry } from '@tw/geo';
 import {
   EngineError,
   isDateCell,
@@ -169,9 +169,11 @@ function compileBbox(p: Extract<Predicate, { bbox: unknown }>, schema: TableSche
     if (g.type.value !== 'geometry') {
       throw invalid(`${g.name} does not hold geometries.`, 'Choose the geometry column.', { column: g.id });
     }
+    // A value without the shape of a geometry (a missing or misplaced array, an unknown type) has
+    // no place, so it is in no box; the test itself trusts the shape.
     return (get) => {
       const v = get(g.id);
-      return isGeometryCell(v) && bboxIntersectsGeometry(box, v.geometry);
+      return isGeometryCell(v) && isGeometry(v.geometry) && bboxIntersectsGeometry(box, v.geometry);
     };
   }
   const lat = columnOf(schema, p.lat);

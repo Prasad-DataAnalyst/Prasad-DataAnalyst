@@ -83,6 +83,30 @@ export class PropertyColumns {
       this.typeList.push(value.type);
     }
     // Kept as written: whether the geometry is valid is the rules module's job (TW-GEO-001).
+    settleNumbers(value);
     return value as unknown as Geometry;
+  }
+}
+
+/**
+ * Makes a parsed geometry hold exactly what its JSON text holds. A number beyond the double range
+ * parses as an infinity, which JSON cannot write and no digest can encode, so it becomes null (the
+ * validity check then reports the position); -0 becomes 0. What is shown, exported, saved and
+ * hashed is then the value itself. The geometry is the parser's own fresh value, changed in place
+ * and without recursion, so a deeply nested one cannot exhaust the stack.
+ */
+function settleNumbers(root: object): void {
+  const pending: object[] = [root];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    const holder = node as Record<string, unknown>;
+    for (const key of Object.keys(holder)) {
+      const v = holder[key];
+      if (typeof v === 'number') {
+        if (!Number.isFinite(v)) holder[key] = null;
+        else if (v === 0) holder[key] = 0;
+      } else if (typeof v === 'object' && v !== null) {
+        pending.push(v);
+      }
+    }
   }
 }

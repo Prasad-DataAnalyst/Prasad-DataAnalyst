@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import type { CellValue, Predicate } from '@tw/model';
+import type { CellValue, ColumnSchema, Predicate } from '@tw/model';
 import { dataset, ROWS } from './__fixtures__/dataset';
 import { compilePredicate, describePredicate } from './index';
 
@@ -35,6 +35,35 @@ describe('compilePredicate', () => {
     expect(() => compilePredicate({ column: 'c3', op: 'eq', value: 'high' }, ds.schema)).toThrow(/cannot be compared/);
     expect(() => compilePredicate({ column: 'c3', op: 'contains', text: '1' }, ds.schema)).toThrow(/text columns/);
     expect(() => compilePredicate({ bbox: [0, 0, 1, 1], geometry: 'c3' }, ds.schema)).toThrow(/geometries/);
+  });
+
+  it('keeps what has the shape of a geometry and meets the box, and nothing else', () => {
+    const first = ds.schema.columns[0] as ColumnSchema;
+    const shape: ColumnSchema = { ...first, id: 'g', name: 'shape', type: { ...first.type, value: 'geometry' } };
+    const schema = { ...ds.schema, columns: [...ds.schema.columns, shape] };
+    const test = compilePredicate({ bbox: [0, 50, 10, 60], geometry: 'g' }, schema);
+    const meets = (geometry: unknown) => test(() => (geometry === null ? null : ({ geometry } as CellValue)));
+    expect(meets({ type: 'Point', coordinates: [2, 58] })).toBe(true);
+    expect(meets({ type: 'Point', coordinates: [20, 58] })).toBe(false);
+    expect(meets(null)).toBe(false);
+    // An unclosed ring is not valid, but it has a place.
+    const open = [
+      [1, 51],
+      [2, 52],
+      [2, 51],
+    ];
+    expect(meets({ type: 'Polygon', coordinates: [open] })).toBe(true);
+    // These have none: the wrong nesting, a missing array, an unknown type, a missing coordinate.
+    for (const broken of [
+      { type: 'LineString', coordinates: 5 },
+      { type: 'Polygon', coordinates: [[2, 58]] },
+      { type: 'MultiPoint' },
+      { type: 'Circle', coordinates: [2, 58], radius: 5 },
+      { type: 'GeometryCollection' },
+      { type: 'Point', coordinates: [null, 58] },
+    ]) {
+      expect(meets(broken), JSON.stringify(broken)).toBe(false);
+    }
   });
 
   it('describes predicates in plain language', () => {

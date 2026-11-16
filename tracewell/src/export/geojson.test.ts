@@ -45,6 +45,26 @@ describe('GeoJSON export', () => {
     expect(result.validation.checks.filter((c) => !c.ok)).toEqual([]);
   });
 
+  it('writes an empty text value as no value, as the other formats do, and passes read-back', async () => {
+    const cols = [
+      { name: 'well_id', type: 'string' as const, role: 'id' as const },
+      { name: 'note', type: 'string' as const, role: 'text' as const },
+      { name: 'geometry', type: 'geometry' as const, role: 'geometry' as const },
+    ];
+    const point: CellValue = { geometry: { type: 'Point', coordinates: [1.5, 57.25] } };
+    const rows: CellValue[][] = [
+      ['A', '', point],
+      ['B', 'kept', point],
+    ];
+    const view = viewOf(datasetOf(cols, rows, { code: 'OGC:CRS84', source: 'rfc7946-default' }, 'c2'));
+    const result = await buildExport(inputOf(view, { profile: 'geojson' }), CTX);
+    expect(result.validation.checks.filter((c) => !c.ok)).toEqual([]);
+    const doc = JSON.parse(readZip(result.bytes ?? new Uint8Array()).readText('data.geojson')) as {
+      features: { properties: Record<string, unknown> }[];
+    };
+    expect(doc.features.map((f) => f.properties['note'])).toEqual([null, 'kept']);
+  });
+
   it('refuses data that is not WGS84 with EXPORT_REFUSED and the TW-EXP-003 reason', async () => {
     const view = viewOf(datasetOf(COLS, undefined, { code: 'EPSG:27700', source: 'geojson-crs-member' }));
     await expect(buildExport(inputOf(view, { profile: 'geojson' }), CTX)).rejects.toMatchObject({
