@@ -219,3 +219,25 @@ The same workflow and machine, with `--rows 1000000`, before the memory changes:
 From 1 million to 124 million rows the import time grows 90-fold, the export 76-fold and the
 checks 202-fold. Checks grow faster than the data because the duplicate and series checks sort or
 hash the whole table, which spills to disk once it no longer fits in memory.
+
+## Checks after a decision (5,000,000 rows, 409 MB)
+
+A decision on a checked dataset re-runs the checks before it returns, as in the TypeScript engine.
+The native engine re-runs only the checks the decision can change (SAD decision D-12, "Rechecks"):
+a cell edit, the checks that read the edited column and the columns converted from it; a project
+area, the two checks that read it. The rest of the last results stand.
+
+Measured on the same machine as above with `gen-large-csv.mjs --rows 5000000 --seed 42`
+(5,000,000 rows, 10 columns), engine defaults, after a full check run of 7.9 s:
+
+| Decision                                  | Every check again | Only what it changes | What runs again                                                       |
+| ----------------------------------------- | ----------------- | -------------------- | --------------------------------------------------------------------- |
+| Edit a pressure value                     | 8.3 s             | 3.1 s                | Duplicate rows; that column's flatline, spike, range and type checks |
+| Set the project area                      | 8.1 s             | 0.06 s               | Outside the area; latitude/longitude swap                             |
+| Edit a latitude                           | a full run        | 0.9 s                | Duplicate rows; the coordinate checks; that column's own checks       |
+| Edit a well ID (a series key)             | a full run        | 8.3 s                | Every series check, as each series is regrouped                       |
+| Exclude a row                             | 8.8 s             | 8.9 s                | Everything: every check reads the rows that remain                    |
+
+The first column is the engine before this change, on the same file (commit `e8ae3a2`); it ran every check after every decision, so the two rows not measured with it took a full run, which the other rows put at 8.1 to 8.8 s. The parity
+suite edits every column of six datasets, reverts, excludes and moves the project area, and
+compares every issue and its rows with the TypeScript engine's full runs after each decision.

@@ -84,6 +84,61 @@ pub struct CheckCtx<'a> {
     pub project_area: Option<[f64; 4]>,
 }
 
+/// What changed since a dataset's last check run.
+pub enum Change {
+    /// The values of these columns of the working view: a cell edit's column and the columns
+    /// converted from it.
+    Columns(HashSet<String>),
+    /// The project area.
+    Area,
+}
+
+/// What a rule checks again after a change.
+enum Scope<'c> {
+    Skip,
+    Whole,
+    /// A rule that checks columns one by one, on these of them.
+    Columns(Vec<&'c Col>),
+}
+
+/// What a partial run checked again: whole rules, and some columns of rules that check columns
+/// one by one.
+#[derive(Default)]
+pub struct Rerun {
+    whole: HashSet<String>,
+    columns: HashSet<(String, String)>,
+}
+
+impl Rerun {
+    /// Whether this run gave the result that stands in for a result of the last one, or found
+    /// there is none now.
+    pub fn covers(&self, d: &Draft) -> bool {
+        self.whole.contains(&d.rule_id)
+            || matches!(d.columns.as_slice(), [c] if self.columns.contains(&(d.rule_id.clone(), c.clone())))
+    }
+}
+
+/// The rules a check run runs, in order: every rule of the check packs but the system rules.
+fn run_rules() -> Vec<(&'static Pack, &'static Rule)> {
+    check_packs()
+        .iter()
+        .flat_map(|p| {
+            p.rules
+                .iter()
+                .filter(|r| r.kind() != "system")
+                .map(move |r| (p, r))
+        })
+        .collect()
+}
+
+fn cancelled_run() -> EngineError {
+    EngineError::new(
+        "CANCELLED",
+        "The check run was cancelled.",
+        "Run the checks again when you are ready.",
+    )
+}
+
 struct Series<'c> {
     time: &'c Col,
     id: Option<&'c Col>,
@@ -1371,29 +1426,96 @@ impl CheckCtx<'_> {
         })
     }
 
+    /// What a rule has to check again after `change`, from what the rule reads: values of
+    /// columns (its own, the series' time and ID, the place columns, or every column), the
+    /// project area, or only the schema and what the import noted. A rule this engine does not
+    /// know the inputs of is checked again in full.
+    fn scope_after<'c>(&self, rule: &Rule, cols: &[&'c Col], change: &Change) -> Scope<'c> {
+        let changed = match change {
+            Change::Area => {
+                return if matches!(rule.kind(), "latlon_swapped" | "within_area") {
+                    Scope::Whole
+                } else {
+                    Scope::Skip
+                };
+            }
+            Change::Columns(changed) => changed,
+        };
+        let hit = |c: &Col| changed.contains(&c.id);
+        let own = || Scope::Columns(cols.iter().copied().filter(|c| hit(c)).collect());
+        let series = self
+            .series()
+            .is_some_and(|s| hit(s.time) || s.id.is_some_and(hit));
+        let places = self.geometry().is_some_and(hit)
+            || self
+                .lat_lon()
+                .is_some_and(|(lat, lon)| hit(lat) || hit(lon));
+        let whole_if = |yes: bool| if yes { Scope::Whole } else { Scope::Skip };
+        match rule.kind() {
+            "unit_known" | "tz_specified" | "date_ambiguous" | "crs_wgs84" | "import_note" => {
+                Scope::Skip
+            }
+            "not_null"
+            | "type_conformance"
+            | "below_detection_limit"
+            | "physical_range"
+            | "null_marker"
+            | "unit_consistent"
+            | "geometry_valid"
+            | "geometry_present" => own(),
+            // A series runs in time order within each ID, so new times or IDs move every value.
+            "flatline" | "spike" if series => Scope::Whole,
+            "flatline" | "spike" => own(),
+            "duplicate_rows" => whole_if(!changed.is_empty()),
+            "duplicate_key" | "ts_duplicate" | "ts_order" | "ts_gap" => whole_if(series),
+            "coord_range" | "latlon_swapped" | "within_area" => whole_if(places),
+            _ => Scope::Whole,
+        }
+    }
+
+    /// Runs again only what `change` can affect (a cell edit's column and its conversions, or
+    /// the project area), and says what it ran. Every other result of the last run stands: no
+    /// input of it has changed since.
+    pub fn run_after(&self, change: &Change, cancel: &AtomicBool) -> Result<(Vec<Draft>, Rerun)> {
+        let mut out = Vec::new();
+        let mut rerun = Rerun::default();
+        for (pack, rule) in run_rules() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(cancelled_run());
+            }
+            let cols = self.select(&rule.applies_to);
+            if rule.applies_to.get("dataset").is_none() && cols.is_empty() {
+                continue;
+            }
+            match self.scope_after(rule, &cols, change) {
+                Scope::Skip => {}
+                Scope::Whole => {
+                    rerun.whole.insert(rule.id.clone());
+                    out.extend(self.run_rule(rule, pack, &cols)?);
+                }
+                Scope::Columns(some) => {
+                    if some.is_empty() {
+                        continue;
+                    }
+                    for c in &some {
+                        rerun.columns.insert((rule.id.clone(), c.id.clone()));
+                    }
+                    out.extend(self.run_rule(rule, pack, &some)?);
+                }
+            }
+        }
+        Ok((out, rerun))
+    }
+
     /// Runs every rule of the check packs (run.ts runRules), reporting progress per rule.
     pub fn run(
         &self,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Vec<Draft>> {
-        let rules: Vec<(&Pack, &Rule)> = check_packs()
-            .iter()
-            .flat_map(|p| {
-                p.rules
-                    .iter()
-                    .filter(|r| r.kind() != "system")
-                    .map(move |r| (p, r))
-            })
-            .collect();
+        let rules = run_rules();
         let mut out = Vec::new();
-        let cancelled = || {
-            EngineError::new(
-                "CANCELLED",
-                "The check run was cancelled.",
-                "Run the checks again when you are ready.",
-            )
-        };
+        let cancelled = cancelled_run;
         for (done, (pack, rule)) in rules.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
                 return Err(cancelled());

@@ -18,6 +18,7 @@ import { openWorkbook } from '@tw/formats-xlsx';
 import {
   canonicalJson,
   type AuditEntry,
+  type CellValue,
   type CheckSummary,
   type ExportResult,
   type DatasetSummary,
@@ -2953,6 +2954,104 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       lite.close();
     }
   }, 90_000);
+
+  it('re-checks only what a decision changes, with the issues a full check run gives', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    // The issues, every issue's rows and the health, which must be what a full run gives.
+    const issuesOf = async (e: EngineClient, datasetId: string) => {
+      const items = (await e.listIssues({ datasetId, limit: 1000 })).items;
+      const rows = [];
+      for (const i of items) rows.push((await e.listOccurrences(i.id, { offset: 0, limit: 1000 })).items);
+      return { items, rows, health: await e.getHealth(datasetId) };
+    };
+    const both = async (what: string, d: Decision) => {
+      const [a, b] = [await settled(() => nat.client.decide(d)), await settled(() => lite.decide(d))];
+      const strip = (x: unknown) => (Array.isArray(x) ? (x as AuditEntry[]).map(content) : x);
+      expect(strip(a), what).toEqual(strip(b));
+      return a as AuditEntry[];
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Rechecks', profile: { ...PROFILE } });
+      const ids: string[] = [];
+      for (const name of [
+        'csv_timeseries_gaps_dups_flatline_spike.csv',
+        'csv_latlon_swapped_out_of_range.csv',
+        'csv_duplicates_rows_and_keys.csv',
+        'csv_null_markers.csv',
+        'csv_mixed_units_in_cells.csv',
+        'geojson_invalid_geometries.geojson',
+      ] as const) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        for (const e of [nat.client, lite]) {
+          const d = await e.awaitJob<DatasetSummary>(await e.importFile(file));
+          await e.awaitJob<CheckSummary>(await e.runChecks(d.id));
+          if (e === lite) ids.push(d.id);
+        }
+      }
+      // An edit changes only its own dataset; the project area changes them all.
+      const same = async (what: string, only?: string) => {
+        for (const id of only === undefined ? ids : [only]) {
+          expect(await issuesOf(nat.client, id), `${what}: ${id}`).toEqual(await issuesOf(lite, id));
+        }
+      };
+      await same('after the checks');
+      let step = 0;
+      for (const id of ids) {
+        const { columns } = await lite.getSchema(id);
+        const { rows } = await lite.getRows({ datasetId: id, stage: 'working', offset: 0, limit: 1000 });
+        const r = Math.floor(rows.length / 2);
+        // Each column of a row: another row's value (repeats, runs, duplicate keys and times), a
+        // value far out (spikes, ranges), and no value; then the last edit is undone.
+        for (const [j, c] of columns.entries()) {
+          const other = rows[r + 1]?.cells[j] ?? null;
+          const values: CellValue[] = [other, null];
+          if (typeof other === 'number') values.push(other * 1000 + 7);
+          let last: number | undefined;
+          for (const v of values) {
+            const what = `${id} ${c.name} row ${r} to ${JSON.stringify(v)}`;
+            const [entry] = await both(what, {
+              kind: 'edit_cell',
+              datasetId: id,
+              rowId: r,
+              columnId: c.id,
+              value: { value: v },
+              reason: `Check ${step++}`,
+            });
+            last = entry?.seq ?? last;
+            await same(what, id);
+          }
+          if (last !== undefined) {
+            await both(`revert ${last}`, { kind: 'revert', seq: last, reason: `Undo ${step++}` });
+            await same(`after reverting ${last}`, id);
+          }
+        }
+        // A full run in between: the partial ones go on from its results.
+        await both(`exclude a row of ${id}`, {
+          kind: 'exclude_rows',
+          datasetId: id,
+          rows: [0],
+          reason: 'Test row only',
+        });
+        await same(`after excluding a row of ${id}`, id);
+      }
+      for (const bbox of [[0, 50, 10, 60], [170, -60, -170, 60], null] as ([number, number, number, number] | null)[]) {
+        const [entry] = await both(`area ${JSON.stringify(bbox)}`, {
+          kind: 'set_project_area',
+          bbox,
+          reason: 'Licence area',
+        });
+        await same(`area ${JSON.stringify(bbox)}`);
+        if (bbox !== null && entry !== undefined) {
+          await both(`revert area ${entry.seq}`, { kind: 'revert', seq: entry.seq, reason: 'Back to before' });
+          await same(`after reverting area ${entry.seq}`);
+        }
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 120_000);
 
   it('exports GeoJSON datasets, and points from latitude and longitude, as the TypeScript engine does', async () => {
     const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);

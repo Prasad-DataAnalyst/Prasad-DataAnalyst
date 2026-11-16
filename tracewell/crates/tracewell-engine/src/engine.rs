@@ -4,7 +4,7 @@
 
 use crate::audit::AuditLog;
 use crate::canonical::sha256_hex;
-use crate::checks::{CheckCtx, Col, summarize};
+use crate::checks::{Change, CheckCtx, Col, summarize};
 use crate::csv::Note;
 use crate::detect::geometry_column_of;
 use crate::error::{EngineError, Result};
@@ -1426,7 +1426,16 @@ fn check_drafts(
     project_area: Option<[f64; 4]>,
     cancel: &AtomicBool,
 ) -> Result<Vec<Draft>> {
-    let ctx = CheckCtx {
+    check_ctx(conn, d, project_area).run(cancel, &mut |_, _| ())
+}
+
+/// What the checks of a dataset see: its working view, its schema and what its import noted.
+fn check_ctx<'a>(
+    conn: &'a Connection,
+    d: &'a Dataset,
+    project_area: Option<[f64; 4]>,
+) -> CheckCtx<'a> {
+    CheckCtx {
         conn,
         view: quote_ident(&d.view),
         exceptions: quote_ident(&d.exceptions_view()),
@@ -1438,8 +1447,7 @@ fn check_drafts(
         notes: &d.notes,
         assumptions: &d.assumptions,
         project_area,
-    };
-    ctx.run(cancel, &mut |_, _| ())
+    }
 }
 
 /// Runs the checks again after a change recorded by entry `seq`, once a check run has been
@@ -1457,6 +1465,46 @@ fn recheck(
     let n = d.row_count;
     merge_check_run(&mut d.issues, drafts, seq, n);
     Ok(())
+}
+
+/// Re-runs, after a change the checks can trace, only the checks it can affect, and keeps every
+/// other result of the last run: recheck() would give the same issues. That holds because each
+/// change to a checked dataset ends with one run or the other, so the issues present are always
+/// what a full run of the dataset as it stands gives.
+fn recheck_after(
+    conn: &Connection,
+    d: &mut Dataset,
+    project_area: Option<[f64; 4]>,
+    seq: u64,
+    change: Change,
+) -> Result<()> {
+    if !d.checked() {
+        return Ok(());
+    }
+    let (mut drafts, rerun) =
+        check_ctx(conn, d, project_area).run_after(&change, &AtomicBool::new(false))?;
+    drafts.extend(
+        d.issues
+            .iter()
+            .filter(|st| st.present && !rerun.covers(&st.draft))
+            .map(|st| st.draft.clone()),
+    );
+    let n = d.row_count;
+    merge_check_run(&mut d.issues, drafts, seq, n);
+    Ok(())
+}
+
+/// The change a cell edit makes: the values of its column, and of the columns converted from it.
+fn edited(d: &Dataset, column: &str) -> Result<Change> {
+    let stages = d.stages()?;
+    Ok(Change::Columns(
+        stages
+            .working
+            .iter()
+            .filter(|c| root_of(&stages, c.id()) == column)
+            .map(|c| c.id().to_string())
+            .collect(),
+    ))
 }
 
 /// An issue of the system rule pack about the whole project or one dataset (systemIssue).
@@ -1731,10 +1779,11 @@ fn apply_decision(
             let d = dataset_mut(p, &id)?;
             let row = e["target"]["rowId"].as_u64().unwrap_or(0);
             let col = e["target"]["columnId"].as_str().unwrap_or("").to_string();
-            d.edits.insert((col, row), (e["new"].clone(), seq));
+            d.edits.insert((col.clone(), row), (e["new"].clone(), seq));
             install_views(conn, d)?;
             if !skip(&id, seq) {
-                recheck(conn, d, area, seq)?;
+                let change = edited(d, &col)?;
+                recheck_after(conn, d, area, seq, change)?;
             }
         }
         "step.apply" => {
@@ -1804,7 +1853,7 @@ fn apply_decision(
             let area = area_of(&p.project_area);
             for d in &mut p.datasets {
                 if !skip(&d.id, seq) {
-                    recheck(conn, d, area, seq)?;
+                    recheck_after(conn, d, area, seq, Change::Area)?;
                 }
             }
         }
@@ -1837,13 +1886,15 @@ fn apply_decision(
                         .unwrap_or("")
                         .to_string();
                     if target["payload"]["previousEditSeq"].is_null() {
-                        d.edits.remove(&(col, row));
+                        d.edits.remove(&(col.clone(), row));
                     } else {
-                        d.edits.insert((col, row), (target["old"].clone(), seq));
+                        d.edits
+                            .insert((col.clone(), row), (target["old"].clone(), seq));
                     }
                     install_views(conn, d)?;
                     if !skip(&tid, seq) {
-                        recheck(conn, d, area, seq)?;
+                        let change = edited(d, &col)?;
+                        recheck_after(conn, d, area, seq, change)?;
                     }
                 }
                 "issue.accept" => {
@@ -1890,7 +1941,7 @@ fn apply_decision(
                     let area = area_of(&p.project_area);
                     for d in &mut p.datasets {
                         if !skip(&d.id, seq) {
-                            recheck(conn, d, area, seq)?;
+                            recheck_after(conn, d, area, seq, Change::Area)?;
                         }
                     }
                 }
