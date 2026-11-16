@@ -1,0 +1,54 @@
+~ quantum_physics - constants and the standard formulas of quantum mechanics, with units checked.
+
+m: use("math")
+
+planck: 6.62607015e-34 J*s
+hbar: 1.054571817e-34 J*s
+light_speed: 299792458 m/s
+charge: 1.602176634e-19 C
+boltzmann: 1.380649e-23 J/K
+electron_mass: 9.1093837015e-31 kg
+proton_mass: 1.67262192369e-27 kg
+neutron_mass: 1.67492749804e-27 kg
+bohr_radius: 5.29177210903e-11 m
+rydberg: 13.605693122994 eV
+
+photon_energy(wavelength) -> planck * light_speed / wavelength as eV
+
+photon_wavelength(energy) -> planck * light_speed / energy as nm
+
+~ Energy of one quantum at a frequency (a 5 GHz qubit, a 400 THz laser ...).
+frequency_energy(frequency) -> planck * frequency as eV
+
+~ Wavelength of a moving particle.
+de_broglie(mass, speed) -> planck / (mass * speed) as nm
+
+~ Energy level n (1, 2, 3 ...) of a particle trapped in a box of the given width.
+box_energy(n, mass, width) -> n * n * planck ^ 2 / (8 * mass * width ^ 2) as eV
+
+~ Energy level n of a hydrogen atom (negative: the electron is bound).
+hydrogen_energy(n) -> rydberg * (-1 / (n * n))
+
+~ Wavelength of the light given off when hydrogen drops from one level to a lower one.
+hydrogen_line(from_level, to_level) -> {
+  give photon_wavelength(hydrogen_energy(from_level) - hydrogen_energy(to_level))
+}
+
+~ Level n (0, 1, 2 ...) of a quantum harmonic oscillator.
+oscillator_energy(n, frequency) -> (n + 0.5) * planck * frequency as eV
+
+~ Heisenberg: the smallest momentum spread allowed for a given position spread.
+momentum_spread(position_spread) -> hbar / (2 * position_spread)
+
+~ Chance of tunnelling through a wide barrier (first-order estimate).
+tunnelling(mass, barrier, energy, width) -> {
+  when energy >= barrier { give 1 }
+  decay: sqrt(2 * mass * (barrier - energy)) / hbar
+  give m.exp(-2 * (decay * width))
+}
+
+~ Share of two-level systems (qubits) found excited just from heat.
+thermal_population(frequency, temperature) -> 1 / (1 + m.exp(planck * frequency / (boltzmann * temperature)))
+
+~ Colour at which a hot body glows brightest.
+glow_peak(temperature) -> 2.897771955e-3 m*K / temperature as nm

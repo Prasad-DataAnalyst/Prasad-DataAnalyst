@@ -1,0 +1,99 @@
+~ quantum_os - the management layer of a quantum computer: describe a device, check that a circuit
+~ fits it, estimate time and success, and schedule a queue of jobs. Jobs run on the simulator.
+
+q: use("quantum")
+
+~ A device is plain data. links lists which pairs of qubits can interact, e.g. [[0, 1], [1, 2]].
+device(name, qubits, links, gate_time, link_time, reset_time, gate_error, link_error, readout_error) -> ({
+  name: name
+  qubits: qubits
+  links: links
+  gate_time: gate_time
+  link_time: link_time
+  reset_time: reset_time
+  gate_error: gate_error
+  link_error: link_error
+  readout_error: readout_error
+})
+
+~ Two example devices with illustrative numbers (not measurements of any real machine).
+chain_device(n) -> device("chain-{n}", n, map(range(n - 1), i -> [i, i + 1]), 30 ns, 200 ns, 200 us, 0.0005, 0.006, 0.015)
+
+connected_device(n) -> {
+  links: []
+  each a in range(n) {
+    each b in range(a + 1, n) { push(links, [a, b]) }
+  }
+  give device("connected-{n}", n, links, 10 us, 200 us, 500 us, 0.0002, 0.003, 0.003)
+}
+
+linked(dev, a, b) -> len(filter(dev.links, l -> (l[0] = a and l[1] = b) or (l[0] = b and l[1] = a))) > 0
+
+~ Reasons a circuit cannot run on a device as written (an empty list means it fits).
+check(c, dev) -> {
+  problems: []
+  when c.qubits > dev.qubits {
+    push(problems, "needs {c.qubits} qubits but {dev.name} has {dev.qubits}")
+    give problems
+  }
+  each i, op in c.ops {
+    when len(op.qubits) > 2 {
+      push(problems, "step {i}: {op.gate} acts on {len(op.qubits)} qubits; split it into one- and two-qubit gates")
+    }
+    when len(op.qubits) = 2 and not linked(dev, op.qubits[0], op.qubits[1]) {
+      push(problems, "step {i}: {op.gate} needs qubits {op.qubits[0]} and {op.qubits[1]} to be linked")
+    }
+  }
+  give problems
+}
+
+~ Depth, running time of one shot, and the chance that one shot has no error.
+estimate(c, dev) -> {
+  ready: map(range(c.qubits), i -> dev.gate_time * 0)
+  success: 1
+  each op in c.ops {
+    start: max(map(op.qubits, i -> ready[i]))
+    took: dev.gate_time
+    error: dev.gate_error
+    when len(op.qubits) > 1 {
+      took: dev.link_time
+      error: dev.link_error
+    }
+    each i in op.qubits { ready[i]: start + took }
+    success: success * (1 - error)
+  }
+  give {depth: q.depth(c), duration: max(ready), success: success * (1 - dev.readout_error) ^ c.qubits}
+}
+
+~ Add a job to a queue (a list). Higher priority runs first.
+submit(jobs, name, c, shots, priority) -> push(jobs, {name: name, circuit: c, shots: shots, priority: priority})
+
+~ Order the queue: highest priority first, shortest job first among equals. Gives {plan, rejected}.
+schedule(jobs, dev) -> {
+  timed: map(jobs, j -> ({
+    name: j.name
+    circuit: j.circuit
+    shots: j.shots
+    priority: j.priority
+    problems: check(j.circuit, dev)
+    time: j.shots * (estimate(j.circuit, dev).duration + dev.reset_time)
+  }))
+  ordered: sort(sort(filter(timed, j -> len(j.problems) = 0), j -> j.time), j -> 0 - j.priority)
+  clock: dev.reset_time * 0
+  plan: []
+  each j in ordered {
+    push(plan, {name: j.name, circuit: j.circuit, shots: j.shots, starts: clock, ends: clock + j.time})
+    clock: clock + j.time
+  }
+  rejected: map(filter(timed, j -> len(j.problems) > 0), j -> ({name: j.name, problems: j.problems}))
+  give {plan: plan, rejected: rejected}
+}
+
+~ Run the scheduled jobs on the simulator. Results are ideal; success is the estimate for the device.
+execute(jobs, dev, seed) -> {
+  give map(schedule(jobs, dev).plan, j -> ({
+    name: j.name
+    counts: q.sample(j.circuit, j.shots, seed)
+    success: estimate(j.circuit, dev).success
+  }))
+}

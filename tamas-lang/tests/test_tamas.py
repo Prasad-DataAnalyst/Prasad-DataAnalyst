@@ -330,6 +330,64 @@ show c.parse(c.write(sheet)) = sheet"""
         with self.assertRaises(TamasError):  # units are checked inside libraries too
             out('use("semiconductor").yield_poisson(0.1 cm^-2, 1 kg)\nshow use("physics").kinetic_energy(1 m, 1 s)')
 
+    def test_quantum_simulator(self):
+        src = """q: use("quantum")
+bell: q.circuit(2) |> q.h(0) |> q.cx(0, 1)
+show q.probabilities(bell), q.sample(bell, 1000, 7), q.expect(bell, "ZZ"), q.expect(bell, "XX"), q.expect(bell, "ZI"), q.depth(bell), q.counts(bell)
+show q.draw(bell)
+c: q.circuit(3)
+q.ry(c, 0, 60 deg)
+q.rz(c, 0, 45 deg)
+q.swap(c, 0, 2)
+q.ccx(c, 2, 1, 0)
+q.cp(c, 0, 1, 30 deg)
+q.mcz(c, [0, 1, 2])
+show q.fidelity(c, q.from_qasm(q.to_qasm(c))), q.most_likely(q.circuit(3) |> q.x(1)), q.run(q.circuit(1) |> q.h(0) |> q.s(0)).amplitudes
+show q.probabilities(q.circuit(2) |> q.x(0) |> q.swap(0, 1)), q.probabilities(q.circuit(3) |> q.x(0) |> q.x(1) |> q.mcx([0, 1], 2)), q.bloch(q.circuit(1) |> q.h(0), 0)
+show q.to_qasm(bell)"""
+        self.assertEqual(out(src), '{"00": 0.5, "11": 0.5} {"00": 537, "11": 463} 1 1 0 2 {h: 1, cx: 1}\nq0: ─H──●─\nq1: ────X─\n'
+                         '1 010 [[0.707106781187, 0], [0, 0.707106781187]]\n{"01": 1} {"111": 1} [1, 0, 0]\n'
+                         'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\n')
+        self.assertEqual(out("""q: use("quantum")\nshow q.probabilities(q.from_qasm('qreg q[2]; h q[0]; rx(pi/2) q[1]; cu1(-pi/4) q[0],q[1]; // note\n measure q -> c;'))"""),
+                         '{"00": 0.25, "01": 0.25, "10": 0.25, "11": 0.25}')
+        for bad in ['q.circuit(0)', 'q.circuit(21)', 'q.h(q.circuit(2), 2)', 'q.cx(q.circuit(2), 1, 1)', 'q.rx(q.circuit(1), 0, "x")', 'q.h(5, 0)',
+                    'q.expect(q.circuit(2), "Z")', 'q.sample(q.circuit(1), 0, 1)', "q.from_qasm('qreg q[1]; foo q[0];')", 'q.to_qasm(q.mcz(q.circuit(4), [0, 1, 2, 3]))',
+                    'q.run({qubits: 1, ops: [{gate: "nope", qubits: [0]}]})', 'q.fidelity(q.circuit(1), q.circuit(2))']:
+            with self.assertRaises(TamasError, msg=bad):
+                out('q: use("quantum")\n' + bad)
+
+    def test_quantum_libraries(self):
+        head = 'q: use("quantum")\nqa: use("quantum_algorithms")\n'
+        checks = {
+            head + 'g: qa.grover(3, "101")\nshow q.probabilities(qa.ghz(3)), qa.bernstein_vazirani("1011").found, qa.deutsch_jozsa(3, "balanced").verdict, '
+            'qa.deutsch_jozsa(3, "constant").verdict, g.rounds, g.found, round(g.probability, 4), qa.grover(4, "0110").found, qa.grover(2, "11").probability, '
+            'map(["00", "01", "10", "11"], b -> qa.superdense(b).received)':
+                '{"000": 0.5, "111": 0.5} 1011 balanced constant 2 101 0.9453 0110 1 ["00", "01", "10", "11"]',
+            head + 't: qa.teleport(70 deg, 40 deg)\nf: q.circuit(3) |> q.x(2)\nqa.qft_on(f, [0, 1, 2])\n'
+            'show q.bloch(t, 2) = q.bloch(q.circuit(1) |> q.ry(0, 70 deg) |> q.rz(0, 40 deg), 0), q.run(f).amplitudes[2], '
+            'q.probabilities(qa.inverse_qft_on(f, [0, 1, 2])), qa.energy(qa.bell(), [[0.5, "ZZ"], [-1, "XI"], [2, "XX"]]), map(q.run(qa.qft(2)).amplitudes, a -> a[0])':
+                'yes [0, 0.353553390593] {"001": 1} 2.5 [0.5, 0.5, 0.5, 0.5]',
+            'qp: use("quantum_physics")\nshow round(qp.box_energy(1, qp.electron_mass, 1 nm), 4), round(qp.de_broglie(qp.electron_mass, 1e6 m/s), 4), '
+            'round(qp.hydrogen_energy(2), 3), round(qp.hydrogen_line(3, 2), 2), round(qp.tunnelling(qp.electron_mass, 2 eV, 1 eV, 1 nm) * 1e5, 3), '
+            'qp.tunnelling(qp.electron_mass, 1 eV, 2 eV, 1 nm), round(qp.thermal_population(5 GHz, 20 mK) * 1e6, 2), round(qp.glow_peak(5772 K)), round(qp.photon_wavelength(2 eV), 1)':
+                "0.376 eV 0.7274 nm -3.401 eV 656.11 nm 3.549 1 6.16 502 nm 619.9 nm",
+            'qh: use("quantum_hardware")\nshow round(qh.josephson_energy(30 nA), 2), round(qh.charging_energy(70 fF), 4), qh.transmon_frequency(15 GHz, 0.3 GHz), '
+            'round(qh.t2(100 us, 150 us), 2), round(qh.coherence_error(40 ns, 80 us), 6), qh.flip_time(25 MHz) as ns, qh.physical_per_logical(3), qh.logical_error(0.001, 3), '
+            'qh.distance_for(0.001, 5e-12), qh.qubits_needed(100, 0.001, 5e-12), qh.distance_for(0.02, 1e-6), round(qh.circuit_success(50, 0.0005, 20, 0.006, 5, 0.015), 4)':
+                "14.9 GHz 0.2767 GHz 5.7 GHz 85.71 us 0.0005 20 ns 17 0.001 21 {distance: 21, physical: 88100} nothing 0.8018",
+            'qc: use("quantum_comms")\na: qc.bb84(2000, no, 11)\nb: qc.bb84(2000, yes, 11)\nshow a.error_rate, a.secure, len(a.key) = a.kept, b.error_rate > 0.2, b.secure, '
+            'round(qc.secret_fraction(0.05), 4), qc.secret_fraction(0.3), round(qc.fibre_transmission(50 km, 0.2), 4), round(qc.key_rate(1 GHz, 50 km, 0.2, 0.2, 0.02) as kHz), round(qc.chsh(), 4)':
+                "0 yes yes yes no 0.4272 0 0.1 7171 kHz 2.8284",
+            head + 'os: use("quantum_os")\ndev: os.chain_device(3)\nfar: q.circuit(3) |> q.h(0) |> q.cx(0, 2)\ne: os.estimate(qa.ghz(3), dev)\njobs: []\n'
+            'os.submit(jobs, "ghz", qa.ghz(3), 1000, 1)\nos.submit(jobs, "bell", qa.bell(), 500, 1)\nos.submit(jobs, "urgent", qa.bell(), 2000, 5)\nos.submit(jobs, "bad", far, 100, 9)\n'
+            'plan: os.schedule(jobs, dev)\nshow os.check(qa.ghz(3), dev), os.check(qa.ghz(5), dev), e.depth, e.duration, round(e.success, 4), map(plan.plan, j -> j.name), '
+            'plan.plan[1].starts as ms, plan.rejected, os.execute(jobs, dev, 3)[2].counts, os.check(far, os.connected_device(3))':
+                '[] ["needs 5 qubits but chain-3 has 3"] 3 430 ns 0.9438 ["urgent", "bell", "ghz"] 400.46 ms '
+                '[{name: "bad", problems: ["step 1: cx needs qubits 0 and 2 to be linked"]}] {"000": 509, "111": 491} []',
+        }
+        for src, expected in checks.items():
+            self.assertEqual(out(src), expected, src[:40])
+
     @unittest.skipUnless(NUMPY, "NumPy is not installed")
     def test_python_libraries_with_named_values_and_arithmetic(self):
         self.assertEqual(out('np: bridge("python", "numpy")\na: np.array([1, 2, 3])\n'

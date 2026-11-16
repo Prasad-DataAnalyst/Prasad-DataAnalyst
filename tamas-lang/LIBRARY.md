@@ -21,6 +21,12 @@ A library is an ordinary record of values and functions, so nothing new has to b
 | `semiconductor` | physical constants, thermal voltage, dies per wafer, three yield models, sheet resistance, MOSFET and diode equations, junction potential | Tamas |
 | `physics` | constants with units, energy, orbital speed / period, escape speed, rocket equation, photon energy, relativity factor | Tamas |
 | `finance` | interest, present value, NPV, IRR, loan payment, CAGR, returns, moving average - currency-aware | Tamas |
+| `quantum` | quantum circuits as data; exact simulator (up to 20 qubits); probabilities, sampling, expectation values, Bloch vector, fidelity, drawing; OpenQASM 2 export and import | host |
+| `quantum_algorithms` | Bell and GHZ states, quantum Fourier transform, Grover search, Bernstein-Vazirani, Deutsch-Jozsa, superdense coding, teleportation, energy of a state (for VQE) | Tamas |
+| `quantum_physics` | constants; photon, de Broglie, particle-in-a-box, hydrogen levels and spectral lines, oscillator, uncertainty, tunnelling, thermal population | Tamas |
+| `quantum_hardware` | transmon qubit design (Josephson and charging energy, frequency), T1/T2 arithmetic, circuit success, surface-code qubit counts | Tamas |
+| `quantum_comms` | BB84 key distribution simulation with eavesdropper detection, secret-key rate, fibre loss, CHSH Bell test | Tamas |
+| `quantum_os` | device descriptions, checking a circuit against a device, time and success estimates, job queue scheduling, running jobs on the simulator | Tamas |
 | `xml` | parse, write, find, text, build | host |
 | `html` | parse (forgiving, like a browser), write, find, CSS-style `select`, text, build, escape | host |
 | `css` | parse a style sheet into rules and declarations, write it back | host |
@@ -30,6 +36,21 @@ A library is an ordinary record of values and functions, so nothing new has to b
 "Host" means the library is implemented inside the Tamas interpreter, the same way Python's own `json`
 and `math` are implemented in C. "Tamas" means the library is a `.tms` file in `tamas/lib/` that you can
 open and read.
+
+### What the quantum libraries are and are not
+
+- The simulator is exact but classical: it holds 2^n numbers, so it stops at 20 qubits and gets slow
+  well before that. It does not simulate noise, and it has no measurement in the middle of a circuit.
+- Nothing here connects to a real quantum computer. `quantum.to_qasm(circuit)` writes OpenQASM 2, the
+  exchange format that IBM Quantum, Qiskit, Cirq and others accept, so a Tamas circuit can be taken
+  to real hardware by hand. Qiskit and Cirq themselves can be reached with `bridge("python", ...)`,
+  but that has not been checked here.
+- `quantum_os` is the scheduling and checking layer of a quantum computer's software, not an
+  operating system that controls hardware. Its two example devices use illustrative numbers.
+- `quantum_hardware` and `quantum_physics` use first-order textbook formulas (for example the
+  surface-code error rule of thumb). They are for estimating and learning, not for signing off a chip.
+- Not included: noise models, pulse-level control, mapping circuits onto a device's links,
+  post-quantum cryptography, quantum chemistry.
 
 XML and HTML share one document model: a node is `{tag, attrs, children}` and a child is another node
 or a piece of text.

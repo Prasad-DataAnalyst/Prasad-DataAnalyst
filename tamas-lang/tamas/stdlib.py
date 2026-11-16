@@ -10,6 +10,7 @@ import re
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
+from . import quantum as _quantum
 from .errors import TamasError
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "lib")
@@ -309,6 +310,7 @@ NATIVE = {
     "xml": {"parse": xml_parse, "write": xml_write, "find": find, "text": text_of, "el": el},
     "html": {"parse": html_parse, "write": lambda node: html_write(node), "find": find, "select": select,
              "text": text_of, "el": el, "escape": lambda s: _escape(s, True)},
+    "quantum": _quantum.LIBRARY,
     "css": {"parse": css_parse, "write": lambda rules: css_write(rules)},
     "regex": {
         "find": rx_find,

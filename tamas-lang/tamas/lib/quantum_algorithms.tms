@@ -1,0 +1,123 @@
+~ quantum_algorithms - the well-known quantum circuits, built from the "quantum" library.
+~ Every function gives a circuit (plain data you can inspect, draw, simulate or export to OpenQASM).
+
+q: use("quantum")
+m: use("math")
+
+~ Two qubits that always agree when measured.
+bell() -> q.circuit(2) |> q.h(0) |> q.cx(0, 1)
+
+~ n qubits that are all 0 or all 1 together.
+ghz(n) -> {
+  c: q.circuit(n)
+  q.h(c, 0)
+  each i in range(1, n) { q.cx(c, i - 1, i) }
+  give c
+}
+
+~ Quantum Fourier transform on the listed qubits of an existing circuit.
+qft_on(c, qubits) -> {
+  n: len(qubits)
+  each i in range(n) {
+    q.h(c, qubits[i])
+    each j in range(i + 1, n) {
+      q.cp(c, qubits[j], qubits[i], m.pi / 2 ^ (j - i))
+    }
+  }
+  each i in range(div(n, 2)) { q.swap(c, qubits[i], qubits[n - 1 - i]) }
+  give c
+}
+
+inverse_qft_on(c, qubits) -> {
+  n: len(qubits)
+  each i in range(div(n, 2)) { q.swap(c, qubits[i], qubits[n - 1 - i]) }
+  each i in range(n - 1, -1, -1) {
+    each j in range(n - 1, i, -1) {
+      q.cp(c, qubits[j], qubits[i], -m.pi / 2 ^ (j - i))
+    }
+    q.h(c, qubits[i])
+  }
+  give c
+}
+
+qft(n) -> qft_on(q.circuit(n), range(n))
+
+first_bits(text, n) -> join(map(range(n), i -> text[i]))
+
+~ Bernstein-Vazirani: finds a hidden bit string such as "1011" with a single question.
+bernstein_vazirani(secret) -> {
+  n: len(secret)
+  c: q.circuit(n + 1)
+  q.x(c, n)
+  each i in range(n + 1) { q.h(c, i) }
+  each i, bit in secret {
+    when bit = "1" { q.cx(c, i, n) }
+  }
+  each i in range(n) { q.h(c, i) }
+  give {circuit: c, found: first_bits(q.most_likely(c), n)}
+}
+
+~ Deutsch-Jozsa: tells a "constant" function from a "balanced" one with a single question.
+deutsch_jozsa(n, kind) -> {
+  c: q.circuit(n + 1)
+  q.x(c, n)
+  each i in range(n + 1) { q.h(c, i) }
+  when kind = "balanced" {
+    each i in range(n) { q.cx(c, i, n) }
+  }
+  each i in range(n) { q.h(c, i) }
+  verdict: "balanced"
+  when first_bits(q.most_likely(c), n) = join(map(range(n), i -> "0")) { verdict: "constant" }
+  give {circuit: c, verdict: verdict}
+}
+
+~ Grover search: finds the marked bit string among 2^n in about sqrt(2^n) steps.
+grover(n, marked) -> {
+  when len(marked) != n { give nothing }
+  every: range(n)
+  rounds: max(1, floor(m.pi / 4 * sqrt(2 ^ n)))
+  c: q.circuit(n)
+  each i in every { q.h(c, i) }
+  each round in range(rounds) {
+    each i, bit in marked {
+      when bit = "0" { q.x(c, i) }
+    }
+    q.mcz(c, every)
+    each i, bit in marked {
+      when bit = "0" { q.x(c, i) }
+    }
+    each i in every { q.h(c, i) }
+    each i in every { q.x(c, i) }
+    q.mcz(c, every)
+    each i in every { q.x(c, i) }
+    each i in every { q.h(c, i) }
+  }
+  give {circuit: c, rounds: rounds, found: q.most_likely(c), probability: q.probabilities(c)[marked]}
+}
+
+~ Superdense coding: two classical bits ("00" to "11") carried by one qubit of a shared pair.
+superdense(bits) -> {
+  c: bell()
+  when bits[1] = "1" { q.x(c, 0) }
+  when bits[0] = "1" { q.z(c, 0) }
+  q.cx(c, 0, 1)
+  q.h(c, 0)
+  give {circuit: c, received: q.most_likely(c)}
+}
+
+~ Teleportation: the state prepared on qubit 0 (by the two angles) ends up on qubit 2.
+teleport(tilt, turn) -> {
+  c: q.circuit(3)
+  q.ry(c, 0, tilt)
+  q.rz(c, 0, turn)
+  q.h(c, 1)
+  q.cx(c, 1, 2)
+  q.cx(c, 0, 1)
+  q.h(c, 0)
+  q.cx(c, 1, 2)
+  q.cz(c, 0, 2)
+  give c
+}
+
+~ Energy of a circuit's state for a list of terms such as [[0.5, "ZZ"], [-1, "XI"]] (used in VQE).
+energy(c, terms) -> sum(map(terms, t -> t[0] * q.expect(c, t[1])))

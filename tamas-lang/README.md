@@ -26,7 +26,7 @@ This folder holds **version 0.1**: a written specification ([SPEC.md](SPEC.md)),
 | **Numbers carry units** | `460 kn`, `2400 kg/h`, `52 INR`. Adding kilometres to kilograms, or dollars to rupees, is an error caught by the language, in every field from aviation to banking. |
 | **Your mother tongue, same structure** | The 17 keywords can be written in Hindi, Tamil or Telugu (more languages = one small file each). `tamas translate` converts a program between them; only the keywords change, never the structure. |
 | **Bridges instead of walls** | `bridge("python", "numpy")`, `bridge("javascript", "./lib.js")`, `bridge("java", "java.math.BigInteger")` and `bridge("c", "m")` borrow other languages' libraries. `read()` / `write()` speak JSON, GeoJSON and CSV directly. Converters turn Python, JavaScript and Java source into Tamas. |
-| **A library for real work** | `use("semiconductor")`, `use("robotics")`, `use("ai")`, `use("physics")`, `use("finance")`, `use("stats")`, `use("matrix")`, `use("xml")`, `use("html")`, `use("css")`, `use("regex")`, `use("math")` - see [LIBRARY.md](LIBRARY.md). |
+| **A library for real work** | `use("semiconductor")`, `use("robotics")`, `use("ai")`, `use("physics")`, `use("finance")`, `use("stats")`, `use("matrix")`, `use("xml")`, `use("html")`, `use("css")`, `use("regex")`, `use("math")`, and six quantum libraries starting with `use("quantum")` - see [LIBRARY.md](LIBRARY.md). |
 | **It grows without breaking** | New units (`unit furlong: 201.168 m`), new measurement kinds, new language packs and new bridges are added *in* Tamas or as data files, without changing the grammar. |
 
 ## Try it
@@ -38,6 +38,7 @@ python3 -m tamas run examples/flight.tms        # aviation, units
 python3 -m tamas run examples/geo.tms           # GeoJSON
 python3 -m tamas run examples/analytics.tms     # CSV analytics with currency
 python3 -m tamas run examples/library_tour.tms  # the standard library: chips, robots, orbits, loans, AI, XML/HTML/CSS
+python3 -m tamas run examples/quantum_tour.tms  # quantum circuits, algorithms, chip design, key distribution, job scheduling
 python3 -m tamas run examples/bridge.tms        # using Python libraries
 python3 -m tamas run examples/bridge_numpy.tms  # NumPy arrays (needs numpy)
 python3 -m tamas run examples/bridge_c.tms      # calling compiled C code
@@ -53,7 +54,7 @@ python3 -m tamas from-java examples/Sample.java         # Java          -> Tamas
 
 python3 -m tamas libs                                   # list the libraries
 
-python3 -m unittest discover -s tests           # 28 tests
+python3 -m unittest discover -s tests           # 30 tests
 ```
 
 The same program in Tamil - identical structure, identical result:
@@ -72,8 +73,9 @@ Built and tested in v0.1:
 - 52 built-in units (length, mass, time, energy, power, pressure, data, six currencies) plus user-defined units.
 - Lossless JSON / GeoJSON import and export; CSV reading; great-circle distance and GeoJSON builders (`geo`).
 - Keyword packs for Hindi, Tamil and Telugu, with exact round-trip translation.
-- A module system (`use("name")`) and twelve libraries: seven written in Tamas itself (stats, matrix, ai,
-  robotics, semiconductor, physics, finance) and five built in (math, xml, html, css, regex).
+- A module system (`use("name")`) and eighteen libraries: twelve written in Tamas itself (stats, matrix,
+  ai, robotics, semiconductor, physics, finance, and five quantum libraries) and six built in (math, xml,
+  html, css, regex, and the quantum circuit simulator).
 - Bridges to four languages: compiled C libraries, and C++ functions exported with `extern "C"`; every installed Python library; any JavaScript module, Node.js library or
   built-in object (through Node.js); any Java class on the classpath (through a JDK). Classes can be
   instantiated with `.new(...)` and the objects used from Tamas.

@@ -1,0 +1,57 @@
+~ quantum_comms - quantum communication: key distribution, link budgets and the Bell test.
+
+m: use("math")
+q: use("quantum")
+
+binary_entropy(p) -> {
+  when p <= 0 or p >= 1 { give 0 }
+  give -p * m.log2(p) - (1 - p) * m.log2(1 - p)
+}
+
+~ BB84 key distribution, simulated photon by photon. With an eavesdropper about 25% of the kept
+~ bits come out wrong, which is how the two sides notice. The same seed repeats the same run.
+bb84(photons, eavesdropper, seed) -> {
+  m.seed(seed)
+  kept: 0
+  errors: 0
+  key: []
+  each i in range(photons) {
+    bit: m.random_whole(0, 1)
+    basis: m.random_whole(0, 1)
+    travelling: bit
+    travelling_basis: basis
+    when eavesdropper {
+      spy_basis: m.random_whole(0, 1)
+      when spy_basis != travelling_basis { travelling: m.random_whole(0, 1) }
+      travelling_basis: spy_basis
+    }
+    receiver_basis: m.random_whole(0, 1)
+    received: travelling
+    when receiver_basis != travelling_basis { received: m.random_whole(0, 1) }
+    when receiver_basis = basis {
+      kept: kept + 1
+      push(key, received)
+      when received != bit { errors: errors + 1 }
+    }
+  }
+  rate: 0
+  when kept > 0 { rate: errors / kept }
+  give {sent: photons, kept: kept, errors: errors, error_rate: rate, key: key, secure: rate < 0.11}
+}
+
+~ Share of the kept bits that survive as secret key, for a measured error rate (ideal BB84).
+secret_fraction(error_rate) -> max(0, 1 - 2 * binary_entropy(error_rate))
+
+~ Share of photons that survive an optical fibre; loss is in dB per km (about 0.2 for telecom fibre).
+fibre_transmission(distance, loss_per_km) -> 10 ^ (-(loss_per_km * number(distance as km)) / 10)
+
+~ Secret key rate of an ideal BB84 link.
+key_rate(pulse_rate, distance, loss_per_km, detector_efficiency, error_rate) -> {
+  give pulse_rate * 0.5 * fibre_transmission(distance, loss_per_km) * detector_efficiency * secret_fraction(error_rate)
+}
+
+~ How strongly two entangled qubits agree when measured along directions a and b (radians).
+correlation(a, b) -> q.expect(q.circuit(2) |> q.h(0) |> q.cx(0, 1) |> q.ry(0, -a) |> q.ry(1, -b), "ZZ")
+
+~ The CHSH Bell test. Anything above 2 cannot be explained without entanglement; quantum physics allows 2.828.
+chsh() -> correlation(0, 45 deg) - correlation(0, 135 deg) + correlation(90 deg, 45 deg) + correlation(90 deg, 135 deg)

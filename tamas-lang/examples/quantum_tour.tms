@@ -1,0 +1,51 @@
+~ Quantum computing in Tamas. A circuit is plain data; the "quantum" library simulates it exactly.
+
+q: use("quantum")
+
+~ --- an entangled pair
+pair: q.circuit(2) |> q.h(0) |> q.cx(0, 1)
+show q.draw(pair)
+show "Probabilities:", q.probabilities(pair)
+show "1000 measurements:", q.sample(pair, 1000, 42)
+
+~ --- famous algorithms, ready made
+algo: use("quantum_algorithms")
+search: algo.grover(4, "1011")
+show "Grover found {search.found} in {search.rounds} rounds (chance {round(search.probability * 100, 1)}%)"
+show "Hidden string recovered in one question:", algo.bernstein_vazirani("110101").found
+
+~ --- the same circuit, exported for real quantum computers
+show q.to_qasm(pair)
+
+~ --- quantum physics with units
+physics: use("quantum_physics")
+show "Electron in a 1 nm box, lowest level: {round(physics.box_energy(1, physics.electron_mass, 1 nm), 3)}"
+show "Red line of hydrogen: {round(physics.hydrogen_line(3, 2), 1)}"
+
+~ --- designing a chip
+chip: use("quantum_hardware")
+frequency: chip.transmon_frequency(chip.josephson_energy(30 nA), chip.charging_energy(70 fF))
+show "Qubit frequency: {round(frequency, 2)}, excited by heat at 20 mK: {round(chip.excited_by_heat(frequency, 20 mK) * 1e6, 1)} per million"
+plan: chip.qubits_needed(100, 0.001, 1e-9)
+show "100 error-corrected qubits need {plan.physical} physical qubits (code distance {plan.distance})"
+
+~ --- a secret key over 50 km of fibre, and a spy being caught
+link: use("quantum_comms")
+show "Key rate: {round(link.key_rate(1 GHz, 50 km, 0.2, 0.2, 0.02) as kHz)}"
+show "Error rate with a spy listening: {round(link.bb84(4000, yes, 1).error_rate * 100, 1)}% - link refused"
+show "Bell test value: {round(link.chsh(), 3)} (more than 2 proves entanglement)"
+
+~ --- running a quantum computer: check, estimate and schedule jobs
+os: use("quantum_os")
+machine: os.chain_device(5)
+jobs: []
+os.submit(jobs, "calibration", algo.bell(), 2000, 9)
+os.submit(jobs, "ghz-5", algo.ghz(5), 1000, 1)
+os.submit(jobs, "search", search.circuit, 1000, 5)
+schedule: os.schedule(jobs, machine)
+each job in schedule.plan {
+  show "  {job.name}: starts at {round(job.starts as ms, 1)}, ends at {round(job.ends as ms, 1)}"
+}
+each job in schedule.rejected {
+  show "  {job.name} rejected: {job.problems[0]}"
+}

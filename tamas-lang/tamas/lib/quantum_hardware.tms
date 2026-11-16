@@ -1,0 +1,63 @@
+~ quantum_hardware - engineering arithmetic for quantum chips and processors.
+~ First-order textbook estimates for planning and learning; real devices need measured data.
+
+m: use("math")
+physics: use("quantum_physics")
+
+~ --- superconducting (transmon) qubits. Energies are given as frequencies, e.g. 15 GHz.
+
+~ Josephson energy from the junction's critical current (e.g. 30 nA).
+josephson_energy(critical_current) -> critical_current / (4 * m.pi * physics.charge) as GHz
+
+~ Charging energy from the qubit's capacitance (e.g. 70 fF).
+charging_energy(capacitance) -> physics.charge ^ 2 / (2 * capacitance) / physics.planck as GHz
+
+transmon_frequency(josephson, charging) -> sqrt(8 * josephson * charging) - charging as GHz
+
+transmon_anharmonicity(charging) -> -charging
+
+~ --- coherence
+
+~ T2 can never be longer than twice T1.
+t2_limit(t1) -> 2 * t1
+
+~ T2 from energy relaxation (T1) and pure dephasing time.
+t2(t1, dephasing_time) -> 1 / (1 / (2 * t1) + 1 / dephasing_time) as us
+
+~ Rough error a gate picks up just from the qubit losing coherence while it runs.
+coherence_error(gate_time, t2_time) -> 1 - m.exp(-(gate_time / t2_time))
+
+~ Time for a pulse that flips the qubit, from the drive (Rabi) frequency.
+flip_time(drive_frequency) -> 1 / (2 * drive_frequency)
+
+excited_by_heat(frequency, temperature) -> physics.thermal_population(frequency, temperature)
+
+~ --- whole circuits
+
+~ Chance that a circuit runs with no error at all, from gate counts and error rates.
+circuit_success(gates, gate_error, links, link_error, readouts, readout_error) -> {
+  give (1 - gate_error) ^ gates * (1 - link_error) ^ links * (1 - readout_error) ^ readouts
+}
+
+runtime(depth, layer_time) -> depth * layer_time
+
+~ --- error correction with the surface code (standard rule-of-thumb formulas, threshold near 1%)
+
+physical_per_logical(distance) -> 2 * distance * distance - 1
+
+logical_error(physical_error, distance) -> 0.1 * (physical_error / 0.01) ^ ((distance + 1) / 2)
+
+~ Smallest (odd) code distance that reaches the target logical error rate; nothing if above threshold.
+distance_for(physical_error, target) -> {
+  when physical_error >= 0.01 { give nothing }
+  distance: 3
+  loop logical_error(physical_error, distance) > target * 1.000001 { distance: distance + 2 }
+  give distance
+}
+
+~ Physical qubits needed for a number of error-corrected logical qubits.
+qubits_needed(logical_qubits, physical_error, target) -> {
+  distance: distance_for(physical_error, target)
+  when distance = nothing { give nothing }
+  give {distance: distance, physical: logical_qubits * physical_per_logical(distance)}
+}
