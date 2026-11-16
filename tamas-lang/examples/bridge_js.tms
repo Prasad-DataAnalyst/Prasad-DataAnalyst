@@ -1,0 +1,16 @@
+~ Use JavaScript from Tamas: a local module, Node's own libraries, and JavaScript's built-in objects.
+shapes: bridge("javascript", "./shapes.js")
+show "area:", round(shapes.circleArea(2), 3)
+show shapes.describe({name: "box", sides: [2, 3, 4]})
+show "awaited for you:", shapes.later(21)
+
+~ Classes work too: .new(...) creates an object that stays on the JavaScript side.
+counter: shapes.Counter.new(10)
+counter.add(5).add(27)
+show "counter:", counter.count
+
+path: bridge("javascript", "node:path")
+show path.basename("/data/reports/q3.csv"), path.extname("q3.csv")
+
+js_math: bridge("javascript", "Math")
+show js_math.hypot(3, 4), js_math.max(4, 9, 2)

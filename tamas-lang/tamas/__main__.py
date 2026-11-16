@@ -6,6 +6,7 @@ import sys
 from . import __version__
 from .bridges import json_to_tms, to_plain
 from .errors import TamasError
+from .from_cfamily import java_to_tamas, javascript_to_tamas
 from .from_python import python_to_tamas
 from .interp import run_file
 from .lexer import available_langs, translate
@@ -31,7 +32,9 @@ def main(argv=None):
                         ("export", "run a program and print its data as JSON"),
                         ("import", "turn a JSON or GeoJSON file into Tamas"),
                         ("translate", "rewrite a program's keywords in another human language"),
-                        ("from-python", "convert a Python file (supported subset) into Tamas")]:
+                        ("from-python", "convert a Python file (supported subset) into Tamas"),
+                        ("from-js", "convert a JavaScript file (supported subset) into Tamas"),
+                        ("from-java", "convert a Java file (supported subset) into Tamas")]:
         p = sub.add_parser(name, help=help_)
         p.add_argument("file")
         if name != "run":
@@ -52,6 +55,10 @@ def main(argv=None):
             _emit(translate(_read(args.file), args.to), args.out)
         elif args.cmd == "from-python":
             _emit(python_to_tamas(_read(args.file)), args.out)
+        elif args.cmd == "from-js":
+            _emit(javascript_to_tamas(_read(args.file)), args.out)
+        elif args.cmd == "from-java":
+            _emit(java_to_tamas(_read(args.file)), args.out)
         else:
             print(" ".join(available_langs()))
     except TamasError as e:

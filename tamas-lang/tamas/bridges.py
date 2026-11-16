@@ -1,10 +1,13 @@
 """Bridges to the outside world: JSON, GeoJSON, CSV, Python libraries, and Tamas's own notation."""
+import atexit
 import csv
 import importlib
 import json
 import math
 import os
 import re
+import shutil
+import subprocess
 
 from .errors import TamasError
 from .lexer import KEYWORDS
@@ -142,14 +145,137 @@ def write_file(path, value):
 
 # ---- other languages ---------------------------------------------------------------
 
-def bridge(kind, name):
-    """Borrow a library from another language. Only Python is connected in v0.1."""
-    if kind != "python":
-        raise TamasError(f"the '{kind}' bridge is not built yet (v0.1 connects: python)")
-    try:
-        return importlib.import_module(name)
-    except ImportError:
-        raise TamasError(f"Python has no library called '{name}' installed")
+_MARK = "@@TAMAS@@ "
+_HELPERS = os.path.join(os.path.dirname(__file__), "helpers")
+_processes = {}
+
+
+class Foreign:
+    """Something that lives in another language's runtime (a module, class or object)."""
+
+    def __init__(self, proc, root, path):
+        self._proc, self._root, self._path = proc, root, tuple(path)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        reply = self._proc.ask({"op": "get", "root": self._root, "path": list(self._path) + [name]})
+        if reply["kind"] == "missing":
+            raise AttributeError(name)
+        if reply["kind"] == "value":
+            return reply["value"]
+        cls = ForeignFunction if reply["kind"] == "function" else Foreign
+        return cls(self._proc, self._root, self._path + (name,))
+
+    def __str__(self):
+        return f"<{self._proc.kind} {'.'.join(self._path) or 'object'}>"
+
+
+class ForeignFunction(Foreign):
+    def __call__(self, *args):
+        reply = self._proc.ask({"op": "call", "root": self._root, "path": list(self._path),
+                                "args": [self._proc.encode(a) for a in args]})
+        return self._proc.result(reply)
+
+
+class _Process:
+    """One helper process per foreign language, started the first time its bridge is used."""
+
+    def __init__(self, kind, cmd, quiet):
+        self.kind = kind
+        try:
+            self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
+                                      stderr=subprocess.DEVNULL if quiet else None)
+        except OSError as e:
+            raise TamasError(f"could not start the {kind} bridge: {e.strerror}")
+        atexit.register(self.close)
+
+    def close(self):
+        if self.p.poll() is None:
+            try:
+                self.p.stdin.close()
+                self.p.wait(timeout=2)
+            except Exception:
+                self.p.kill()
+
+    def ask(self, request):
+        try:
+            self.p.stdin.write(json.dumps(request) + "\n")
+            self.p.stdin.flush()
+            while True:
+                line = self.p.stdout.readline()
+                if not line:
+                    raise OSError
+                at = line.find(_MARK)
+                if at < 0:
+                    print(line, end="")  # ordinary output printed by the foreign code
+                    continue
+                if at:
+                    print(line[:at])
+                reply = json.loads(line[at + len(_MARK):])
+                break
+        except (OSError, ValueError):
+            _processes.pop(self.kind, None)
+            raise TamasError(f"the {self.kind} bridge stopped unexpectedly")
+        if not reply["ok"]:
+            first = str(reply["error"]).strip().splitlines()[0] if str(reply["error"]).strip() else "unknown error"
+            raise TamasError(f"{self.kind}: {first[18:] if first.startswith('RuntimeException: ') else first}")
+        return reply
+
+    def result(self, reply):
+        if reply["kind"] == "value":
+            return reply["value"]
+        cls = ForeignFunction if reply["kind"] == "function" else Foreign
+        return cls(self, reply["root"], reply["path"])
+
+    def encode(self, v):
+        if isinstance(v, Foreign):
+            if v._proc is not self:
+                raise TamasError(f"a value from another bridge cannot be passed into {self.kind}")
+            return {"__tamas_ref__": {"root": v._root, "path": list(v._path)}}
+        if isinstance(v, dict):
+            return {str(k): self.encode(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [self.encode(x) for x in v]
+        if isinstance(v, Quantity):
+            return v.value
+        if callable(v):
+            raise TamasError(f"functions cannot be passed across the {self.kind} bridge yet")
+        return v
+
+
+def _process(kind):
+    if kind not in _processes or _processes[kind].p.poll() is not None:
+        if kind == "javascript":
+            exe = shutil.which("node")
+            if not exe:
+                raise TamasError("the javascript bridge needs Node.js (the 'node' command) to be installed")
+            cmd = [exe, os.path.join(_HELPERS, "bridge.js")]
+        else:
+            exe = shutil.which("java")
+            if not exe:
+                raise TamasError("the java bridge needs a Java JDK 11 or newer (the 'java' command) to be installed")
+            extra = os.environ.get("TAMAS_JAVA_CLASSPATH")
+            cmd = [exe] + (["-cp", extra] if extra else []) + [os.path.join(_HELPERS, "TamasBridge.java")]
+        _processes[kind] = _Process(kind, cmd, quiet=kind == "java")
+    return _processes[kind]
+
+
+def bridge(kind, name, base_dir="."):
+    """Borrow a library from another language: python, javascript (Node.js) or java (JDK)."""
+    kind = {"js": "javascript", "node": "javascript", "py": "python"}.get(kind, kind)
+    if kind == "python":
+        try:
+            return importlib.import_module(name)
+        except ImportError:
+            raise TamasError(f"Python has no library called '{name}' installed")
+    if kind in ("javascript", "java"):
+        proc = _process(kind)
+        try:
+            return proc.result(proc.ask({"op": "load", "name": name, "base": os.path.abspath(base_dir)}))
+        except TamasError as e:
+            raise TamasError(f"could not load '{name}' ({e.msg})")
+    raise TamasError(f"there is no '{kind}' bridge yet (available: python, javascript, java)")
 
 
 # ---- geography (GeoJSON-shaped) ----------------------------------------------------

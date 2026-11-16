@@ -1,0 +1,18 @@
+~ Use Java from Tamas: static methods, constants, and objects created with .new(...).
+jmath: bridge("java", "java.lang.Math")
+show jmath.floorMod(-7, 3), jmath.hypot(3, 4), round(jmath.PI, 4)
+
+~ Exact arithmetic on numbers of any size, from Java's standard library.
+BigInteger: bridge("java", "java.math.BigInteger")
+big: BigInteger.new("2").pow(100)
+show "2^100 =", big.toString(), "has", big.bitLength(), "bits"
+
+~ Lists and text cross the bridge as ordinary Tamas values.
+String: bridge("java", "java.lang.String")
+show String.join("-", ["chip", "fab", "line"]), String.format("%05d|%.2f", 42, 3.14159)
+
+builder: bridge("java", "java.lang.StringBuilder").new("tamas")
+show builder.reverse().append("!").toString()
+
+Collections: bridge("java", "java.util.Collections")
+show Collections.max([3, 9, 4]), Collections.nCopies(3, "ab")

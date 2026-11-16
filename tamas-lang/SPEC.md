@@ -109,12 +109,13 @@ Built in: `m km cm mm um nm mi ft nmi au ly`, `kg g mg t lb`, `s ms min h day yr
 
 - Lists: `len range map filter fold sort group sum mean min max push has join`
 - Records: `keys values has`
-- Numbers: `abs sqrt floor round whole number`
+- Numbers: `abs sqrt floor round whole number`, `div(a, b)` (whole-number division, fraction dropped),
+  `rem(a, b)` (remainder with the sign of `a`; `%` takes the sign of `b`)
 - Text: `text split join upper lower trim`
 - Kinds: `type(v)` gives `number text truth nothing list record quantity function foreign`; `truthy(v)`
 - Data: `read(path)` (`.json .geojson .csv .tms`, otherwise text), `write(path, value)`, `json(v)`, `parse(text)`
 - Geography: `geo.distance(a, b)`, `geo.length(line)`, `geo.point`, `geo.line`, `geo.feature`, `geo.collection`
-- Other languages: `bridge("python", "library")`
+- Other languages: `bridge("python", name)`, `bridge("javascript", name)`, `bridge("java", name)`
 
 List functions take the list first so they chain with `|>`.
 
@@ -137,9 +138,57 @@ original file exactly. Names, text and notes are never touched.
 | JSON, GeoJSON -> Tamas | `tamas import` - exact |
 | Tamas -> JSON | `tamas export` - exact for plain data; a quantity becomes `{"value": n, "unit": "u"}` |
 | CSV -> Tamas | `read("file.csv")` gives a list of records |
-| Python libraries inside Tamas | `bridge("python", name)` |
-| Python source -> Tamas | `tamas from-python` - a defined subset; the rest is refused |
+| Python, JavaScript, Java libraries inside Tamas | `bridge(...)` - section 10.1 |
+| Python, JavaScript, Java source -> Tamas | `tamas from-python`, `from-js`, `from-java` - section 10.2 |
 | Other languages | planned: each is a new bridge and a new converter, with no change to this grammar |
+
+### 10.1 Bridges
+
+```
+math:  bridge("python", "math")                    any installed Python library
+lib:   bridge("javascript", "./lib.js")            a local module (path relative to the program),
+                                                   an installed package, "node:fs", or a built-in such as "Math"
+Big:   bridge("java", "java.math.BigInteger")      any class on the classpath
+```
+
+- A bridge value's functions are called like Tamas functions: `lib.area(2)`, `Big.valueOf(7)`.
+- `Thing.new(args)` creates a JavaScript or Java object. The object stays in its own runtime and its
+  methods and fields are used through the bridge: `counter.add(5)`, `counter.count`.
+- Numbers, text, truth values, nothing, lists and records cross the bridge as ordinary Tamas values.
+  A quantity crosses as its number. Functions cannot cross yet.
+- JavaScript promises are awaited automatically. Java overloads are chosen by the values passed.
+- The JavaScript bridge needs Node.js; the Java bridge needs a JDK 11 or newer. Extra Java libraries
+  are found through the `TAMAS_JAVA_CLASSPATH` environment variable.
+- A bridge runs the other language's code with the same permissions as the Tamas program.
+
+### 10.2 Converters
+
+A converter accepts a defined subset and refuses the rest with the line number. For the subset, the
+converted program computes the same values as the original.
+
+| | JavaScript | Java |
+|---|---|---|
+| Structure | functions, arrow functions, closures | one class with `static` methods and fields, `main` |
+| Variables | `let const var` | `int long double boolean String var`, arrays, `List`/`ArrayList` |
+| Flow | `if else while for for...of break continue return ?:` | `if else while for for-each break continue return ?:` |
+| Data | arrays, objects, template literals | arrays (also 2-D), `List.of`, `new ArrayList<>()` |
+| Library | `console.log`, `.length .push .map .filter .reduce .includes .join .split`, text case/trim, part of `Math` | `System.out.println`, `.length .size .get .set .add .contains .equals .isEmpty`, text case/trim, part of `Math` |
+
+Refused, among others: classes and objects with methods (`this`, `new`), exceptions, `switch`, imports,
+destructuring and spread, loose `==` and truthiness in JavaScript, `==` between Java objects, `char`,
+maps, lambdas in Java, and changing an outer variable from inside a function.
+
+Known differences that remain after conversion:
+
+- **Display.** Tamas prints `yes`/`no` for true/false, prints lists in its own notation, and prints a
+  whole-valued decimal as `3` where Java prints `3.0`.
+- **Number size.** Tamas whole numbers never overflow. A Java program that relies on `int` wrapping
+  around at 2,147,483,647, or a JavaScript program that relies on precision loss above 2^53, will get
+  different (mathematically correct) numbers.
+- **Identity.** JavaScript `===` on two arrays or objects asks "the same object?"; Tamas `=` asks
+  "the same contents?".
+- **Mistakes are louder.** Reading past the end of a list, or a missing record field, is an error in
+  Tamas where JavaScript gives `undefined`.
 
 ## 11. Versioning
 

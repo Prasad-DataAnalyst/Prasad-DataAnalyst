@@ -142,6 +142,25 @@ def _total(xs):
     return functools.reduce(operator.add, xs) if xs else 0
 
 
+def _div(a, b):
+    """Whole-number division that drops the fraction (rounds toward zero), exact for any size."""
+    if b == 0:
+        raise TamasError("cannot divide by zero")
+    if type(a) is int and type(b) is int:
+        q = abs(a) // abs(b)
+        return q if (a < 0) == (b < 0) else -q
+    return math.trunc(a / b)
+
+
+def _rem(a, b):
+    """Remainder with the sign of the first number, as in C, Java and JavaScript."""
+    if b == 0:
+        raise TamasError("cannot divide by zero")
+    if type(a) is int and type(b) is int:
+        return a - b * _div(a, b)
+    return math.fmod(a, b)
+
+
 def _pick(fn):
     return lambda *a: fn(a[0]) if len(a) == 1 else fn(a)
 
@@ -163,6 +182,8 @@ BUILTINS = {
     "floor": math.floor,
     "round": _round,
     "whole": int,
+    "div": _div,
+    "rem": _rem,
     "number": _number,
     "text": lambda v: fmt(v),
     "truthy": bool,
@@ -178,7 +199,6 @@ BUILTINS = {
     "trim": lambda s: s.strip(),
     "json": lambda v: json.dumps(bridges.to_plain(v), ensure_ascii=False),
     "parse": lambda s: json.loads(s),
-    "bridge": bridges.bridge,
     "geo": bridges.GEO,
 }
 
@@ -192,6 +212,7 @@ class Interp:
         self.builtins.vars.update(BUILTINS)
         self.builtins.vars.update({
             "show": lambda *a: self.out(" ".join(fmt(x) for x in a)),
+            "bridge": lambda kind, name: bridges.bridge(kind, name, self.base_dir),
             "read": lambda p: bridges.read_file(self.path(p), self.run_tms),
             "write": lambda p, v: bridges.write_file(self.path(p), v),
         })
@@ -379,8 +400,11 @@ class Interp:
             raise TamasError(f"this record has no field '{name}' (it has: {', '.join(map(str, obj)) or 'none'})", e[1])
         if isinstance(obj, Quantity) and name in ("value", "unit"):
             return getattr(obj, name)
-        if type_name(obj) == "foreign" and not name.startswith("_") and hasattr(obj, name):
-            value = getattr(obj, name)
+        if (type_name(obj) == "foreign" or isinstance(obj, bridges.Foreign)) and not name.startswith("_"):
+            try:
+                value = getattr(obj, name)
+            except AttributeError:
+                raise TamasError(f"{obj} has no field or function '{name}'", e[1])
             return list(value) if isinstance(value, tuple) else value
         raise TamasError(f"{type_name(obj)} has no field '{name}'", e[1])
 
