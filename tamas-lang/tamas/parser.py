@@ -103,7 +103,7 @@ class Parser:
             if e[0] in ("name", "member", "index") or (e[0] == "str" and len(e[2]) == 1 and isinstance(e[2][0], str)):
                 return ("bind", line, e, self.expr())
             raise TamasError("only a name, a field or an item can be given a value with ':'", line)
-        if self.at("OP", "->") and e[0] == "call" and e[2][0] == "name" and all(a[0] == "name" for a in e[3]):
+        if self.at("OP", "->") and e[0] == "call" and e[2][0] == "name" and not e[4] and all(a[0] == "name" for a in e[3]):
             self.next()
             name = e[2][2]
             body = self.block() if self.at("OP", "{") else [("give", line, self.expr())]
@@ -127,9 +127,9 @@ class Parser:
             else:
                 right = self.or_()
             if right[0] == "call":
-                left = ("call", line, right[2], [left] + right[3])
+                left = ("call", line, right[2], [left] + right[3], right[4])
             else:
-                left = ("call", line, right, [left])
+                left = ("call", line, right, [left], [])
         return left
 
     def or_(self):
@@ -211,13 +211,20 @@ class Parser:
         while True:
             if self.at("OP", "("):
                 line = self.next().line
-                args = []
+                args, named = [], []
                 while not self.at("OP", ")"):
-                    args.append(self.expr())
+                    if self.at("ID") and self.at("OP", ":", 1):
+                        key = self.next().val
+                        self.next()
+                        named.append((key, self.expr()))
+                    elif named:
+                        raise TamasError("named values must come after the unnamed ones", self.peek().line)
+                    else:
+                        args.append(self.expr())
                     if not self.accept("OP", ","):
                         break
                 self.expect("OP", ")")
-                e = ("call", line, e, args)
+                e = ("call", line, e, args, named)
             elif self.at("OP", "."):
                 line = self.next().line
                 tok = self.next()
@@ -259,12 +266,16 @@ class Parser:
             parts = []
             for p in tok.val:
                 if isinstance(p, tuple):
-                    sub = Parser(lex(p[1], self.lang, self.known)[0], self.lang, self.known)
-                    sub.skip_nl()
-                    node = sub.expr()
-                    sub.skip_nl()
+                    hint = "could not understand the {...} part of this text (write \\{ for a literal brace)"
+                    try:
+                        sub = Parser(lex(p[1], self.lang, self.known)[0], self.lang, self.known)
+                        sub.skip_nl()
+                        node = sub.expr()
+                        sub.skip_nl()
+                    except TamasError as err:
+                        raise TamasError(f"{hint}: {err.msg}", p[3])
                     if not sub.at("EOF"):
-                        raise TamasError("could not understand the {...} part of this text", p[3])
+                        raise TamasError(hint, p[3])
                     parts.append(node)
                 else:
                     parts.append(p)

@@ -42,6 +42,7 @@ def main(argv=None):
         if name == "translate":
             p.add_argument("--to", required=True, help="language code, e.g. hi, ta, te, en")
     sub.add_parser("langs", help="list installed language packs")
+    sub.add_parser("libs", help="list the libraries that use(\"name\") can load")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "run":
@@ -59,6 +60,9 @@ def main(argv=None):
             _emit(javascript_to_tamas(_read(args.file)), args.out)
         elif args.cmd == "from-java":
             _emit(java_to_tamas(_read(args.file)), args.out)
+        elif args.cmd == "libs":
+            from .stdlib import available
+            print(" ".join(available()))
         else:
             print(" ".join(available_langs()))
     except TamasError as e:

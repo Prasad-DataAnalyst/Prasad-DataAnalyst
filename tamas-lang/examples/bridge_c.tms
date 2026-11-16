@@ -1,0 +1,10 @@
+~ Call compiled C code directly (C++ too, for functions exported with extern "C").
+~ Tell Tamas what each function returns and takes, then call it like any other function.
+libm: bridge("c", "m")
+cosine: libm.fn("cos", "double", ["double"])
+power: libm.fn("pow", "double", ["double", "double"])
+show cosine(0), power(2, 10)
+
+libc: bridge("c", "c")
+length: libc.fn("strlen", "size", ["text"])
+show length("semiconductor")

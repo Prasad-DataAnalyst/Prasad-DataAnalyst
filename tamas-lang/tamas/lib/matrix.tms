@@ -1,0 +1,77 @@
+~ matrix - small dense matrices as lists of rows. For large numeric work, bridge to NumPy.
+
+zeros(rows, cols) -> map(range(rows), r -> map(range(cols), c -> 0))
+
+one_when(truth) -> {
+  when truth { give 1 }
+  give 0
+}
+
+identity(n) -> map(range(n), r -> map(range(n), c -> one_when(r = c)))
+
+shape(a) -> [len(a), len(a[0])]
+
+transpose(a) -> map(range(len(a[0])), c -> map(a, row -> row[c]))
+
+add(a, b) -> map(range(len(a)), r -> map(range(len(a[0])), c -> a[r][c] + b[r][c]))
+
+scale(a, k) -> map(a, row -> map(row, x -> x * k))
+
+dot(u, v) -> sum(map(range(len(u)), i -> u[i] * v[i]))
+
+~ Matrix times vector.
+apply(a, v) -> map(a, row -> dot(row, v))
+
+multiply(a, b) -> {
+  when len(a[0]) != len(b) { give nothing }
+  columns: transpose(b)
+  give map(a, row -> map(columns, col -> dot(row, col)))
+}
+
+~ Solve a x = b by elimination with pivoting. Gives nothing when there is no single answer.
+solve(a, b) -> {
+  n: len(a)
+  rows: map(range(n), r -> a[r] + [b[r]])
+  each col in range(n) {
+    pivot: col
+    each r in range(col + 1, n) {
+      when abs(rows[r][col]) > abs(rows[pivot][col]) { pivot: r }
+    }
+    when abs(rows[pivot][col]) < 1e-12 { give nothing }
+    held: rows[col]
+    rows[col]: rows[pivot]
+    rows[pivot]: held
+    each r in range(n) {
+      when r != col {
+        factor: rows[r][col] / rows[col][col]
+        rows[r]: map(range(n + 1), c -> rows[r][c] - factor * rows[col][c])
+      }
+    }
+  }
+  give map(range(n), r -> rows[r][n] / rows[r][r])
+}
+
+determinant(a) -> {
+  n: len(a)
+  rows: map(a, row -> row + [])
+  result: 1
+  each col in range(n) {
+    pivot: col
+    each r in range(col + 1, n) {
+      when abs(rows[r][col]) > abs(rows[pivot][col]) { pivot: r }
+    }
+    when abs(rows[pivot][col]) < 1e-12 { give 0 }
+    when pivot != col {
+      held: rows[col]
+      rows[col]: rows[pivot]
+      rows[pivot]: held
+      result: -result
+    }
+    result: result * rows[col][col]
+    each r in range(col + 1, n) {
+      factor: rows[r][col] / rows[col][col]
+      rows[r]: map(range(n), c -> rows[r][c] - factor * rows[col][c])
+    }
+  }
+  give result
+}

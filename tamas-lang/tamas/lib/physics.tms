@@ -1,0 +1,33 @@
+~ physics - constants with their units, and mechanics / orbital formulas for space and aviation work.
+
+m: use("math")
+
+c: 299792458 m/s                        ~ speed of light
+G: 6.6743e-11 m^3/kg/s^2                ~ gravitational constant
+g0: 9.80665 m/s^2                       ~ standard gravity
+planck: 6.62607015e-34 J*s
+boltzmann: 1.380649e-23 J/K
+avogadro: 6.02214076e23 mol^-1
+gas_constant: 8.314462618 J/mol/K
+earth_mass: 5.9722e24 kg
+earth_radius: 6371 km
+sun_mass: 1.98847e30 kg
+
+kinetic_energy(mass, speed) -> 0.5 * mass * speed ^ 2 as J
+
+potential_energy(mass, height) -> mass * g0 * height as J
+
+~ Circular orbit around a body of the given mass; radius is measured from the body's centre.
+orbital_speed(radius, mass) -> sqrt(G * mass / radius)
+
+orbital_period(radius, mass) -> 2 * m.pi * sqrt(radius ^ 3 / (G * mass))
+
+escape_speed(radius, mass) -> sqrt(2 * G * mass / radius)
+
+~ Rocket equation: speed gained, from specific impulse (seconds) and the mass before and after the burn.
+delta_v(specific_impulse, start_mass, end_mass) -> specific_impulse * g0 * m.log(start_mass / end_mass)
+
+photon_energy(wavelength) -> planck * c / wavelength as eV
+
+~ How much moving clocks slow down (1 means not at all).
+lorentz_factor(speed) -> 1 / sqrt(1 - (speed / c) ^ 2)

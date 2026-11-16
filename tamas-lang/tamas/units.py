@@ -32,7 +32,19 @@ for _n, _f in [("J", 1), ("kWh", 3.6e6), ("eV", 1.602176634e-19)]:
     _add(_n, _f, kg=1, m=2, s=-2)
 for _n, _f in [("W", 1), ("kW", 1e3), ("MW", 1e6)]:
     _add(_n, _f, kg=1, m=2, s=-3)
+_add("mW", 1e-3, kg=1, m=2, s=-3)
 _add("V", 1, kg=1, m=2, s=-3, A=-1)
+_add("mV", 1e-3, kg=1, m=2, s=-3, A=-1)
+_add("mA", 1e-3, A=1)
+_add("uA", 1e-6, A=1)
+_add("C", 1, A=1, s=1)
+_add("ohm", 1, kg=1, m=2, s=-3, A=-2)
+_add("F", 1, kg=-1, m=-2, s=4, A=2)
+for _n, _f in [("kHz", 1e3), ("MHz", 1e6), ("GHz", 1e9)]:
+    _add(_n, _f, s=-1)
+# angles are plain numbers measured in radians: 90 deg is the number 1.5707...
+_add("rad", 1)
+_add("deg", math.pi / 180)
 # area, volume, speed
 _add("L", 1e-3, m=3)
 _add("ha", 1e4, m=2)
@@ -163,6 +175,11 @@ class Quantity:
         if type(n) is not int:
             raise TamasError("a quantity can only be raised to a whole-number power")
         return self._build(self.si ** n, {k: v * n for k, v in self.dims.items()})
+
+    def root(self):
+        if any(v % 2 for v in self.dims.values()):
+            raise TamasError(f"cannot take the square root of {self.unit}")
+        return self._build(math.sqrt(self.si), {k: v // 2 for k, v in self.dims.items()})
 
     def __eq__(self, o):
         return isinstance(o, Quantity) and o.dims == self.dims and math.isclose(self.si, o.si, rel_tol=1e-12)

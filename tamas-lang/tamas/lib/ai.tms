@@ -1,0 +1,101 @@
+~ ai - classical machine learning written in Tamas: small, readable, good for learning and small data.
+~ For deep learning and large data, bridge to the big libraries: bridge("python", "numpy"), "torch", "sklearn".
+
+m: use("math")
+
+sigmoid(z) -> 1 / (1 + m.exp(-z))
+
+relu(z) -> max(z, 0)
+
+softmax(zs) -> {
+  top: max(zs)
+  powers: map(zs, z -> m.exp(z - top))
+  total: sum(powers)
+  give map(powers, p -> p / total)
+}
+
+distance(a, b) -> sqrt(sum(map(range(len(a)), i -> (a[i] - b[i]) ^ 2)))
+
+~ Share of predictions that are right, from 0 to 1.
+accuracy(predicted, actual) -> len(filter(range(len(actual)), i -> predicted[i] = actual[i])) / len(actual)
+
+~ Rescale every column to the range 0..1: {rows, scale} where scale(row) treats new rows the same way.
+normalize(rows) -> {
+  columns: range(len(rows[0]))
+  low: map(columns, c -> min(map(rows, r -> r[c])))
+  high: map(columns, c -> max(map(rows, r -> r[c])))
+  one(row) -> map(columns, c -> {
+    when high[c] = low[c] { give 0 }
+    give (row[c] - low[c]) / (high[c] - low[c])
+  })
+  give {rows: map(rows, one), scale: one}
+}
+
+~ k nearest neighbours: the most common label among the k closest known points.
+knn(points, labels, query, k) -> {
+  order: sort(range(len(points)), i -> distance(points[i], query))
+  votes: group(map(range(min(k, len(order))), n -> order[n]), i -> labels[i])
+  best: nothing
+  count: 0
+  each label, members in votes {
+    when len(members) > count {
+      best: labels[members[0]]
+      count: len(members)
+    }
+  }
+  give best
+}
+
+~ k-means clustering: {centers, labels}. Starts from the first k points, so the result is repeatable.
+kmeans(points, k, rounds) -> {
+  centers: map(range(k), i -> points[i])
+  labels: map(points, p -> 0)
+  nearest(p) -> sort(range(k), c -> distance(p, centers[c]))[0]
+  each round in range(rounds) {
+    labels: map(points, nearest)
+    each c in range(k) {
+      members: filter(range(len(points)), i -> labels[i] = c)
+      when len(members) > 0 {
+        centers[c]: map(range(len(points[0])), d -> mean(map(members, i -> points[i][d])))
+      }
+    }
+  }
+  give {centers: centers, labels: labels}
+}
+
+~ Linear regression on any number of features, trained by gradient descent: {weights, bias, predict}.
+linear_regression(rows, targets, rate, rounds) -> {
+  n: len(rows)
+  features: range(len(rows[0]))
+  weights: map(features, f -> 0)
+  bias: 0
+  each round in range(rounds) {
+    errors: map(range(n), i -> bias + sum(map(features, f -> weights[f] * rows[i][f])) - targets[i])
+    weights: map(features, f -> weights[f] - rate * sum(map(range(n), i -> errors[i] * rows[i][f])) / n)
+    bias: bias - rate * sum(errors) / n
+  }
+  final: weights
+  offset: bias
+  give {weights: final, bias: offset, predict: row -> offset + sum(map(features, f -> final[f] * row[f]))}
+}
+
+~ Logistic regression for yes/no questions; labels are 1 or 0: {weights, bias, probability, classify}.
+logistic_regression(rows, labels, rate, rounds) -> {
+  n: len(rows)
+  features: range(len(rows[0]))
+  weights: map(features, f -> 0)
+  bias: 0
+  each round in range(rounds) {
+    errors: map(range(n), i -> sigmoid(bias + sum(map(features, f -> weights[f] * rows[i][f]))) - labels[i])
+    weights: map(features, f -> weights[f] - rate * sum(map(range(n), i -> errors[i] * rows[i][f])) / n)
+    bias: bias - rate * sum(errors) / n
+  }
+  final: weights
+  offset: bias
+  probability(row) -> sigmoid(offset + sum(map(features, f -> final[f] * row[f])))
+  classify(row) -> {
+    when probability(row) >= 0.5 { give 1 }
+    give 0
+  }
+  give {weights: final, bias: offset, probability: probability, classify: classify}
+}

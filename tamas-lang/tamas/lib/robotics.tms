@@ -1,0 +1,58 @@
+~ robotics - kinematics and control. Lengths and speeds may carry units; angles are in radians (write 30 deg).
+
+m: use("math")
+
+~ Planar arm: where the tip ends up. Gives {x, y, heading, joints}.
+forward(lengths, angles) -> {
+  x: lengths[0] * 0
+  y: x
+  heading: 0
+  joints: []
+  each i, length in lengths {
+    heading: heading + angles[i]
+    x: x + length * m.cos(heading)
+    y: y + length * m.sin(heading)
+    push(joints, [x, y])
+  }
+  give {x: x, y: y, heading: heading, joints: joints}
+}
+
+~ Two-link arm: joint angles that put the tip at (x, y), elbow down. Gives nothing when out of reach.
+inverse_2link(l1, l2, x, y) -> {
+  bend: (x * x + y * y - l1 * l1 - l2 * l2) / (2 * l1 * l2)
+  when bend > 1 or bend < -1 { give nothing }
+  elbow: m.acos(bend)
+  shoulder: m.atan2(y / l1, x / l1) - m.atan2((l2 / l1) * m.sin(elbow), 1 + (l2 / l1) * m.cos(elbow))
+  give {shoulder: shoulder, elbow: elbow}
+}
+
+~ PID controller. Plain numbers; dt in seconds. Keep the record and pass it to pid_step each cycle.
+pid(kp, ki, kd) -> ({kp: kp, ki: ki, kd: kd, integral: 0, previous: nothing})
+
+pid_step(controller, error, dt) -> {
+  controller.integral: controller.integral + error * dt
+  slope: 0
+  when controller.previous != nothing { slope: (error - controller.previous) / dt }
+  controller.previous: error
+  give controller.kp * error + controller.ki * controller.integral + controller.kd * slope
+}
+
+~ Two-wheeled robot: new pose {x, y, heading} after driving for dt with the given wheel speeds.
+drive(pose, left_speed, right_speed, track_width, dt) -> {
+  forward_speed: (left_speed + right_speed) / 2
+  turn: (right_speed - left_speed) / track_width * dt
+  middle: pose.heading + turn / 2
+  give {
+    x: pose.x + forward_speed * dt * m.cos(middle)
+    y: pose.y + forward_speed * dt * m.sin(middle)
+    heading: pose.heading + turn
+  }
+}
+
+~ Time for a move that speeds up, cruises and slows down within the given limits.
+move_time(distance, top_speed, acceleration) -> {
+  when distance >= top_speed * top_speed / acceleration {
+    give distance / top_speed + top_speed / acceleration
+  }
+  give 2 * sqrt(distance / acceleration)
+}

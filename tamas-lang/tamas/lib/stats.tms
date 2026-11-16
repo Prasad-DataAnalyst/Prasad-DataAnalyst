@@ -1,0 +1,79 @@
+~ stats - statistics that also work on quantities (a list of 3 kg, 5 kg ... keeps its unit).
+~ Built into the language already: sum, mean, min, max, sort, group.
+
+median(xs) -> {
+  ordered: sort(xs)
+  n: len(ordered)
+  when n = 0 { give nothing }
+  when n % 2 = 1 { give ordered[div(n, 2)] }
+  give (ordered[div(n, 2) - 1] + ordered[div(n, 2)]) / 2
+}
+
+~ Sample variance (divides by n - 1).
+variance(xs) -> {
+  centre: mean(xs)
+  give sum(map(xs, x -> (x - centre) ^ 2)) / (len(xs) - 1)
+}
+
+stdev(xs) -> sqrt(variance(xs))
+
+~ p is between 0 and 100; values between two items are interpolated.
+percentile(xs, p) -> {
+  ordered: sort(xs)
+  position: (len(ordered) - 1) * p / 100
+  low: floor(position)
+  when low + 1 >= len(ordered) { give ordered[len(ordered) - 1] }
+  give ordered[low] + (ordered[low + 1] - ordered[low]) * (position - low)
+}
+
+mode(xs) -> {
+  best: nothing
+  count: 0
+  each key, items in group(xs, x -> x) {
+    when len(items) > count {
+      best: items[0]
+      count: len(items)
+    }
+  }
+  give best
+}
+
+zscores(xs) -> {
+  centre: mean(xs)
+  spread: stdev(xs)
+  give map(xs, x -> (x - centre) / spread)
+}
+
+~ Pearson correlation, from -1 to 1.
+correlation(xs, ys) -> {
+  mx: mean(xs)
+  my: mean(ys)
+  sxy: sum(map(range(len(xs)), i -> (xs[i] - mx) * (ys[i] - my)))
+  sxx: sum(map(xs, x -> (x - mx) ^ 2))
+  syy: sum(map(ys, y -> (y - my) ^ 2))
+  give sxy / sqrt(sxx * syy)
+}
+
+~ Straight line through the points: {slope, intercept, r2, predict}.
+linear_fit(xs, ys) -> {
+  mx: mean(xs)
+  my: mean(ys)
+  sxy: sum(map(range(len(xs)), i -> (xs[i] - mx) * (ys[i] - my)))
+  sxx: sum(map(xs, x -> (x - mx) ^ 2))
+  syy: sum(map(ys, y -> (y - my) ^ 2))
+  slope: sxy / sxx
+  intercept: my - slope * mx
+  give {slope: slope, intercept: intercept, r2: sxy * sxy / (sxx * syy), predict: x -> intercept + slope * x}
+}
+
+~ Count how many values fall in each of `bins` equal ranges: a list of {from, to, count}.
+histogram(xs, bins) -> {
+  low: min(xs)
+  width: (max(xs) - low) / bins
+  out: map(range(bins), i -> ({from: low + width * i, to: low + width * (i + 1), count: 0}))
+  each x in xs {
+    at: min(floor((x - low) / width), bins - 1)
+    out[at].count: out[at].count + 1
+  }
+  give out
+}

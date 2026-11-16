@@ -30,6 +30,7 @@ Owner and author: Prasad (github.com/Prasad-DataAnalyst). See [NOTICE](NOTICE).
 | number | `42`, `3.14`, `1_000_000`, `6.02e23` | whole numbers have no size limit |
 | quantity | `250 km/h`, `9.81 m/s^2`, `52 INR` | a number with a unit (section 6) |
 | text | `"Hello, {name}"` | `{...}` inserts any expression; escapes `\" \\ \n \t \r \{ \uXXXX` |
+| plain text | `'body { margin: 0 }'` | nothing inside is special (for CSS, HTML, JSON, patterns); `''` is one quote |
 | truth | `yes`, `no` | |
 | nothing | `nothing` | the absence of a value |
 | list | `[1, 2, 3]` | items counted from 0; `xs[-1]` is the last |
@@ -70,6 +71,9 @@ describe(p) -> {                     a block; `give` returns
 double: x -> x * 2                   unnamed functions are values
 ```
 
+A call may name its values: `loan(amount: 5000 USD, years: 3)`. Named values come after unnamed ones
+and are matched to the function's parameter names (also when calling Python through a bridge).
+
 In a function body `{` always opens a block. To return a record from a one-line function, wrap it:
 `origin() -> ({x: 0, y: 0})`.
 
@@ -82,10 +86,13 @@ In a function body `{` always opens a block. To return a record from a one-line 
 - `q.value` and `q.unit` give the parts; `number(q)` gives the value.
 - `unit furlong: 201.168 m` defines a unit from an existing one. `unit credit: 1` defines a brand-new
   kind of measurement that mixes with nothing else.
+- Angles are plain numbers in radians. `90 deg` is the number 1.5707..., and `angle as deg` gives
+  the same angle counted in degrees.
+- `sqrt` works on quantities whose units have even powers: `sqrt(16 m^2)` is `4 m`.
 - Each currency is its own kind: Tamas will not add USD to INR. Exchange rates are data, not syntax.
 
 Built in: `m km cm mm um nm mi ft nmi au ly`, `kg g mg t lb`, `s ms min h day yr`, `A K mol cd`,
-`Hz N Pa bar J kWh eV W kW MW V`, `L ha kn`, `bit byte kB MB GB TB`, `USD INR EUR GBP JPY CNY`.
+`Hz kHz MHz GHz N Pa bar J kWh eV W mW kW MW V mV mA uA C ohm F`, `rad deg`, `L ha kn`, `bit byte kB MB GB TB`, `USD INR EUR GBP JPY CNY`.
 
 ## 7. Operators, loosest to tightest
 
@@ -115,7 +122,10 @@ Built in: `m km cm mm um nm mi ft nmi au ly`, `kg g mg t lb`, `s ms min h day yr
 - Kinds: `type(v)` gives `number text truth nothing list record quantity function foreign`; `truthy(v)`
 - Data: `read(path)` (`.json .geojson .csv .tms`, otherwise text), `write(path, value)`, `json(v)`, `parse(text)`
 - Geography: `geo.distance(a, b)`, `geo.length(line)`, `geo.point`, `geo.line`, `geo.feature`, `geo.collection`
-- Other languages: `bridge("python", name)`, `bridge("javascript", name)`, `bridge("java", name)`
+- Other languages: `bridge("python", name)`, `bridge("javascript", name)`, `bridge("java", name)`, `bridge("c", name)`
+- Libraries: `use("name")` loads a library and gives a record of everything it defines. It looks for a
+  built-in library, then `name.tms` next to the program, then Tamas's own `lib/` folder. See
+  [LIBRARY.md](LIBRARY.md).
 
 List functions take the list first so they chain with `|>`.
 
@@ -145,12 +155,17 @@ original file exactly. Names, text and notes are never touched.
 ### 10.1 Bridges
 
 ```
+libm:  bridge("c", "m")                            a compiled C library, by name or by path
 math:  bridge("python", "math")                    any installed Python library
 lib:   bridge("javascript", "./lib.js")            a local module (path relative to the program),
                                                    an installed package, "node:fs", or a built-in such as "Math"
 Big:   bridge("java", "java.math.BigInteger")      any class on the classpath
 ```
 
+- `bridge("c", "m")` opens a compiled C library. Each function is described once, then called:
+  `cosine: libm.fn("cos", "double", ["double"])`. Types: `int long size double float truth text`, and
+  `nothing` for no result. C++ functions work when exported with `extern "C"`.
+- Values borrowed from Python keep their own arithmetic, so `array * 2 + 1` works on a NumPy array.
 - A bridge value's functions are called like Tamas functions: `lib.area(2)`, `Big.valueOf(7)`.
 - `Thing.new(args)` creates a JavaScript or Java object. The object stays in its own runtime and its
   methods and fields are used through the bridge: `counter.add(5)`, `counter.count`.

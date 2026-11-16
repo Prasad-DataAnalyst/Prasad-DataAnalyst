@@ -1,0 +1,58 @@
+~ semiconductor - device physics and fab arithmetic, with units checked by the language.
+~ Textbook first-order models: use them to estimate and to learn, not to sign off a design.
+
+m: use("math")
+
+boltzmann: 1.380649e-23 J/K
+charge: 1.602176634e-19 C
+eps0: 8.8541878128e-12 F/m
+eps_silicon: 11.7 * eps0
+eps_oxide: 3.9 * eps0
+ni_silicon: 1.0e10 cm^-3        ~ intrinsic carriers in silicon near 300 K (approximate)
+
+thermal_voltage(temperature) -> boltzmann * temperature / charge as mV
+
+~ Whole dies that fit on a round wafer (the usual area-minus-edge estimate).
+dies_per_wafer(diameter, die_width, die_height) -> {
+  area: die_width * die_height
+  give floor(m.pi * (diameter / 2) ^ 2 / area - m.pi * diameter / sqrt(2 * area))
+}
+
+~ Share of dies that work, for a defect density such as 0.1 cm^-2. Three standard models.
+yield_poisson(defects, area) -> m.exp(-(defects * area))
+
+yield_murphy(defects, area) -> {
+  load: defects * area
+  when load = 0 { give 1 }
+  give ((1 - m.exp(-load)) / load) ^ 2
+}
+
+yield_negative_binomial(defects, area, clustering) -> (1 + defects * area / clustering) ^ (-clustering)
+
+good_dies(diameter, die_width, die_height, defects) -> {
+  give floor(dies_per_wafer(diameter, die_width, die_height) * yield_murphy(defects, die_width * die_height))
+}
+
+sheet_resistance(resistivity, thickness) -> resistivity / thickness as ohm
+
+~ Resistance of a strip: sheet resistance times the number of squares.
+resistance(sheet, length, width) -> sheet * (length / width)
+
+~ Gate capacitance per area.
+oxide_capacitance(thickness) -> eps_oxide / thickness
+
+~ Long-channel MOSFET in saturation (square law). Mobility such as 400 cm^2/V/s.
+mosfet_current(mobility, capacitance, width, length, gate_voltage, threshold) -> {
+  when gate_voltage <= threshold { give 0 mA }
+  give 0.5 * mobility * capacitance * (width / length) * (gate_voltage - threshold) ^ 2 as mA
+}
+
+~ Ideal diode equation.
+diode_current(saturation_current, voltage, temperature) -> {
+  give saturation_current * (m.exp(voltage / thermal_voltage(temperature)) - 1)
+}
+
+~ Built-in potential of a p-n junction from the two doping levels (e.g. 1e17 cm^-3).
+built_in_potential(acceptors, donors, temperature) -> {
+  give thermal_voltage(temperature) * m.log(acceptors * donors / (ni_silicon * ni_silicon)) as V
+}

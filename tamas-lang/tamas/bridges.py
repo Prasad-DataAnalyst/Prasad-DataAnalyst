@@ -1,6 +1,8 @@
 """Bridges to the outside world: JSON, GeoJSON, CSV, Python libraries, and Tamas's own notation."""
 import atexit
 import csv
+import ctypes
+import ctypes.util
 import importlib
 import json
 import math
@@ -261,9 +263,57 @@ def _process(kind):
     return _processes[kind]
 
 
+_C_TYPES = {"int": ctypes.c_int, "long": ctypes.c_long, "size": ctypes.c_size_t, "double": ctypes.c_double,
+            "float": ctypes.c_float, "truth": ctypes.c_bool, "text": ctypes.c_char_p, "nothing": None}
+
+
+class CLibrary:
+    """A compiled C library (or C++ functions exported with extern "C")."""
+
+    def __init__(self, name, base_dir):
+        local = os.path.join(base_dir, name)
+        path = local if os.path.exists(local) else name if os.path.exists(name) else ctypes.util.find_library(name)
+        if not path:
+            raise TamasError(f"cannot find the C library '{name}'")
+        try:
+            self._lib, self._name = ctypes.CDLL(path), name
+        except OSError as e:
+            raise TamasError(f"cannot load the C library '{name}': {e}")
+
+    def fn(self, name, returns, takes):
+        """Describe a C function so it can be called: lib.fn("cos", "double", ["double"])."""
+        if returns not in _C_TYPES or any(t not in _C_TYPES or t == "nothing" for t in takes):
+            raise TamasError(f"C types must be one of: {', '.join(_C_TYPES)} ('nothing' only as a result)")
+        try:
+            f = getattr(self._lib, name)
+        except AttributeError:
+            raise TamasError(f"the C library '{self._name}' has no function '{name}'")
+        f.restype, f.argtypes = _C_TYPES[returns], [_C_TYPES[t] for t in takes]
+
+        def call(*args):
+            if len(args) != len(takes):
+                raise TamasError(f"C function {name} takes {len(takes)} value(s) but was given {len(args)}")
+            sent = []
+            for v, t in zip(args, takes):
+                v = v.value if isinstance(v, Quantity) else v
+                ok = isinstance(v, str) if t == "text" else isinstance(v, bool) if t == "truth" else (
+                    type(v) is int if t in ("int", "long", "size") else type(v) in (int, float))
+                if not ok:
+                    raise TamasError(f"C function {name} expected {t} but was given {v!r}")
+                sent.append(v.encode("utf-8") if t == "text" else v)
+            result = f(*sent)
+            return result.decode("utf-8", "replace") if isinstance(result, bytes) else result
+        return call
+
+    def __str__(self):
+        return f"<c library {self._name}>"
+
+
 def bridge(kind, name, base_dir="."):
-    """Borrow a library from another language: python, javascript (Node.js) or java (JDK)."""
-    kind = {"js": "javascript", "node": "javascript", "py": "python"}.get(kind, kind)
+    """Borrow a library from another language: python, javascript (Node.js), java (JDK) or c / c++."""
+    kind = {"js": "javascript", "node": "javascript", "py": "python", "c++": "c", "cpp": "c"}.get(kind, kind)
+    if kind == "c":
+        return CLibrary(name, base_dir)
     if kind == "python":
         try:
             return importlib.import_module(name)
@@ -275,7 +325,7 @@ def bridge(kind, name, base_dir="."):
             return proc.result(proc.ask({"op": "load", "name": name, "base": os.path.abspath(base_dir)}))
         except TamasError as e:
             raise TamasError(f"could not load '{name}' ({e.msg})")
-    raise TamasError(f"there is no '{kind}' bridge yet (available: python, javascript, java)")
+    raise TamasError(f"there is no '{kind}' bridge yet (available: python, javascript, java, c)")
 
 
 # ---- geography (GeoJSON-shaped) ----------------------------------------------------

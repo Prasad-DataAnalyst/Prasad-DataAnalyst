@@ -168,6 +168,22 @@ def lex(src, lang=None, known=None):
             if buf or not parts:
                 parts.append("".join(buf))
             toks.append(Tok("STR", parts, start_line, start, i))
+        elif c == "'":  # plain text: nothing inside is special, '' stands for one quote
+            start, start_line, buf = i, line, []
+            i += 1
+            while True:
+                if i >= n:
+                    raise TamasError("text is missing its closing quote", start_line)
+                if src[i] == "'":
+                    if src[i + 1:i + 2] != "'":
+                        break
+                    i += 1
+                if src[i] == "\n":
+                    line += 1
+                buf.append(src[i])
+                i += 1
+            i += 1
+            toks.append(Tok("STR", ["".join(buf)], start_line, start, i))
         elif id_start(c):
             j = i + 1
             while j < n and id_part(src[j]):

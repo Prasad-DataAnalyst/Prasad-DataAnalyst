@@ -1,0 +1,13 @@
+~ The big numeric and AI libraries are used through the Python bridge - here NumPy.
+~ Named values (num: 5) are passed straight through, and arrays keep their own arithmetic.
+np: bridge("python", "numpy")
+
+readings: np.array([21.5, 22.1, 23.8, 22.9, 24.4])
+show "mean", round(np.mean(readings), 2), "spread", round(np.std(readings), 3)
+show "in fahrenheit:", (readings * 9 / 5 + 32).tolist()
+
+grid: np.linspace(0, 1, num: 5)
+show "grid:", grid.tolist()
+
+a: np.array([[2, 1], [1, 3]])
+show "solve:", np.round(np.linalg.solve(a, np.array([3, 5])), decimals: 3).tolist()

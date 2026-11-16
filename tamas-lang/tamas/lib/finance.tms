@@ -1,0 +1,47 @@
+~ finance - money over time. Amounts may carry a currency (1000 INR); rates are plain numbers (0.08 = 8%).
+
+simple_interest(principal, rate, years) -> principal * rate * years
+
+~ Value after compounding `times` times a year.
+compound(principal, rate, years, times) -> principal * (1 + rate / times) ^ (times * years)
+
+present_value(amount, rate, years) -> amount / (1 + rate) ^ years
+
+~ Net present value of yearly cash flows; the first one happens today.
+npv(rate, flows) -> sum(map(range(len(flows)), i -> flows[i] / (1 + rate) ^ i))
+
+~ Internal rate of return: the rate where npv is zero. Gives nothing when there is none between -99% and 1000%.
+irr(flows) -> {
+  low: -0.99
+  high: 10
+  at_low: number(npv(low, flows))
+  when at_low * number(npv(high, flows)) > 0 { give nothing }
+  each step in range(200) {
+    middle: (low + high) / 2
+    value: number(npv(middle, flows))
+    when value * at_low > 0 {
+      low: middle
+      at_low: value
+    } else {
+      high: middle
+    }
+  }
+  give (low + high) / 2
+}
+
+~ Fixed monthly payment (EMI) for a loan.
+loan_payment(principal, yearly_rate, months) -> {
+  monthly: yearly_rate / 12
+  when monthly = 0 { give principal / months }
+  give principal * monthly / (1 - (1 + monthly) ^ (-months))
+}
+
+~ Compound annual growth rate.
+cagr(first, last, years) -> (last / first) ^ (1 / years) - 1
+
+~ Change from each price to the next, as a fraction.
+returns(prices) -> map(range(1, len(prices)), i -> prices[i] / prices[i - 1] - 1)
+
+moving_average(xs, window) -> {
+  give map(range(window - 1, len(xs)), i -> mean(map(range(i - window + 1, i + 1), j -> xs[j])))
+}

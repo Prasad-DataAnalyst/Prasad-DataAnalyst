@@ -5,8 +5,11 @@ import json
 import os
 import re
 import shutil
+import ctypes.util
+import importlib.util
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +24,8 @@ from tamas.lexer import available_langs, translate  # noqa: E402
 EX = os.path.join(ROOT, "examples")
 FIX = os.path.join(ROOT, "tests", "fixtures")
 NODE, JAVA = shutil.which("node"), shutil.which("java")
-NEEDS = {"bridge_js.tms": NODE, "bridge_java.tms": JAVA}
+NUMPY, LIBM, GXX = importlib.util.find_spec("numpy"), ctypes.util.find_library("m"), shutil.which("g++")
+NEEDS = {"bridge_js.tms": NODE, "bridge_java.tms": JAVA, "bridge_numpy.tms": NUMPY, "bridge_c.tms": LIBM}
 
 
 def runnable_examples():
@@ -236,6 +240,125 @@ class ForeignBridges(unittest.TestCase):
                     'j: bridge("java", "java.lang.Integer")\nshow j.parseInt("abc")', 'bridge("ruby", "x")']:
             with self.assertRaises(TamasError, msg=bad):
                 out(bad)
+
+
+class Libraries(unittest.TestCase):
+    def test_language_support_for_libraries(self):
+        self.assertEqual(out("f(a, b) -> a - b\nshow f(b: 1, a: 10), f(10, b: 1), round(2.567, places: 1)"), "9 9 2.6")
+        self.assertEqual(out("""show 'a {b} "c" \\n it''s', len('{}')"""), 'a {b} "c" \\n it\'s 2')
+        self.assertEqual(out('show round(90 deg, 4), round(use("math").pi as deg), sqrt(16 m^2), sqrt(2 m * 8 m)'), "1.5708 180 4 m 4 m")
+        for bad in ["f(a) -> a\nf(b: 1)", "f(a) -> a\nf(1, a: 2)", "show sqrt(4 m)", 'use("no_such_library")', "show 'open"]:
+            with self.assertRaises(TamasError, msg=bad):
+                out(bad)
+
+    def test_own_libraries_and_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            files = {"shop.tms": 'tax: 0.18\nprice(net) -> net * (1 + tax)\nhelper: use("stats")',
+                     "loop_a.tms": 'b: use("loop_b")', "loop_b.tms": 'a: use("loop_a")', "broken.tms": "x: 1\nshow y"}
+            for name, text in files.items():
+                with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                    f.write(text)
+            self.assertEqual(out('shop: use("shop")\nshow shop.price(100 INR), shop.tax, shop.helper.median([3, 1, 2])', d), "118 INR 0.18 2")
+            for bad, text in (('use("loop_a")', "circle"), ('use("broken")', "line 2")):
+                with self.assertRaises(TamasError) as cm:
+                    out(bad, d)
+                self.assertIn(text, str(cm.exception))
+
+    def test_xml_html_css_regex(self):
+        src = """x: use("xml")
+doc: x.parse('<order id="7"><item qty="2">Rice &amp; dal</item><item qty="1">Tea</item>tail<empty/></order>')
+show doc.attrs.id, len(x.find(doc, "item")), x.text(doc.children[0])
+show x.write(doc)
+show x.write(x.el("a", {t: "1 < 2 & \\"q\\""}, ["<b>"]))"""
+        self.assertEqual(out(src), '7 2 Rice & dal\n<order id="7"><item qty="2">Rice &amp; dal</item><item qty="1">Tea</item>tail<empty/></order>\n'
+                         '<a t="1 &lt; 2 &amp; &quot;q&quot;">&lt;b&gt;</a>')
+        src = """h: use("html")
+page: h.parse('<!doctype html><body><ul class="menu big"><li><a href="/a">A &lt; B</a><li><a id=x href="/b">B</a></ul><br><p>Hi<script>if (a<b) {}</script>')
+show map(h.select(page, "ul.menu a"), a -> a.attrs.href), h.text(h.select(page, "#x")[0]), len(h.select(page, "ul > li")) 
+"""
+        with self.assertRaises(TamasError):
+            out(src)  # '>' combinators are not understood, and say so
+        src = src.replace('"ul > li"', '"ul li"') + "show h.write(page)\nshow h.write(h.parse(h.write(page))) = h.write(page)"
+        self.assertEqual(out(src), '["/a", "/b"] B 2\n<body><ul class="menu big"><li><a href="/a">A &lt; B</a></li><li><a id="x" href="/b">B</a></li></ul>'
+                         '<br><p>Hi<script>if (a<b) {}</script></p></body>\nyes')
+        src = """c: use("css")
+sheet: c.parse('/* note */ @import url(''a;b.css''); body, h1 { margin: 0; font: 12px "A;B" } @media (max-width: 600px) { .x { color: red } }')
+show len(sheet), sheet[1].selector, sheet[1].declarations.font, sheet[2].rules[0].declarations.color
+show c.parse(c.write(sheet)) = sheet"""
+        self.assertEqual(out(src), '3 body, h1 12px "A;B" red\nyes')
+        for bad in ["use(\"xml\").parse('<a><b></a>')", "use(\"css\").parse('a { b: c')", "use(\"css\").parse('a b c')", "use(\"regex\").find('(', 'x')"]:
+            with self.assertRaises(TamasError, msg=bad):
+                out(bad)
+        self.assertEqual(out("""r: use("regex")\nshow r.find_all('\\d+', "a1 b22"), r.find('(\\w+)@(\\w+)', "x asha@tamas y"), r.find('z', "abc"), r.replace('\\s+', "a  b", " ")"""),
+                         '["1", "22"] ["asha", "tamas"] nothing a b')
+
+    def test_science_and_industry_libraries(self):
+        checks = {
+            'st: use("stats")\nf: st.linear_fit([1, 2, 3, 4], [3, 5, 7, 9])\nshow st.median([3, 1, 4, 1, 5]), st.median([1, 2, 3, 4]), '
+            'round(st.stdev([2, 4, 4, 4, 5, 5, 7, 9]), 4), st.stdev([1 kg, 2 kg, 3 kg]), st.percentile([1, 2, 3, 4, 5], 90), f.slope, f.intercept, f.r2, f.predict(10)':
+                "3 2.5 2.1381 1 kg 4.6 2 1 1 21",
+            'mx: use("matrix")\nshow mx.multiply([[1, 2], [3, 4]], [[5, 6], [7, 8]]), mx.determinant([[2, 0], [1, 3]]), mx.solve([[2, 1], [1, 3]], [3, 5]), '
+            'mx.solve([[1, 2], [2, 4]], [1, 2]), mx.identity(2)':
+                "[[19, 22], [43, 50]] 6 [0.8, 1.4] nothing [[1, 0], [0, 1]]",
+            'ai: use("ai")\npts: [[1, 1], [1.2, 0.8], [0.9, 1.1], [5, 5], [5.2, 4.9], [4.8, 5.1]]\n'
+            'lr: ai.linear_regression([[1], [2], [3], [4]], [3, 5, 7, 9], 0.05, 2000)\n'
+            'lg: ai.logistic_regression([[0.5], [1], [1.5], [3], [3.5], [4]], [0, 0, 0, 1, 1, 1], 0.5, 500)\n'
+            'show ai.knn(pts, ["a", "a", "a", "b", "b", "b"], [4.5, 4.7], 3), ai.kmeans([[1, 1], [5, 5], [1.2, 0.8], [5.2, 4.9]], 2, 5).labels, '
+            'round(lr.weights[0], 2), round(lr.predict([10]), 1), map([[1], [3.8]], lg.classify), ai.accuracy([1, 0, 1, 1], [1, 0, 0, 1])':
+                "b [0, 1, 0, 1] 2 21 [0, 1] 0.75",
+            'rb: use("robotics")\ntip: rb.forward([30 cm, 20 cm], [90 deg, -90 deg])\nik: rb.inverse_2link(30 cm, 20 cm, 20 cm, 30 cm)\nc: rb.pid(2, 0.5, 0.1)\n'
+            'p: rb.drive({x: 0 m, y: 0 m, heading: 0}, 1 m/s, 1 m/s, 0.5 m, 2 s)\n'
+            'show round(tip.x as cm, 6), round(tip.y as cm, 6), round(ik.shoulder as deg, 2), round(ik.elbow as deg, 2), rb.inverse_2link(1 m, 1 m, 3 m, 0 m), '
+            'rb.pid_step(c, 1, 0.1), round(rb.pid_step(c, 0.5, 0.1), 4), p.x, rb.move_time(10 m, 2 m/s, 1 m/s^2), rb.move_time(1 m, 2 m/s, 1 m/s^2)':
+                "20 cm 30 cm 22.62 90 nothing 2.05 0.575 2 m 7 s 2 s",
+            'sc: use("semiconductor")\ncox: sc.oxide_capacitance(2 nm)\n'
+            'show round(sc.thermal_voltage(300 K), 3), sc.dies_per_wafer(300 mm, 10 mm, 10 mm), round(sc.yield_poisson(0.1 cm^-2, 1 cm^2), 4), '
+            'round(sc.yield_murphy(0.1 cm^-2, 100 mm^2), 4), sc.good_dies(300 mm, 10 mm, 10 mm, 0.1 cm^-2), sc.sheet_resistance(1e-6 ohm*m, 100 nm), '
+            'round(sc.mosfet_current(400 cm^2/V/s, cox, 1 um, 100 nm, 1 V, 0.4 V), 4), round(sc.built_in_potential(1e17 cm^-3, 1e16 cm^-3, 300 K), 3)':
+                "25.852 mV 640 0.9048 0.9056 579 10 ohm 1.2431 mA 0.774 V",
+            'fn: use("finance")\nshow round(fn.compound(100000 INR, 0.08, 10, 1)), round(fn.loan_payment(1000000 INR, 0.09, 240), 2), '
+            'round(fn.npv(0.1, [-1000 USD, 500 USD, 500 USD, 500 USD]), 2), round(fn.irr([-1000, 500, 500, 500]), 4), round(fn.cagr(100, 200, 5), 4), '
+            'fn.moving_average([1, 2, 3, 4, 5], 3), fn.irr([1, 2])':
+                "215892 INR 8997.26 INR 243.43 USD 0.2338 0.1487 [2, 3, 4] nothing",
+            'ph: use("physics")\nshow round(ph.orbital_period(6771 km, ph.earth_mass) as min, 1), round(ph.orbital_speed(6771 km, ph.earth_mass) as km/s, 2), '
+            'round(ph.escape_speed(ph.earth_radius, ph.earth_mass) as km/s, 2), ph.kinetic_energy(1000 kg, 20 m/s), round(ph.delta_v(300 s, 500 t, 100 t) as km/s, 2), '
+            'round(ph.photon_energy(500 nm), 3), round(ph.lorentz_factor(0.6 * ph.c), 4)':
+                "92.4 min 7.67 km/s 11.19 km/s 200000 J 4.73 km/s 2.48 eV 1.25",
+        }
+        for src, expected in checks.items():
+            self.assertEqual(out(src), expected, src[:20])
+        with self.assertRaises(TamasError):  # units are checked inside libraries too
+            out('use("semiconductor").yield_poisson(0.1 cm^-2, 1 kg)\nshow use("physics").kinetic_energy(1 m, 1 s)')
+
+    @unittest.skipUnless(NUMPY, "NumPy is not installed")
+    def test_python_libraries_with_named_values_and_arithmetic(self):
+        self.assertEqual(out('np: bridge("python", "numpy")\na: np.array([1, 2, 3])\n'
+                             'show (a * 2 + 1).tolist(), (-a).tolist(), np.linspace(0, 1, num: 3).tolist(), truthy((a > 0).all()), (a ^ 2).tolist()'),
+                         "[3, 5, 7] [-1, -2, -3] [0, 0.5, 1] yes [1, 4, 9]")
+        with self.assertRaises(TamasError):
+            out('np: bridge("python", "numpy")\nshow np.array([1, 2]) + np.array([1, 2, 3])')
+
+    @unittest.skipUnless(LIBM, "the C maths library was not found")
+    def test_c_bridge(self):
+        self.assertEqual(out(read("bridge_c.tms")), "1 1024\n13")
+        for bad in ['bridge("c", "no_such_lib_x")', 'bridge("c", "m").fn("nope", "double", [])', 'bridge("c", "m").fn("cos", "complex", [])',
+                    'f: bridge("c", "m").fn("cos", "double", ["double"])\nf("x")', 'f: bridge("c", "m").fn("cos", "double", ["double"])\nf(1, 2)']:
+            with self.assertRaises(TamasError, msg=bad):
+                out(bad)
+
+    @unittest.skipUnless(GXX, "no C++ compiler")
+    def test_cpp_library_through_extern_c(self):
+        code = ('#include <string>\n#include <numeric>\n#include <vector>\nextern "C" {\n'
+                'double triangle(int n) { std::vector<int> v(n); std::iota(v.begin(), v.end(), 1); return std::accumulate(v.begin(), v.end(), 0.0); }\n'
+                'const char* shout(const char* s) { static std::string out; out = std::string(s) + "!"; return out.c_str(); }\n'
+                'bool is_even(long n) { return n % 2 == 0; }\n}\n')
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "fast.cpp"), "w") as f:
+                f.write(code)
+            subprocess.run([GXX, "-shared", "-fPIC", "-o", os.path.join(d, "libfast.so"), os.path.join(d, "fast.cpp")], check=True)
+            src = ('lib: bridge("c++", "libfast.so")\nshow lib.fn("triangle", "double", ["int"])(100), lib.fn("shout", "text", ["text"])("தமிழ்"), '
+                   'lib.fn("is_even", "truth", ["long"])(7)')
+            self.assertEqual(out(src, d), "5050 தமிழ்! no")
 
 
 class Languages(unittest.TestCase):

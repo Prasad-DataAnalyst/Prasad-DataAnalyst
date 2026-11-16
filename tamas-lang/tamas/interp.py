@@ -46,11 +46,15 @@ class Function:
     def __init__(self, interp, params, body, env, name):
         self.interp, self.params, self.body, self.env, self.name = interp, params, body, env, name
 
-    def __call__(self, *args):
-        if len(args) != len(self.params):
-            raise TamasError(f"{self} takes {len(self.params)} value(s) but was given {len(args)}")
+    def __call__(self, *args, **named):
+        if len(args) + len(named) != len(self.params):
+            raise TamasError(f"{self} takes {len(self.params)} value(s) but was given {len(args) + len(named)}")
         env = Env(self.env)
         env.vars.update(zip(self.params, args))
+        for key, value in named.items():
+            if key not in self.params or key in env.vars:
+                raise TamasError(f"{self} has no value named '{key}' left to fill (it takes: {', '.join(self.params)})")
+            env.vars[key] = value
         try:
             self.interp.run_block(self.body, env)
         except _Give as g:
@@ -161,6 +165,10 @@ def _rem(a, b):
     return math.fmod(a, b)
 
 
+def _sqrt(v):
+    return v.root() if isinstance(v, Quantity) else math.sqrt(v)
+
+
 def _pick(fn):
     return lambda *a: fn(a[0]) if len(a) == 1 else fn(a)
 
@@ -178,7 +186,7 @@ BUILTINS = {
     "min": _pick(min),
     "max": _pick(max),
     "abs": abs,
-    "sqrt": math.sqrt,
+    "sqrt": _sqrt,
     "floor": math.floor,
     "round": _round,
     "whole": int,
@@ -203,6 +211,11 @@ BUILTINS = {
 }
 
 
+_FOREIGN_OPS = {"+": operator.add, "-": operator.sub, "*": operator.mul, "/": operator.truediv, "%": operator.mod,
+                "^": operator.pow, "=": operator.eq, "!=": operator.ne, "<": operator.lt, ">": operator.gt,
+                "<=": operator.le, ">=": operator.ge}
+
+
 class Interp:
     def __init__(self, base_dir=".", out=None):
         self.base_dir = base_dir
@@ -216,8 +229,37 @@ class Interp:
             "read": lambda p: bridges.read_file(self.path(p), self.run_tms),
             "write": lambda p, v: bridges.write_file(self.path(p), v),
         })
+        self.builtins.vars["use"] = self.use
         self.globals = Env(self.builtins)
         self.last = None
+        self.modules = {}  # shared with every module this program loads
+
+    def use(self, name):
+        """Load a library: a built-in one, one from Tamas's own lib folder, or a .tms file next to the program."""
+        from . import stdlib
+        if name in stdlib.NATIVE:
+            return stdlib.NATIVE[name]
+        local = name if name.endswith(".tms") else name + ".tms"
+        for path in (self.path(local), os.path.join(stdlib.LIB_DIR, local)):
+            if os.path.isfile(path):
+                break
+        else:
+            raise TamasError(f"there is no library called '{name}' (built in: {', '.join(stdlib.available())})")
+        path = os.path.abspath(path)
+        if path not in self.modules:
+            self.modules[path] = None  # being loaded
+            sub = Interp(os.path.dirname(path), self.out)
+            sub.modules = self.modules
+            with open(path, encoding="utf-8") as f:
+                try:
+                    sub.run(f.read())
+                except TamasError as e:
+                    del self.modules[path]
+                    raise TamasError(f"in library '{name}', line {e.line}: {e.msg}")
+            self.modules[path] = dict(sub.globals.vars)
+        elif self.modules[path] is None:
+            raise TamasError(f"library '{name}' uses itself in a circle")
+        return self.modules[path]
 
     def path(self, p):
         return p if os.path.isabs(p) else os.path.join(self.base_dir, p)
@@ -347,7 +389,8 @@ class Interp:
         return e[2]
 
     def e_qty(self, e, env):
-        return Quantity.make(e[2], e[3], self.units, e[1])
+        q = Quantity.make(e[2], e[3], self.units, e[1])
+        return q if q.dims else q.si  # 90 deg is just a number (in radians)
 
     def e_str(self, e, env):
         if len(e[2]) == 1 and isinstance(e[2][0], str):
@@ -380,8 +423,9 @@ class Interp:
         if not callable(f):
             raise TamasError(f"this {type_name(f)} is not a function and cannot be called", e[1])
         args = [self.ev(a, env) for a in e[3]]
+        named = {k: self.ev(v, env) for k, v in e[4]}
         try:
-            result = f(*args)
+            result = f(*args, **named)
         except TamasError as err:
             if err.line is None:
                 err.line = e[1]
@@ -417,7 +461,7 @@ class Interp:
 
     def e_neg(self, e, env):
         v = self.ev(e[2], env)
-        if is_num(v) or isinstance(v, Quantity):
+        if is_num(v) or isinstance(v, Quantity) or type_name(v) == "foreign":
             return -v
         raise TamasError(f"cannot negate {type_name(v)}", e[1])
 
@@ -433,7 +477,8 @@ class Interp:
     def e_as(self, e, env):
         v = self.ev(e[2], env)
         if is_num(v):
-            return Quantity.make(v, e[3], self.units, e[1])
+            q = Quantity.make(v, e[3], self.units, e[1])
+            return q if q.dims else v / q.factor  # angle as deg: the same angle counted in degrees
         if isinstance(v, Quantity):
             return v.convert(e[3], self.units, e[1])
         raise TamasError(f"only a number or quantity can be converted with 'as', not {type_name(v)}", e[1])
@@ -441,6 +486,13 @@ class Interp:
     def e_bin(self, e, env):
         _, line, op, ea, eb = e
         a, b = self.ev(ea, env), self.ev(eb, env)
+        if type_name(a) == "foreign" or type_name(b) == "foreign":
+            if isinstance(a, bridges.Foreign) or isinstance(b, bridges.Foreign):
+                raise TamasError(f"'{op}' cannot be used on a value that lives across a bridge; call its methods", line)
+            try:  # values borrowed from Python (arrays, tables, ...) keep their own arithmetic
+                return _FOREIGN_OPS[op](a, b)
+            except Exception as err:
+                raise TamasError(f"{type(err).__name__}: {err}", line)
         if op in ("=", "!="):
             same = a == b if (is_num(a) and is_num(b)) or type(a) is type(b) else False
             return same if op == "=" else not same
