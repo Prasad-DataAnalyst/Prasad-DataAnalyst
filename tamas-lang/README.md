@@ -59,7 +59,7 @@ The same program in Tamil - identical structure, identical result:
 Built and tested in v0.1:
 
 - The full core language: values, records, lists, functions, closures, pipes, conditions, loops, text templates.
-- About 60 built-in units (length, mass, time, energy, power, pressure, data, six currencies) plus user-defined units.
+- 52 built-in units (length, mass, time, energy, power, pressure, data, six currencies) plus user-defined units.
 - Lossless JSON / GeoJSON import and export; CSV reading; great-circle distance and GeoJSON builders (`geo`).
 - Keyword packs for Hindi, Tamil and Telugu, with exact round-trip translation.
 - A bridge to every installed Python library.
