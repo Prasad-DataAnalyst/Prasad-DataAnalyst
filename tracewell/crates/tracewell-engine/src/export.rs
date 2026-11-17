@@ -4,8 +4,8 @@
 //! its README, manifest, audit log, issues and checksums, re-open the package and verify everything
 //! again, and only then offer it. A package that fails any check is deleted, never offered.
 //!
-//! The native engine writes the Excel, CSV and Parquet profiles; the profile list is the same JSON
-//! file as the TypeScript engine's.
+//! The native engine writes every profile: Excel, CSV, Parquet, GeoJSON and Shapefile (shapefile.rs);
+//! the profile list is the same JSON file as the TypeScript engine's.
 
 use crate::canonical::{canonical_json, json_string, sha256_hex, stringify};
 use crate::csv::{TableLayout, TableReader};
@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
 /// The profiles this engine writes: every one.
-pub const NATIVE_PROFILES: [&str; 4] = ["excel", "csv", "parquet", "geojson"];
+pub const NATIVE_PROFILES: [&str; 5] = ["excel", "csv", "parquet", "geojson", "shapefile"];
 /// A package up to this size is handed back as bytes when the request names no file.
 pub const RETURN_BYTES_MAX: u64 = 256 << 20;
 const READ_BYTES: usize = 4 << 20;
@@ -102,9 +102,21 @@ pub fn refusal(
                 "GeoJSON requires WGS84 coordinates (TW-EXP-003); this dataset is in {}.",
                 other.unwrap_or("an undeclared coordinate system")
             ),
-            "Coordinate transformation is not available in this edition. Export as CSV or Excel instead, or transform the data to WGS84 before importing it.".into(),
+            "Transform the coordinates to EPSG:4326 first (Data › Transform coordinates), or export as CSV or Excel.".into(),
         )),
     }
+}
+
+/// Why the profile cannot write this dataset, from its plan, which may read the data.
+pub fn plan_refusal(
+    conn: &Connection,
+    view: &str,
+    columns: &[OutColumn],
+    rows: u64,
+    profile: &str,
+    spatial: &Spatial,
+) -> Result<Option<(String, String)>> {
+    Ok(plan_export(conn, view, columns, rows, profile, spatial)?.refusal)
 }
 
 /// The profile statuses of one dataset (profileStatuses): whether each profile can write it, and
@@ -144,6 +156,7 @@ enum DataKind {
     Parquet,
     Xlsx,
     GeoJson,
+    Shapefile,
 }
 
 /// A data file a profile writes: its path in the package and the columns of the view it holds.
@@ -212,6 +225,29 @@ fn plan_export(
             substitutions: Vec::new(),
             files: Vec::new(),
             refusal: Some(why),
+        });
+    }
+    if profile == "shapefile" {
+        let p = crate::shapefile::plan(conn, view, columns, rows, spatial)?;
+        let mut files = Vec::new();
+        if p.refusal.is_none() {
+            files.push(DataFile {
+                path: "data.shp",
+                kind: DataKind::Shapefile,
+                columns: p.dbf_columns,
+            });
+            if !p.unfit.is_empty() {
+                files.push(DataFile {
+                    path: "data-long-text.csv",
+                    kind: DataKind::Csv,
+                    columns: p.unfit,
+                });
+            }
+        }
+        return Ok(Plan {
+            substitutions: p.substitutions,
+            files,
+            refusal: p.refusal,
         });
     }
     match profile {
@@ -336,7 +372,7 @@ pub struct ExportOutcome {
     pub record: Option<Value>,
 }
 
-fn check(id: &str, ok: bool, detail: String, file: Option<&str>) -> Value {
+pub(crate) fn check(id: &str, ok: bool, detail: String, file: Option<&str>) -> Value {
     let mut m = Map::new();
     m.insert("id".into(), json!(id));
     m.insert("ok".into(), json!(ok));
@@ -960,7 +996,7 @@ fn parse_header(h: &str) -> (String, Option<String>) {
     (h.to_string(), None)
 }
 
-fn header_check(expected: &Expected, actual: &[String], file: &str) -> Value {
+pub(crate) fn header_check(expected: &Expected, actual: &[String], file: &str) -> Value {
     let want: Vec<String> = expected.columns.iter().map(OutColumn::header).collect();
     let ok = actual.len() == want.len()
         && actual
@@ -992,7 +1028,7 @@ fn header_check(expected: &Expected, actual: &[String], file: &str) -> Value {
     }
 }
 
-fn rows_check(actual: u64, expected: u64, file: &str) -> Value {
+pub(crate) fn rows_check(actual: u64, expected: u64, file: &str) -> Value {
     if actual == expected {
         check(
             "RB-ROWS",
@@ -1010,7 +1046,7 @@ fn rows_check(actual: u64, expected: u64, file: &str) -> Value {
     }
 }
 
-fn values_check(expected: &Expected, digests: &[Option<String>], file: &str) -> Value {
+pub(crate) fn values_check(expected: &Expected, digests: &[Option<String>], file: &str) -> Value {
     let bad: Vec<String> = expected
         .columns
         .iter()
@@ -1088,7 +1124,7 @@ fn is_datetime_text(t: &str) -> bool {
 
 /// Re-types text read back from a file with the manifest's column type (retypeText). Dates and
 /// date-times keep their text, so the digest compares exactly what the file says.
-fn retype_text(text: &str, kind: Kind) -> Option<Cell> {
+pub(crate) fn retype_text(text: &str, kind: Kind) -> Option<Cell> {
     if text.is_empty() {
         return Some(Cell::Null);
     }
@@ -1623,7 +1659,47 @@ fn read_back(
             input.audit.len() as u64,
         )),
         DataKind::GeoJson => read_back_geojson(path, expected, file, &input.spatial),
+        DataKind::Shapefile => {
+            let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            // Files taken back out of the package are named inside-data.shp and so on.
+            let inside = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix("data.shp"))
+                .unwrap_or("")
+                .to_string();
+            let prefix = file.strip_suffix("data.shp").unwrap_or("");
+            crate::shapefile::read_back(
+                conn,
+                &input.view,
+                &input.columns,
+                &input.spatial,
+                expected,
+                &expected_columns(input, expected),
+                input.ordered,
+                &|name| dir.join(format!("{inside}{name}")),
+                prefix,
+            )
+        }
     }
+}
+
+/// The places among the output columns of the columns a data file holds.
+fn expected_columns(input: &ExportInput, expected: &Expected) -> Vec<usize> {
+    expected
+        .columns
+        .iter()
+        .filter_map(|c| input.columns.iter().position(|x| x.id == c.id))
+        .collect()
+}
+
+/// The files of a data file: itself, and a Shapefile's companions.
+fn parts_of(f: &DataFile) -> Vec<&'static str> {
+    let mut out = vec![f.path];
+    if f.kind == DataKind::Shapefile {
+        out.extend(crate::shapefile::COMPANIONS);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2438,6 +2514,18 @@ pub fn build_export(
             DataKind::Parquet => write_parquet(conn, input, &path)?,
             DataKind::Xlsx => write_xlsx(conn, input, &plan, &f.columns, &digests, &path, cancel)?,
             DataKind::GeoJson => write_geojson(conn, input, &path, cancel)?,
+            DataKind::Shapefile => crate::shapefile::write(
+                conn,
+                &input.view,
+                &input.columns,
+                &input.spatial,
+                &f.columns,
+                input.row_count,
+                input.ordered,
+                &input.at,
+                &tmp,
+                cancel,
+            )?,
         }
     }
 
@@ -2480,8 +2568,10 @@ pub fn build_export(
     let issues_bytes = issues_csv(&input.issues);
     let mut data_files: Vec<(String, String, u64)> = Vec::new();
     for f in &plan.files {
-        let (sha, size) = file_sha256(&tmp.join(f.path))?;
-        data_files.push((f.path.to_string(), sha, size));
+        for part in parts_of(f) {
+            let (sha, size) = file_sha256(&tmp.join(part))?;
+            data_files.push((part.to_string(), sha, size));
+        }
     }
     let entry = |path: &str, size: u64, sha: &str, role: &str| json!({ "path": path, "size": size, "sha256": sha, "role": role });
     let data_ok = !data_checks.is_empty() && data_checks.iter().all(|c| c["ok"] == true);
@@ -2599,23 +2689,27 @@ pub fn build_export(
     let extracted: Vec<(String, PathBuf)> = plan
         .files
         .iter()
-        .map(|f| (f.path.to_string(), tmp.join(format!("inside-{}", f.path))))
+        .flat_map(parts_of)
+        .map(|p| (p.to_string(), tmp.join(format!("inside-{p}"))))
         .collect();
     let package_checks = verify_package(&package_path, &manifest, &extracted)?;
     let mut inside = Vec::new();
-    for (k, (f, (_, path))) in plan.files.iter().zip(&extracted).enumerate() {
+    for (k, f) in plan.files.iter().enumerate() {
+        let path = tmp.join(format!("inside-{}", f.path));
         if path.exists() {
             let name = format!("package:{}", f.path);
             inside.extend(read_back(
                 conn,
                 input,
                 f.kind,
-                path,
+                &path,
                 &expected_of(k),
                 &name,
             )?);
-            let _ = std::fs::remove_file(path);
         }
+    }
+    for (_, path) in &extracted {
+        let _ = std::fs::remove_file(path);
     }
     let mut checks = manifest["validation"]["checks"]
         .as_array()

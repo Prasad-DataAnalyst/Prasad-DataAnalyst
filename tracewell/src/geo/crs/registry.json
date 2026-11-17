@@ -1,15 +1,45 @@
 {
-  "version": "2026.1",
-  "source": "EPSG Geodetic Parameter Dataset, as published at epsg.io (checked 17 November 2026). Formulas: IOGP Geomatics Guidance Note 7-2 (September 2019).",
+  "version": "2026.2",
+  "source": "EPSG Geodetic Parameter Dataset, as published at epsg.io (checked 17 November 2026). Formulas: IOGP Geomatics Guidance Note 7-2 (September 2019). ESRI names: the ESRI WKT epsg.io publishes for each system.",
   "ellipsoids": {
-    "7030": { "name": "WGS 84", "a": 6378137, "invF": 298.257223563 },
-    "7019": { "name": "GRS 1980", "a": 6378137, "invF": 298.257222101 },
-    "7001": { "name": "Airy 1830", "a": 6377563.396, "invF": 299.3249646 },
-    "7022": { "name": "International 1924", "a": 6378388, "invF": 297 },
-    "7008": { "name": "Clarke 1866", "a": 6378206.4, "b": 6356583.8 }
+    "7030": {
+      "name": "WGS 84",
+      "a": 6378137,
+      "invF": 298.257223563,
+      "esri": "WGS_1984"
+    },
+    "7019": {
+      "name": "GRS 1980",
+      "a": 6378137,
+      "invF": 298.257222101,
+      "esri": "GRS_1980"
+    },
+    "7001": {
+      "name": "Airy 1830",
+      "a": 6377563.396,
+      "invF": 299.3249646,
+      "esri": "Airy_1830"
+    },
+    "7022": {
+      "name": "International 1924",
+      "a": 6378388,
+      "invF": 297,
+      "esri": "International_1924"
+    },
+    "7008": {
+      "name": "Clarke 1866",
+      "a": 6378206.4,
+      "b": 6356583.8,
+      "esri": "Clarke_1866"
+    }
   },
   "datums": {
-    "6326": { "name": "World Geodetic System 1984", "ellipsoid": "7030", "toWgs84": null },
+    "6326": {
+      "name": "World Geodetic System 1984",
+      "ellipsoid": "7030",
+      "toWgs84": null,
+      "esri": "D_WGS_1984"
+    },
     "6258": {
       "name": "European Terrestrial Reference System 1989",
       "ellipsoid": "7019",
@@ -22,7 +52,8 @@
         "tz": 0,
         "accuracy": 1,
         "area": [-16.1, 33.26, 38, 84.73]
-      }
+      },
+      "esri": "D_ETRS_1989"
     },
     "6171": {
       "name": "Reseau Geodesique Francais 1993 v1",
@@ -36,7 +67,8 @@
         "tz": 0,
         "accuracy": 1,
         "area": [-9.86, 41.15, 10.38, 51.56]
-      }
+      },
+      "esri": "D_RGF_1993"
     },
     "6269": {
       "name": "North American Datum 1983",
@@ -50,7 +82,8 @@
         "tz": 0,
         "accuracy": 4,
         "area": [-172.54, 23.81, -47.74, 86.46]
-      }
+      },
+      "esri": "D_North_American_1983"
     },
     "6283": {
       "name": "Geocentric Datum of Australia 1994",
@@ -64,7 +97,8 @@
         "tz": 0,
         "accuracy": 3,
         "area": [93.41, -60.55, 173.34, -8.47]
-      }
+      },
+      "esri": "D_GDA_1994"
     },
     "6230": {
       "name": "European Datum 1950",
@@ -78,7 +112,8 @@
         "tz": -121,
         "accuracy": 10,
         "area": [-9.56, 34.88, 31.59, 71.24]
-      }
+      },
+      "esri": "D_European_1950"
     },
     "6277": {
       "name": "Ordnance Survey of Great Britain 1936",
@@ -96,7 +131,8 @@
         "ds": -20.489,
         "accuracy": 2,
         "area": [-8.82, 49.79, 1.92, 60.94]
-      }
+      },
+      "esri": "D_OSGB_1936"
     },
     "6267": {
       "name": "North American Datum 1927",
@@ -110,18 +146,51 @@
         "tz": 176,
         "accuracy": 10,
         "area": [-124.79, 24.41, -66.91, 49.38]
-      }
+      },
+      "esri": "D_North_American_1927"
     }
   },
   "geographic": {
-    "4326": { "name": "WGS 84", "datum": "6326" },
-    "4258": { "name": "ETRS89", "datum": "6258" },
-    "4171": { "name": "RGF93 v1", "datum": "6171" },
-    "4269": { "name": "NAD83", "datum": "6269" },
-    "4283": { "name": "GDA94", "datum": "6283" },
-    "4230": { "name": "ED50", "datum": "6230" },
-    "4277": { "name": "OSGB36", "datum": "6277" },
-    "4267": { "name": "NAD27", "datum": "6267" }
+    "4326": {
+      "name": "WGS 84",
+      "datum": "6326",
+      "esri": "GCS_WGS_1984"
+    },
+    "4258": {
+      "name": "ETRS89",
+      "datum": "6258",
+      "esri": "GCS_ETRS_1989"
+    },
+    "4171": {
+      "name": "RGF93 v1",
+      "datum": "6171",
+      "esri": "GCS_RGF_1993"
+    },
+    "4269": {
+      "name": "NAD83",
+      "datum": "6269",
+      "esri": "GCS_North_American_1983"
+    },
+    "4283": {
+      "name": "GDA94",
+      "datum": "6283",
+      "esri": "GCS_GDA_1994"
+    },
+    "4230": {
+      "name": "ED50",
+      "datum": "6230",
+      "esri": "GCS_European_1950"
+    },
+    "4277": {
+      "name": "OSGB36",
+      "datum": "6277",
+      "esri": "GCS_OSGB_1936"
+    },
+    "4267": {
+      "name": "NAD27",
+      "datum": "6267",
+      "esri": "GCS_North_American_1927"
+    }
   },
   "projected": {
     "27700": {
@@ -132,7 +201,8 @@
       "lon0": -2,
       "k0": 0.9996012717,
       "fe": 400000,
-      "fn": -100000
+      "fn": -100000,
+      "esri": "British_National_Grid"
     },
     "2154": {
       "name": "RGF93 v1 / Lambert-93",
@@ -143,7 +213,8 @@
       "lat1": 49,
       "lat2": 44,
       "fe": 700000,
-      "fn": 6600000
+      "fn": 6600000,
+      "esri": "RGF_1993_Lambert_93"
     }
   },
   "utm": [
@@ -153,7 +224,8 @@
       "lastZone": 60,
       "base": "4326",
       "south": false,
-      "name": "WGS 84 / UTM zone {zone}N"
+      "name": "WGS 84 / UTM zone {zone}N",
+      "esri": "WGS_1984_UTM_Zone_{zone}N"
     },
     {
       "first": 32701,
@@ -161,7 +233,8 @@
       "lastZone": 60,
       "base": "4326",
       "south": true,
-      "name": "WGS 84 / UTM zone {zone}S"
+      "name": "WGS 84 / UTM zone {zone}S",
+      "esri": "WGS_1984_UTM_Zone_{zone}S"
     },
     {
       "first": 25828,
@@ -169,7 +242,8 @@
       "lastZone": 38,
       "base": "4258",
       "south": false,
-      "name": "ETRS89 / UTM zone {zone}N"
+      "name": "ETRS89 / UTM zone {zone}N",
+      "esri": "ETRS_1989_UTM_Zone_{zone}N"
     },
     {
       "first": 23028,
@@ -177,7 +251,8 @@
       "lastZone": 38,
       "base": "4230",
       "south": false,
-      "name": "ED50 / UTM zone {zone}N"
+      "name": "ED50 / UTM zone {zone}N",
+      "esri": "ED_1950_UTM_Zone_{zone}N"
     },
     {
       "first": 26901,
@@ -185,7 +260,8 @@
       "lastZone": 23,
       "base": "4269",
       "south": false,
-      "name": "NAD83 / UTM zone {zone}N"
+      "name": "NAD83 / UTM zone {zone}N",
+      "esri": "NAD_1983_UTM_Zone_{zone}N"
     },
     {
       "first": 26701,
@@ -193,7 +269,8 @@
       "lastZone": 22,
       "base": "4267",
       "south": false,
-      "name": "NAD27 / UTM zone {zone}N"
+      "name": "NAD27 / UTM zone {zone}N",
+      "esri": "NAD_1927_UTM_Zone_{zone}N"
     },
     {
       "first": 28348,
@@ -201,7 +278,8 @@
       "lastZone": 58,
       "base": "4283",
       "south": true,
-      "name": "GDA94 / MGA zone {zone}"
+      "name": "GDA94 / MGA zone {zone}",
+      "esri": "GDA_1994_MGA_Zone_{zone}"
     }
   ]
 }

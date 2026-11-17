@@ -2,8 +2,8 @@
 import { EngineError, type ColumnSchema, type ExportProfile, type ExportProfileId } from '@tw/model';
 import profilesText from './profiles.json?raw';
 
-const PROFILE_IDS: readonly ExportProfileId[] = ['excel', 'csv', 'parquet', 'geojson'];
-const EXTENSIONS: readonly ExportProfile['dataExtension'][] = ['.xlsx', '.csv', '.parquet', '.geojson'];
+const PROFILE_IDS: readonly ExportProfileId[] = ['excel', 'csv', 'parquet', 'geojson', 'shapefile'];
+const EXTENSIONS: readonly ExportProfile['dataExtension'][] = ['.xlsx', '.csv', '.parquet', '.geojson', '.shp'];
 
 function broken(message: string): EngineError {
   return new EngineError(

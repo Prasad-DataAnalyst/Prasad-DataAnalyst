@@ -4278,6 +4278,20 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
     if let Some((reason, fix)) = crate::export::refusal(&columns, &spatial, &profile) {
         return Err(EngineError::new("EXPORT_REFUSED", reason, fix));
     }
+    // What only the data can say (a Shapefile's kinds of geometry, its size) is refused here too,
+    // before an export ID is drawn, as the TypeScript engine refuses it.
+    if profile == "shapefile"
+        && let Some((reason, fix)) = crate::export::plan_refusal(
+            &engine.conn,
+            &quote_ident(&d.out_view()),
+            &columns,
+            d.output_rows,
+            &profile,
+            &spatial,
+        )?
+    {
+        return Err(EngineError::new("EXPORT_REFUSED", reason, fix));
+    }
     let step_descriptions: Vec<String> = d
         .steps
         .iter()

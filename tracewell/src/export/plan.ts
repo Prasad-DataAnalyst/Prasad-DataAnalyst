@@ -13,9 +13,13 @@ import {
   type ExportProfileStatus,
   type Substitution,
 } from '@tw/model';
+import { esriWkt } from '@tw/geo';
 import type { View } from '@tw/table';
 import { EXPORT_PROFILES } from './profiles';
+import { SHAPEFILE_MAX_BYTES, analyseShapes, dbfFields, shapeSource, shapefileSizes, unfitColumns } from './shapefile';
 import { textOf } from './values';
+
+export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile';
 
 export interface ExportPlan {
   profile: ExportProfileId;
@@ -23,7 +27,7 @@ export interface ExportPlan {
   reason?: string;
   fix?: string;
   substitutions: Substitution[];
-  dataFiles: { path: string; kind: 'csv' | 'xlsx' | 'parquet' | 'geojson'; columns: ColumnId[] }[];
+  dataFiles: { path: string; kind: DataKind; columns: ColumnId[] }[];
 }
 
 const WGS84 = new Set(['OGC:CRS84', 'EPSG:4326']);
@@ -114,13 +118,95 @@ function geojsonPlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
       ...base,
       available: false,
       reason: `GeoJSON requires WGS84 coordinates (TW-EXP-003); this dataset is in ${code}.`,
-      fix: 'Coordinate transformation is not available in this edition. Export as CSV or Excel instead, or transform the data to WGS84 before importing it.',
+      fix: 'Transform the coordinates to EPSG:4326 first (Data › Transform coordinates), or export as CSV or Excel.',
     };
   }
   return {
     ...base,
     available: true,
     dataFiles: [{ path: 'data.geojson', kind: 'geojson', columns: view.columnIds() }],
+  };
+}
+
+/** The CRS code of the data, or null when it is not known. */
+export function knownCrs(crs: Detection<CrsRef> | null): string | null {
+  const code = crs?.value.code;
+  return code === undefined || code === 'unknown' ? null : code;
+}
+
+function shapefilePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
+  const base = { profile: 'shapefile' as const, substitutions: [], dataFiles: [] };
+  const refused = (reason: string, fix: string): ExportPlan => ({ ...base, available: false, reason, fix });
+  const code = knownCrs(crs);
+  const source = shapeSource(view, code);
+  if (source === null) {
+    return refused(
+      'The dataset has no geometry column and no coordinate columns (longitude and latitude, or easting and northing).',
+      'Set the coordinate roles on the coordinate columns, or export as CSV or Excel.',
+    );
+  }
+  if (code === null) {
+    return refused(
+      'The coordinate reference system of the data is not known, and a Shapefile records it in its .prj file.',
+      'Set the coordinate reference system of the dataset first.',
+    );
+  }
+  if (esriWkt(code) === null) {
+    return refused(
+      `A Shapefile records its coordinate reference system in its .prj file, and ${code} is not one this edition can describe.`,
+      'Transform the coordinates to a listed coordinate reference system first (Data › Transform coordinates).',
+    );
+  }
+  const shapes = analyseShapes(view, source);
+  if (shapes.problem !== null) {
+    return refused(
+      shapes.problem,
+      'Filter the rows to one kind of geometry, or export as GeoJSON, which holds any mix.',
+    );
+  }
+  const attributes = view
+    .columnIds()
+    .filter((id) => !('geometry' in source && id === source.geometry))
+    .map((id) => view.columnSchema(id));
+  const unfit = unfitColumns(view, attributes);
+  const fields = dbfFields(
+    view,
+    attributes.filter((c) => !unfit.includes(c.id)),
+  );
+  const sizes = shapefileSizes(view, source, shapes, fields);
+  const largest = Math.max(sizes.dbf, sizes.shp);
+  if (largest > SHAPEFILE_MAX_BYTES) {
+    return refused(
+      `The Shapefile would hold a file of ${largest} bytes, more than the 2 GB its format can address.`,
+      'Filter the rows, or export as GeoJSON or Parquet.',
+    );
+  }
+  const substitutions: Substitution[] = [];
+  if (unfit.length > 0) {
+    const names = unfit.map((id) => view.columnSchema(id).name);
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: `the column${unfit.length > 1 ? 's' : ''} ${names.join(', ')}`,
+      why: 'Some values do not fit a .dbf field exactly: text longer than 254 bytes or starting or ending with spaces, which readers remove, or numbers too long for the field.',
+      instead: 'These columns are delivered in data-long-text.csv in the package, row for row with the Shapefile.',
+    });
+  }
+  if (shapes.bad > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: `${shapes.bad} geometr${shapes.bad > 1 ? 'ies' : 'y'}`,
+      why: 'They do not have the shape of a geometry: a misplaced array or an unknown type.',
+      instead: 'Their rows have no shape in the Shapefile; their other values are kept.',
+    });
+  }
+  return {
+    ...base,
+    available: true,
+    substitutions,
+    dataFiles: [
+      { path: 'data.shp', kind: 'shapefile', columns: fields.map((f) => f.column.id) },
+      ...(unfit.length > 0 ? [{ path: 'data-long-text.csv', kind: 'csv' as const, columns: unfit }] : []),
+    ],
   };
 }
 
@@ -144,6 +230,8 @@ export function planExport(view: View, profile: ExportProfileId, crs: Detection<
       };
     case 'geojson':
       return geojsonPlan(view, crs);
+    case 'shapefile':
+      return shapefilePlan(view, crs);
   }
 }
 

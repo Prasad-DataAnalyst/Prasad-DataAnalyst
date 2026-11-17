@@ -41,7 +41,7 @@ describe('the coordinate transformation step', () => {
         from: 'EPSG:27700',
         to: 'EPSG:4326',
         accuracy: 2,
-        registryVersion: '2026.1',
+        registryVersion: '2026.2',
         operations: [
           { code: 'EPSG:27700', method: 'Transverse Mercator (EPSG method 9807)', accuracy: null },
           {

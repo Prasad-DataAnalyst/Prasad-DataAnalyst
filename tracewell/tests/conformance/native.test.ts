@@ -201,6 +201,28 @@ function handWorkbook(
 }
 
 /** A cell element: its reference, content and attributes such as ' t="s"'. */
+/**
+ * Two Shapefile packages hold the same files, byte for byte, but for the date of the .dbf header
+ * (bytes 1 to 3), which each engine takes from its own clock.
+ */
+function sameShapefile(a: Uint8Array, b: Uint8Array, what: string): void {
+  const [x, y] = [readZip(a), readZip(b)];
+  for (const name of ['data.shp', 'data.shx', 'data.dbf', 'data.prj', 'data.cpg', 'data.fields.csv']) {
+    const [fx, fy] = [x.read(name), y.read(name)];
+    if (name === 'data.dbf') {
+      fx.fill(0, 1, 4);
+      fy.fill(0, 1, 4);
+    }
+    expect(Buffer.from(fx).equals(Buffer.from(fy)), `${what}: ${name}`).toBe(true);
+  }
+  expect(x.has('data-long-text.csv'), `${what}: data-long-text.csv`).toBe(y.has('data-long-text.csv'));
+  if (x.has('data-long-text.csv')) {
+    expect(new TextDecoder().decode(x.read('data-long-text.csv'))).toBe(
+      new TextDecoder().decode(y.read('data-long-text.csv')),
+    );
+  }
+}
+
 const cell = (ref: string, inner: string, attrs = '') => `<c r="${ref}"${attrs}>${inner}</c>`;
 const val = (x: string | number) => `<v>${x}</v>`;
 
@@ -3081,7 +3103,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
           await lite.listExportProfiles(db.id),
         );
-        for (const profile of ['geojson', 'csv', 'parquet', 'excel'] as const) {
+        for (const profile of ['geojson', 'csv', 'parquet', 'excel', 'shapefile'] as const) {
           const run = async (e: EngineClient, id: string) =>
             e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
           const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
@@ -3102,6 +3124,11 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
           // The reference engine's readers verify the native package and its data file.
           const zip = x.bytes as Uint8Array;
           expect(readBack.package(zip, x.manifest).filter((c) => !c.ok)).toEqual([]);
+          expect(x.manifest.substitutions, `${name} as ${profile}: substitutions`).toEqual(y.manifest.substitutions);
+          if (profile === 'shapefile') {
+            sameShapefile(zip, y.bytes as Uint8Array, `${name} as ${profile}`);
+            continue;
+          }
           const dataFile = profile === 'excel' ? 'data.xlsx' : `data.${profile}`;
           const [fx, fy] = [readZip(zip).read(dataFile), readZip(y.bytes as Uint8Array).read(dataFile)];
           if (profile === 'geojson' || profile === 'csv') {
@@ -3149,7 +3176,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       return a.step.id;
     };
     const exported = async (what: string, id: string) => {
-      for (const profile of ['geojson', 'csv'] as const) {
+      for (const profile of ['geojson', 'csv', 'shapefile'] as const) {
         const run = async (e: EngineClient) => e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
         const [a, b] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
         if ('code' in (b as object)) {
@@ -3159,6 +3186,13 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         const [x, y] = [a as ExportResult, b as ExportResult];
         expect([x.ok, y.ok], `${what} as ${profile}`).toEqual([true, true]);
         expect(x.manifest.dataset, `${what} as ${profile}`).toEqual(y.manifest.dataset);
+        expect(x.validation.checks.map((c) => [c.id, c.file ?? '', c.detail])).toEqual(
+          y.validation.checks.map((c) => [c.id, c.file ?? '', c.detail]),
+        );
+        if (profile === 'shapefile') {
+          sameShapefile(x.bytes as Uint8Array, y.bytes as Uint8Array, `${what} as ${profile}`);
+          continue;
+        }
         const file = (r: ExportResult) =>
           new TextDecoder().decode(readZip(r.bytes as Uint8Array).read(`data.${profile}`));
         expect(file(x), `${what} as ${profile}`).toBe(file(y));
@@ -3459,6 +3493,134 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       );
       expect((await places('UTM', again)).transformed).toBe(true);
       expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 120_000);
+  it('writes Shapefiles as the TypeScript engine does: polygons, holes, heights, text that does not fit and refusals', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-shapefile-'));
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const square = (x: number, y: number, size: number, clockwise: boolean) => {
+      const ring = [
+        [x, y],
+        [x + size, y],
+        [x + size, y + size],
+        [x, y + size],
+        [x, y],
+      ];
+      return clockwise ? ring.reverse() : ring;
+    };
+    const feature = (geometry: unknown, properties: Record<string, unknown>) => ({
+      type: 'Feature',
+      geometry,
+      properties,
+    });
+    const files: Record<string, unknown[]> = {
+      polygons: [
+        feature(
+          { type: 'Polygon', coordinates: [square(1, 50, 2, false), square(1.5, 50.5, 0.5, true)] },
+          { name: 'Block A', depth: 1200.5, wells: 3, active: true, note: 'x'.repeat(300) },
+        ),
+        feature(
+          { type: 'MultiPolygon', coordinates: [[square(4, 52, 1, true)], [square(6, 52, 1, false)]] },
+          { name: ' Block B', depth: -0.25, wells: 0, active: false, note: 'short' },
+        ),
+        feature(null, { name: 'Unsurveyed', depth: null, wells: null, active: null, note: null }),
+      ],
+      lines: [
+        feature(
+          {
+            type: 'LineString',
+            coordinates: [
+              [1, 50, -10],
+              [2, 51, -12.5],
+            ],
+          },
+          { name: 'Pipeline 1', km: 12.75 },
+        ),
+        feature(
+          {
+            type: 'MultiLineString',
+            coordinates: [
+              [
+                [3, 50, 0],
+                [4, 50, 1],
+              ],
+              [
+                [5, 51, 2],
+                [6, 52, 3],
+              ],
+            ],
+          },
+          { name: 'Pipeline 2', km: 8 },
+        ),
+      ],
+      points: [
+        feature({ type: 'Point', coordinates: [2.5, 56] }, { name: 'W1' }),
+        feature(
+          {
+            type: 'MultiPoint',
+            coordinates: [
+              [3, 57],
+              [3.5, 57.5],
+            ],
+          },
+          { name: 'Cluster' },
+        ),
+      ],
+      dimensions: [
+        feature({ type: 'Point', coordinates: [2.5, 56] }, { name: 'W1' }),
+        feature({ type: 'Point', coordinates: [3, 57, 120] }, { name: 'W2' }),
+      ],
+    };
+    const seen: Record<string, { shapeType: number; substitutions: string[] }> = {};
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Shapefiles', profile: { ...PROFILE } });
+      for (const [name, features] of Object.entries(files)) {
+        const path = join(folder, `${name}.geojson`);
+        writeFileSync(path, JSON.stringify({ type: 'FeatureCollection', features }));
+        const file = { kind: 'path' as const, path };
+        const [da, db] = [
+          await nat.client.awaitJob<DatasetSummary>(await nat.client.importFile(file)),
+          await lite.awaitJob<DatasetSummary>(await lite.importFile(file)),
+        ];
+        expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
+          await lite.listExportProfiles(db.id),
+        );
+        const run = async (e: EngineClient, id: string) =>
+          e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile: 'shapefile' }));
+        const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
+        if ('code' in (b as object)) {
+          expect(a, `${name}: refusal`).toEqual(b);
+          continue;
+        }
+        const [x, y] = [a as ExportResult, b as ExportResult];
+        expect([x.ok, y.ok], name).toEqual([true, true]);
+        expect(x.validation.checks.map((c) => [c.id, c.file ?? '', c.detail])).toEqual(
+          y.validation.checks.map((c) => [c.id, c.file ?? '', c.detail]),
+        );
+        expect(x.manifest.substitutions, `${name}: substitutions`).toEqual(y.manifest.substitutions);
+        expect(
+          x.manifest.files.map((f) => [f.path, f.role]),
+          name,
+        ).toEqual(y.manifest.files.map((f) => [f.path, f.role]));
+        sameShapefile(x.bytes as Uint8Array, y.bytes as Uint8Array, name);
+        const shp = readZip(x.bytes as Uint8Array).read('data.shp');
+        seen[name] = {
+          shapeType: new DataView(shp.buffer, shp.byteOffset).getInt32(32, true),
+          substitutions: x.manifest.substitutions.map((t) => t.what),
+        };
+      }
+      // Polygons with long and padded text, lines with heights, points written as multipoints;
+      // geometries with and without heights refused.
+      expect(seen).toEqual({
+        polygons: { shapeType: 5, substitutions: ['the columns name, note'] },
+        lines: { shapeType: 13, substitutions: [] },
+        points: { shapeType: 8, substitutions: [] },
+      });
     } finally {
       stopNative(nat);
       lite.close();

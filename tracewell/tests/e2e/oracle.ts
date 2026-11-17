@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 const ORACLE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'oracle');
 
-export type OracleScript = 'check_csv.py' | 'check_xlsx.py' | 'check_geojson.py' | 'check_package.py' | 'canonical.py';
+export type OracleScript =
+  'check_csv.py' | 'check_xlsx.py' | 'check_geojson.py' | 'check_shapefile.py' | 'check_package.py' | 'canonical.py';
 
 export function runOracle(script: OracleScript, args: string[]): Record<string, unknown> {
   const r = spawnSync('python3', ['-I', join(ORACLE_DIR, script), ...args], {

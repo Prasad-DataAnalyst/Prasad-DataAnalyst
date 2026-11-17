@@ -27,6 +27,13 @@
       "destinations": ["QGIS", "ArcGIS", "Google Earth", "Web maps"],
       "dataExtension": ".geojson",
       "description": "An RFC 7946 GeoJSON FeatureCollection in WGS84 longitude/latitude, built from the geometry column or the latitude and longitude columns."
+    },
+    {
+      "id": "shapefile",
+      "label": "QGIS / ArcGIS (Shapefile)",
+      "destinations": ["ArcGIS Pro", "QGIS", "ArcMap", "GDAL"],
+      "dataExtension": ".shp",
+      "description": "An ESRI Shapefile (.shp, .shx, .dbf) in the coordinate reference system of the data, with its .prj (ESRI WKT) and .cpg (UTF-8), and data.fields.csv, which maps each field name of 10 characters to the full column name and unit."
     }
   ]
 }

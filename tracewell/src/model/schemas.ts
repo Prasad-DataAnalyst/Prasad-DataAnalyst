@@ -154,7 +154,7 @@ const OVERRIDABLE_PROPERTIES = members<OverridableProperty>()([
   'sheet',
   'tableIndex',
 ]);
-const EXPORT_PROFILE_IDS = members<ExportProfileId>()(['excel', 'csv', 'parquet', 'geojson']);
+const EXPORT_PROFILE_IDS = members<ExportProfileId>()(['excel', 'csv', 'parquet', 'geojson', 'shapefile']);
 const VALIDATION_CHECK_IDS = members<ValidationCheck['id']>()([
   'RB-OPEN',
   'RB-ROWS',
@@ -164,6 +164,8 @@ const VALIDATION_CHECK_IDS = members<ValidationCheck['id']>()([
   'RB-XLSX-TYPES',
   'RB-XLSX-STRUCTURE',
   'RB-GEOJSON-STRUCTURE',
+  'RB-SHP-STRUCTURE',
+  'RB-SHP-GEOMETRY',
   'RB-PARQUET-TYPES',
   'RB-PKG-CHECKSUMS',
   'RB-PKG-CONTENTS',

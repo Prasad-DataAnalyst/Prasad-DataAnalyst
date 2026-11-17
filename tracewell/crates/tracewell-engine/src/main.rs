@@ -39,6 +39,7 @@ mod project;
 mod recipes;
 mod recovery;
 mod rules;
+mod shapefile;
 mod sniff;
 mod steps;
 mod stream;

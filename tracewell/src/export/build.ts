@@ -26,12 +26,22 @@ import {
   type Step,
   type ValidationCheck,
 } from '@tw/model';
-import { viewDigest, type View } from '@tw/table';
-import { geometrySource, planExport, type ExportPlan } from './plan';
+import { esriWkt } from '@tw/geo';
+import { columnDigest, viewDigest, type View } from '@tw/table';
+import { geometrySource, knownCrs, planExport, type DataKind, type ExportPlan } from './plan';
 import { headerFor } from './profiles';
-import { readBack } from './readback';
+import { readBack, type ShapefileParts } from './readback';
 import { issuesCsv, renderReadme } from './readme';
 import { expectedShape, type ExpectedShape } from './shape';
+import {
+  analyseShapes,
+  dbfFields,
+  expectedShapes,
+  shapeRecords,
+  shapeSource,
+  type ShapeAnalysis,
+  type ShapeSource,
+} from './shapefile';
 import {
   DEFAULT_WRITERS,
   csvHeader,
@@ -116,27 +126,70 @@ function reportRows(input: ExportInput, plan: ExportPlan, shape: ExpectedShape):
 
 interface WrittenFile {
   path: string;
-  kind: 'csv' | 'xlsx' | 'parquet' | 'geojson';
+  kind: DataKind;
   bytes: Uint8Array;
   shape: ExpectedShape;
+  /** The other files of a data file in several parts: a Shapefile's .shx, .dbf and the rest. */
+  companions: { path: string; bytes: Uint8Array }[];
+}
+
+/** Where a Shapefile's shapes come from and what they make; the plan has accepted them. */
+function shapesOf(input: ExportInput): { code: string; source: ShapeSource; shapes: ShapeAnalysis } {
+  const code = knownCrs(input.crs) as string;
+  const source = shapeSource(input.view, code) as ShapeSource;
+  return { code, source, shapes: analyseShapes(input.view, source) };
+}
+
+function* rowValues(view: View, columns: string[]) {
+  for (const r of view.rows()) yield columns.map((c) => view.value(r, c));
 }
 
 function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters): WrittenFile[] {
   const view = input.view;
-  return plan.dataFiles.map((f) => {
+  return plan.dataFiles.map((f): WrittenFile => {
     const shape = expectedShape(view, f.columns);
+    const one = { ...f, shape, companions: [] };
     switch (f.kind) {
+      case 'shapefile': {
+        const { code, source, shapes } = shapesOf(input);
+        const fields = dbfFields(
+          view,
+          f.columns.map((id) => view.columnSchema(id)),
+        );
+        const written = writers.shapefile({
+          shapeType: shapes.shapeType,
+          z: shapes.z,
+          records: shapeRecords(view, source, shapes),
+          fields,
+          rows: rowValues(view, f.columns),
+          at: input.at,
+        });
+        const fieldList = writers.csv(
+          ['field', 'name', 'unit', 'type'],
+          fields.map((x) => [x.name, x.column.name, x.column.unit.value ?? '', x.column.type.value]),
+        );
+        return {
+          ...one,
+          bytes: written.shp,
+          companions: [
+            { path: 'data.shx', bytes: written.shx },
+            { path: 'data.dbf', bytes: written.dbf },
+            { path: 'data.prj', bytes: encoder.encode(esriWkt(code) ?? '') },
+            { path: 'data.cpg', bytes: encoder.encode('UTF-8') },
+            { path: 'data.fields.csv', bytes: fieldList },
+          ],
+        };
+      }
       case 'csv':
         return {
-          ...f,
-          shape,
+          ...one,
           bytes: writers.csv(csvHeader(view, f.columns), csvRows(view, f.columns, input.neutralizeFormulas === true)),
         };
       case 'parquet':
-        return { ...f, shape, bytes: writers.parquet(parquetColumns(view, f.columns)) };
+        return { ...one, bytes: writers.parquet(parquetColumns(view, f.columns)) };
       case 'geojson': {
         const source = geometrySource(view) ?? 'latlon';
-        return { ...f, shape, bytes: writers.geojson(features(view, source)) };
+        return { ...one, bytes: writers.geojson(features(view, source)) };
       }
       case 'xlsx': {
         const sheets = [
@@ -145,8 +198,7 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
           logSheet(input.audit),
         ];
         return {
-          ...f,
-          shape,
+          ...one,
           bytes: writers.xlsx({ sheets, created: input.at, creator: input.owner, title: input.view.schema.name }),
         };
       }
@@ -154,8 +206,34 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
   });
 }
 
-async function validateFile(file: WrittenFile, bytes: Uint8Array, input: ExportInput): Promise<ValidationCheck[]> {
+/** The files of a written data file, as a reader finds them by path. */
+function partsOf(file: WrittenFile): (path: string) => Uint8Array | undefined {
+  return (path) => (path === file.path ? file.bytes : file.companions.find((c) => c.path === path)?.bytes);
+}
+
+async function validateFile(
+  file: WrittenFile,
+  read: (path: string) => Uint8Array | undefined,
+  input: ExportInput,
+): Promise<ValidationCheck[]> {
+  const bytes = read(file.path) ?? new Uint8Array(0);
   switch (file.kind) {
+    case 'shapefile': {
+      const { code, source, shapes } = shapesOf(input);
+      const parts: ShapefileParts = {
+        shp: read('data.shp'),
+        shx: read('data.shx'),
+        dbf: read('data.dbf'),
+        prj: read('data.prj'),
+        cpg: read('data.cpg'),
+        fields: read('data.fields.csv'),
+      };
+      return readBack.shapefile(parts, file.shape, {
+        prj: esriWkt(code) ?? '',
+        shapeType: shapes.shapeType,
+        geometrySha256: columnDigest(expectedShapes(input.view, source, shapes)),
+      });
+    }
     case 'csv':
       return readBack.csv(bytes, file.shape, file.path, { neutralized: input.neutralizeFormulas === true });
     case 'parquet':
@@ -205,7 +283,8 @@ export async function buildExport(
   const files = writeFiles(input, plan, writers);
   await Promise.resolve();
   step('Reading back', 1);
-  const dataChecks = (await Promise.all(files.map((f) => validateFile(f, f.bytes, input)))).flat();
+  const dataChecks = (await Promise.all(files.map((f) => validateFile(f, partsOf(f), input)))).flat();
+  const written = files.flatMap((f) => [{ path: f.path, bytes: f.bytes }, ...f.companions]);
 
   const readmeFile = 'README.txt';
   const auditText = input.audit.map((e) => `${canonicalJson(e as unknown as JsonValue)}\n`).join('');
@@ -254,7 +333,7 @@ export async function buildExport(
   const manifest: ExportManifest = {
     ...manifestBase,
     files: [
-      ...files.map((f) => entry(f.path, f.bytes, 'data')),
+      ...written.map((f) => entry(f.path, f.bytes, 'data')),
       entry(readmeFile, readmeBytes, 'readme'),
       entry('audit.jsonl', auditBytes, 'audit'),
       entry('issues.csv', issuesBytes, 'issues'),
@@ -272,7 +351,7 @@ export async function buildExport(
 
   step('Packaging', 2);
   const entries: ZipEntryInput[] = [
-    ...files.map((f) => ({ path: f.path, data: f.bytes })),
+    ...written.map((f) => ({ path: f.path, data: f.bytes })),
     { path: readmeFile, data: readmeBytes },
     { path: 'manifest.json', data: manifestBytes },
     { path: 'audit.jsonl', data: auditBytes },
@@ -287,7 +366,9 @@ export async function buildExport(
   const insideChecks = (
     await Promise.all(
       files.map((f) =>
-        reopened.has(f.path) ? validateFile(f, reopened.read(f.path), input) : Promise.resolve<ValidationCheck[]>([]),
+        reopened.has(f.path)
+          ? validateFile(f, (p) => (reopened.has(p) ? reopened.read(p) : undefined), input)
+          : Promise.resolve<ValidationCheck[]>([]),
       ),
     )
   ).flat();

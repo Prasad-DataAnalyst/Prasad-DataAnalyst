@@ -1028,6 +1028,115 @@ impl Transformer {
 }
 
 // ---------------------------------------------------------------------------------------------
+// ESRI WKT (wkt.ts)
+
+/// A number as ESRI WKT writes it (wktNumber): 15 significant digits, a whole number with ".0".
+pub fn wkt_number(x: f64) -> String {
+    let rounded: f64 = format!("{x:.14e}").parse().unwrap_or(x);
+    let text = crate::canonical::canonical_number(rounded);
+    if text.contains(['.', 'e']) {
+        text
+    } else {
+        format!("{text}.0")
+    }
+}
+
+fn esri_geogcs(code: &str) -> Option<String> {
+    let r = registry();
+    let g = &r["geographic"][code];
+    let datum = &r["datums"][g["datum"].as_str()?];
+    let el = &r["ellipsoids"][datum["ellipsoid"].as_str()?];
+    let a = el["a"].as_f64()?;
+    let inv_f = match el["invF"].as_f64() {
+        Some(f) => f,
+        None => a / (a - el["b"].as_f64()?),
+    };
+    Some(format!(
+        "GEOGCS[\"{}\",DATUM[\"{}\",SPHEROID[\"{}\",{},{}]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",{}]]",
+        g["esri"].as_str()?,
+        datum["esri"].as_str()?,
+        el["esri"].as_str()?,
+        wkt_number(a),
+        wkt_number(inv_f),
+        wkt_number(PI / 180.0)
+    ))
+}
+
+fn esri_projcs(name: &str, raw: &Value) -> Option<String> {
+    let base = esri_geogcs(raw["base"].as_str()?)?;
+    let parameter =
+        |n: &str, key: &str| format!("PARAMETER[\"{n}\",{}]", wkt_number(num(raw, key)));
+    let (projection, params) = if raw["method"] == "9807" {
+        (
+            "Transverse_Mercator",
+            [
+                parameter("False_Easting", "fe"),
+                parameter("False_Northing", "fn"),
+                parameter("Central_Meridian", "lon0"),
+                parameter("Scale_Factor", "k0"),
+                parameter("Latitude_Of_Origin", "lat0"),
+            ]
+            .join(","),
+        )
+    } else {
+        (
+            "Lambert_Conformal_Conic",
+            [
+                parameter("False_Easting", "fe"),
+                parameter("False_Northing", "fn"),
+                parameter("Central_Meridian", "lonF"),
+                parameter("Standard_Parallel_1", "lat1"),
+                parameter("Standard_Parallel_2", "lat2"),
+                parameter("Latitude_Of_Origin", "latF"),
+            ]
+            .join(","),
+        )
+    };
+    Some(format!(
+        "PROJCS[\"{name}\",{base},PROJECTION[\"{projection}\"],{params},UNIT[\"Meter\",1.0]]"
+    ))
+}
+
+/// The ESRI WKT of a CRS the registry holds (esriWkt), or None; OGC:CRS84 is described as WGS 84.
+pub fn esri_wkt(code: &str) -> Option<String> {
+    if code == "OGC:CRS84" {
+        return esri_geogcs("4326");
+    }
+    let n = code
+        .strip_prefix("EPSG:")
+        .filter(|n| (4..=5).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))?;
+    let r = registry();
+    let projected = &r["projected"][n];
+    if projected.is_object() {
+        return esri_projcs(projected["esri"].as_str()?, projected);
+    }
+    if r["geographic"][n].is_object() {
+        return esri_geogcs(n);
+    }
+    let number: i64 = n.parse().ok()?;
+    for u in r["utm"].as_array()? {
+        let zone = number - u["first"].as_i64()? + u["firstZone"].as_i64()?;
+        if zone < u["firstZone"].as_i64()? || zone > u["lastZone"].as_i64()? {
+            continue;
+        }
+        let raw = serde_json::json!({
+            "base": u["base"],
+            "method": "9807",
+            "lat0": 0,
+            "lon0": zone * 6 - 183,
+            "k0": 0.9996,
+            "fe": 500000,
+            "fn": if u["south"] == true { 10000000 } else { 0 },
+        });
+        return esri_projcs(
+            &u["esri"].as_str()?.replace("{zone}", &zone.to_string()),
+            &raw,
+        );
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------------------------
 // Geometries (places.ts)
 
 fn positions(c: &J, t: &Transformer) -> Option<J> {
@@ -1091,6 +1200,25 @@ pub fn transform_geometry(g: &J, t: &Transformer) -> Option<J> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ESRI WKT the registry gives is the text ESRI publishes, for every system of the fixture.
+    #[test]
+    fn writes_esri_wkt_as_published() {
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../src/geo/crs/__fixtures__/esri-wkt.json"
+        ))
+        .unwrap();
+        for (code, text) in reference["wkt"].as_object().unwrap() {
+            assert_eq!(esri_wkt(code).as_deref(), text.as_str(), "{code}");
+        }
+        assert_eq!(esri_wkt("OGC:CRS84"), esri_wkt("EPSG:4326"));
+        assert_eq!(esri_wkt("EPSG:3857"), None);
+        assert_eq!(
+            wkt_number(6378206.4 / (6378206.4 - 6356583.8)),
+            "294.978698213898"
+        );
+        assert_eq!(wkt_number(-2.0), "-2.0");
+    }
 
     const VECTORS: &str = include_str!("../../../src/geo/crs/__fixtures__/crs-vectors.json");
 

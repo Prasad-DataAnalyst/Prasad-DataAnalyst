@@ -22,6 +22,8 @@ import {
 import { columnDigest } from '@tw/table';
 import { parseHeader } from './profiles';
 import type { ExpectedShape } from './shape';
+import { SHAPE, geometryOfRecord } from './shapefile';
+import { ShapefileFormatError, readDbf, readShp, readShx } from './shapefile-reader';
 import { restoreFormula, retypeText } from './values';
 
 type CheckId = ValidationCheck['id'];
@@ -431,6 +433,174 @@ function headerSame(a: string[], b: string[]): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Shapefile
+
+/** The files of a Shapefile, as the package names them; undefined for one that is missing. */
+export interface ShapefileParts {
+  shp: Uint8Array | undefined;
+  shx: Uint8Array | undefined;
+  dbf: Uint8Array | undefined;
+  prj: Uint8Array | undefined;
+  cpg: Uint8Array | undefined;
+  fields: Uint8Array | undefined;
+}
+
+export interface ShapefileReadOptions {
+  /** The .prj text the data's CRS has. */
+  prj: string;
+  /** The shape type of every record that has a shape. */
+  shapeType: number;
+  /** The digest of the rows' geometries, in the form a reader makes of the shapes. */
+  geometrySha256: string;
+}
+
+function retypeDbf(text: string | null, type: ExportColumn['type']): CellValue | undefined {
+  if (text === null) return null;
+  switch (type) {
+    case 'boolean':
+      return /^[TtYy]$/.test(text) ? true : /^[FfNn]$/.test(text) ? false : text === '?' ? null : undefined;
+    case 'date': {
+      const m = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
+      return m === null ? undefined : { date: `${m[1]}-${m[2]}-${m[3]}` };
+    }
+    default:
+      return retypeText(text, type);
+  }
+}
+
+/** The .dbf field type a column's values are written in. */
+function dbfType(type: ExportColumn['type']): string {
+  return type === 'integer' || type === 'number' ? 'N' : type === 'boolean' ? 'L' : type === 'date' ? 'D' : 'C';
+}
+
+function sameBox(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+}
+
+function readShapefile(parts: ShapefileParts, expected: ExpectedShape, o: ShapefileReadOptions): ValidationCheck[] {
+  const file = 'data.shp';
+  const missing = (['shp', 'shx', 'dbf', 'prj', 'cpg', 'fields'] as const).filter((k) => parts[k] === undefined);
+  if (missing.length > 0) {
+    const names = missing.map((k) => (k === 'fields' ? 'data.fields.csv' : `data.${k}`));
+    return [check('RB-OPEN', false, `The Shapefile is incomplete: ${names.join(', ')} missing.`, file)];
+  }
+  const p = parts as Required<{ [K in keyof ShapefileParts]: Uint8Array }>;
+  let shp;
+  let shx;
+  let dbf;
+  let mapping: string[][];
+  let where = 'data.shp';
+  try {
+    shp = readShp(p.shp);
+    where = 'data.shx';
+    shx = readShx(p.shx);
+    where = 'data.dbf';
+    dbf = readDbf(p.dbf);
+    where = 'data.fields.csv';
+    mapping = tokenizeAll(new TextDecoder('utf-8', { fatal: true }).decode(p.fields), {
+      delimiter: ',',
+      quote: '"',
+    }).map((r) => r.fields);
+  } catch (e) {
+    const why = e instanceof ShapefileFormatError || e instanceof Error ? e.message : String(e);
+    return [check('RB-OPEN', false, `The Shapefile does not parse: ${where}: ${why}.`, file)];
+  }
+  const checks: ValidationCheck[] = [check('RB-OPEN', true, 'The .shp, .shx, .dbf and field list parse.', file)];
+
+  const problems: string[] = [];
+  const type = (n: number) => `shape type ${n}`;
+  if (shp.fileCode !== 9994 || shx.fileCode !== 9994) problems.push('a file code is not 9994');
+  if (shp.version !== 1000) problems.push(`the version is ${shp.version}, not 1000`);
+  if (shp.words * 2 !== p.shp.length) problems.push('the .shp length in its header is not its size');
+  if (shx.words * 2 !== p.shx.length) problems.push('the .shx length in its header is not its size');
+  if (shp.shapeType !== o.shapeType || shx.shapeType !== o.shapeType) {
+    problems.push(`the files are of ${type(shp.shapeType)}, not ${type(o.shapeType)}`);
+  }
+  if (shx.entries.length !== shp.records.length) {
+    problems.push(`the index has ${shx.entries.length} entries for ${shp.records.length} records`);
+  }
+  // Running bounds, folded as the writer folds them, so a large file needs no copy of its points.
+  const bounds = (points: number[][], k: number): [number, number] => {
+    let range: [number, number] = [Infinity, -Infinity];
+    for (const q of points) range = [Math.min(range[0], q[k] as number), Math.max(range[1], q[k] as number)];
+    return range;
+  };
+  let all: [number, number, number, number] | null = null;
+  let heights: [number, number] | null = null;
+  shp.records.forEach((r, i) => {
+    if (r.number !== i + 1) problems.push(`record ${i + 1} is numbered ${r.number}`);
+    const entry = shx.entries[i];
+    if (entry !== undefined && (entry.offset !== r.offset || entry.words !== r.words)) {
+      problems.push(`index entry ${i + 1} does not point at record ${i + 1}`);
+    }
+    if (r.shapeType !== SHAPE.null && r.shapeType !== o.shapeType) {
+      problems.push(`record ${i + 1} is of ${type(r.shapeType)}`);
+    }
+    const own = r.record?.parts.flat() ?? [];
+    if (own.length === 0) return;
+    const [x0, x1] = bounds(own, 0);
+    const [y0, y1] = bounds(own, 1);
+    if (r.box !== null && !sameBox(r.box, [x0, y0, x1, y1])) {
+      problems.push(`record ${i + 1} states a box that does not bound its points`);
+    }
+    all =
+      all === null
+        ? [x0, y0, x1, y1]
+        : [Math.min(all[0], x0), Math.min(all[1], y0), Math.max(all[2], x1), Math.max(all[3], y1)];
+    if (own[0]?.length === 3) {
+      const [z0, z1] = bounds(own, 2);
+      heights = heights === null ? [z0, z1] : [Math.min(heights[0], z0), Math.max(heights[1], z1)];
+    }
+  });
+  if (!sameBox(shp.box, all ?? [0, 0, 0, 0])) problems.push('the header box does not bound the shapes');
+  if (!sameBox(shp.zRange, heights ?? [0, 0])) problems.push('the header height range does not span the shapes');
+  if (dbf.records !== shp.records.length) {
+    problems.push(`the .dbf has ${dbf.records} records for ${shp.records.length} shapes`);
+  }
+  if (dbf.deleted > 0) problems.push(`${dbf.deleted} .dbf records are marked deleted`);
+  if (!dbf.endMarker) problems.push('the .dbf does not end with 0x1A');
+  const [head, ...rows] = mapping;
+  if (head?.join(',') !== 'field,name,unit,type')
+    problems.push('data.fields.csv does not start with field,name,unit,type');
+  const names = dbf.fields.map((f) => f.name);
+  if (rows.map((r) => r[0]).join('\u0000') !== names.join('\u0000')) {
+    problems.push('the field names of data.fields.csv are not those of the .dbf');
+  }
+  expected.columns.forEach((col, j) => {
+    const f = dbf.fields[j];
+    if (f !== undefined && f.type !== dbfType(col.type)) problems.push(`field ${f.name} is of type ${f.type}`);
+  });
+  const prj = new TextDecoder().decode(p.prj);
+  if (prj !== o.prj) problems.push('the .prj does not describe the coordinate reference system of the data');
+  if (new TextDecoder().decode(p.cpg) !== 'UTF-8') problems.push('the .cpg does not declare UTF-8');
+  checks.push(
+    problems.length === 0
+      ? check(
+          'RB-SHP-STRUCTURE',
+          true,
+          `${shp.records.length} records of ${type(o.shapeType)} indexed by the .shx, as many .dbf records, boxes that bound the shapes, the .prj of the data's coordinate reference system and a UTF-8 .cpg.`,
+          file,
+        )
+      : check('RB-SHP-STRUCTURE', false, `Shapefile structure problems: ${problems.slice(0, 5).join('; ')}.`, file),
+  );
+  const headers = rows.map((r) => ((r[2] ?? '') === '' ? (r[1] ?? '') : `${r[1] ?? ''} [${r[2] ?? ''}]`));
+  checks.push(headerCheck(expected.columns, headers, 'data.fields.csv'));
+  checks.push(rowsCheck(dbf.records, expected.rowCount, 'data.dbf'));
+  const values = expected.columns.map((col, j) => dbf.rows.map((r) => retypeDbf(r[j] ?? null, col.type)));
+  checks.push(valuesCheck(expected.columns, values, 'data.dbf'));
+  const shapes: CellValue[] = shp.records.map((r) => {
+    const g = geometryOfRecord(r.record, o.shapeType);
+    return g === null ? null : { geometry: g };
+  });
+  checks.push(
+    columnDigest(shapes) === o.geometrySha256 && shapes.length === expected.rowCount
+      ? check('RB-SHP-GEOMETRY', true, "Every shape matches its row's geometry, coordinate for coordinate.", file)
+      : check('RB-SHP-GEOMETRY', false, 'The shapes differ from the geometries of the rows.', file),
+  );
+  return checks;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Package
 
 function readPackage(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[] {
@@ -500,11 +670,13 @@ export const readBack: {
     o: { expectData: boolean; expectedLogRows: number },
   ): ValidationCheck[];
   geojson(bytes: Uint8Array, expected: ExpectedShape, file: string, o: GeoJsonReadOptions): ValidationCheck[];
+  shapefile(parts: ShapefileParts, expected: ExpectedShape, o: ShapefileReadOptions): ValidationCheck[];
   package(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[];
 } = Object.freeze({
   csv: readCsv,
   parquet: readParquetFile,
   xlsx: readXlsx,
   geojson: readGeoJson,
+  shapefile: readShapefile,
   package: readPackage,
 });

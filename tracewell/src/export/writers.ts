@@ -16,6 +16,7 @@ import { pointFromLatLon } from '@tw/geo';
 import { isGeometryCell, type AuditEntry, type ColumnId, type ColumnSchema, type LogicalType } from '@tw/model';
 import type { View } from '@tw/table';
 import { headerFor } from './profiles';
+import { writeShapefile, type ShapefileBytes, type ShapefileWriteInput } from './shapefile-writer';
 import { exportable, neutralizeFormula, textOf } from './values';
 
 export interface ExportWriters {
@@ -23,6 +24,7 @@ export interface ExportWriters {
   xlsx(book: XlsxWriteBook): Uint8Array;
   geojson(features: Iterable<GeoJsonFeatureOut>): Uint8Array;
   parquet(columns: ParquetColumnIn[]): Uint8Array;
+  shapefile(input: ShapefileWriteInput): ShapefileBytes;
 }
 
 export const DEFAULT_WRITERS: ExportWriters = Object.freeze({
@@ -30,6 +32,7 @@ export const DEFAULT_WRITERS: ExportWriters = Object.freeze({
   xlsx: (book: XlsxWriteBook) => writeXlsx(book),
   geojson: (features: Iterable<GeoJsonFeatureOut>) => writeGeoJson(features),
   parquet: (columns: ParquetColumnIn[]) => writeParquet(columns),
+  shapefile: (input: ShapefileWriteInput) => writeShapefile(input),
 });
 
 /** The columns of a Parquet data file: header names, logical types and exported values. */
