@@ -4,17 +4,20 @@
 
 export type { CompiledPredicate } from './predicate';
 export { compilePredicate, describePredicate } from './predicate';
+export { placesOf } from './places';
 export type { StepState } from './views';
 export {
   buildOutputView,
   buildWorkingView,
   conversionFor,
+  coordinateSource,
   crsPlanFor,
   crsTransformationOf,
   derivedColumnId,
   describeStep,
   isWorkingStep,
   previewStep,
+  requireNextStepBuilds,
   transformedColumnId,
   validateStep,
 } from './views';

@@ -96,6 +96,26 @@ function numericWithRole(schema: TableSchema, role: ColumnSchema['role']['value'
   return schema.columns.find((c) => c.role.value === role && (c.type.value === 'number' || c.type.value === 'integer'));
 }
 
+/**
+ * Where a view's coordinates are: its geometry column, or else its numeric longitude and latitude
+ * columns (easting and northing when the CRS is projected). Null when there is neither.
+ */
+export function coordinateSource(
+  schema: TableSchema,
+  geographic: boolean,
+): { geometry: ColumnSchema } | { x: ColumnSchema; y: ColumnSchema } | null {
+  const g = schema.geometryColumn === null ? undefined : schema.columns.find((c) => c.id === schema.geometryColumn);
+  if (g !== undefined && g.type.value === 'geometry') return { geometry: g };
+  const x = numericWithRole(schema, geographic ? 'longitude' : 'easting');
+  const y = numericWithRole(schema, geographic ? 'latitude' : 'northing');
+  return x === undefined || y === undefined ? null : { x, y };
+}
+
+/** The coordinate pair a CRS of that kind is read from, as a message names it. */
+export function pairName(geographic: boolean): string {
+  return geographic ? 'latitude and longitude' : 'easting and northing';
+}
+
 export function crsPlanFor(s: CrsStep, schema: TableSchema): CrsPlan {
   const from = schema.crs?.value.code;
   if (from === undefined || from === 'unknown') {
@@ -113,20 +133,19 @@ export function crsPlanFor(s: CrsStep, schema: TableSchema): CrsPlan {
     );
   }
   const transformer = crsTransformer(from, s.toCrs);
-  const g = schema.geometryColumn === null ? undefined : schema.columns.find((c) => c.id === schema.geometryColumn);
-  if (g !== undefined && g.type.value === 'geometry') return { transformer, geometry: g, x: null, y: null };
   const geographic = transformer.from.kind === 'geographic';
-  const x = numericWithRole(schema, geographic ? 'longitude' : 'easting');
-  const y = numericWithRole(schema, geographic ? 'latitude' : 'northing');
-  if (x === undefined || y === undefined) {
-    const pair = geographic ? 'latitude and longitude' : 'easting and northing';
+  const src = coordinateSource(schema, geographic);
+  if (src === null) {
+    const pair = pairName(geographic);
     throw new EngineError(
       'INVALID_INPUT',
       `The data has no geometry column and no numeric ${pair} columns to transform from ${from}.`,
       `Set the ${pair} roles on the coordinate columns first.`,
     );
   }
-  return { transformer, geometry: null, x, y };
+  return 'geometry' in src
+    ? { transformer, geometry: src.geometry, x: null, y: null }
+    : { transformer, geometry: null, x: src.x, y: src.y };
 }
 
 export function validateStep(s: StepInput, schema: TableSchema): { ok: true } | { ok: false; error: EngineErrorData } {
@@ -418,14 +437,46 @@ export function describeStep(s: StepInput, schema: TableSchema): string {
   }
 }
 
+/** The step as it would be recorded next, for building the views with it. */
+function nextStepOf(st: StepState, s: StepInput): Step {
+  return { ...s, id: `s${st.steps.length + 1}`, seq: Number.MAX_SAFE_INTEGER } as Step;
+}
+
+/**
+ * Refuses a step whose views would not build: a conversion or transformation runs before every
+ * filter and selection, so one that replaces a column an earlier filter or selection reads would
+ * leave that step without its column.
+ */
+export function requireNextStepBuilds(ds: Dataset, st: StepState, s: StepInput): void {
+  const builds = (steps: Step[]) => {
+    try {
+      buildOutputView(ds, { ...st, steps: [...steps, nextStepOf(st, s)] });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (builds(st.steps)) return;
+  const broken = st.steps.find((_, i) => !builds(st.steps.slice(0, i + 1)))?.id ?? 'a later step';
+  throw new EngineError(
+    'INVALID_INPUT',
+    `This step would break step ${broken}, which uses a column it replaces.`,
+    `Remove step ${broken} first, then apply it again after this step.`,
+  );
+}
+
 export function previewStep(ds: Dataset, st: StepState, s: StepInput, sampleSize = 20): StepPreview {
   const outputBefore = buildOutputView(ds, st);
   const schema = isWorkingStep(s) ? buildWorkingView(ds, st).schema : outputBefore.schema;
   const valid = validateStep(s, schema);
   if (!valid.ok) return { ok: false, error: valid.error, description: '', sample: [] };
+  try {
+    requireNextStepBuilds(ds, st, s);
+  } catch (e) {
+    return { ok: false, error: toErrorData(e), description: '', sample: [] };
+  }
   const description = describeStep(s, schema);
-  const nextStep = { ...s, id: `s${st.steps.length + 1}`, seq: Number.MAX_SAFE_INTEGER } as Step;
-  const next: StepState = { ...st, steps: [...st.steps, nextStep] };
+  const next: StepState = { ...st, steps: [...st.steps, nextStepOf(st, s)] };
   const after = buildOutputView(ds, next);
   const sample: StepPreview['sample'] = [];
   if (s.kind === 'convert_unit') {

@@ -4,6 +4,8 @@ import {
   type AuditEntry,
   type AuditQuery,
   type CellLineage,
+  type PlacesRequest,
+  type PlacesWindow,
   type CrsInfo,
   type ChainReport,
   type ColumnId,
@@ -116,6 +118,10 @@ export class EngineClient implements EngineApi {
 
   getColumnStats(datasetId: DatasetId, columnId: ColumnId): Promise<ColumnStats> {
     return this.invoke('getColumnStats', datasetId, columnId);
+  }
+
+  getPlaces(q: PlacesRequest): Promise<PlacesWindow> {
+    return this.invoke('getPlaces', q);
   }
 
   explainCell(datasetId: DatasetId, rowId: RowId, columnId: ColumnId): Promise<CellLineage> {

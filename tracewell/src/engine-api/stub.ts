@@ -9,6 +9,8 @@ import {
   type AuditEntry,
   type AuditQuery,
   type CellLineage,
+  type PlacesRequest,
+  type PlacesWindow,
   type CrsInfo,
   type ChainReport,
   type ColumnId,
@@ -85,7 +87,7 @@ import {
   rowWindow,
 } from './stub-queries';
 import { planStep, previewStep, removeStep } from './stub-steps';
-import { columnStats, findColumn, rowCount, workingView } from './stub-view';
+import { columnStats, findColumn, outputView, rowCount, workingView } from './stub-view';
 
 const STUB_PROFILE: UserProfile = { id: 'u_prasad', name: 'Prasad', role: 'Analyst' };
 const CANNED_PROJECT = 'Well test review';
@@ -308,6 +310,27 @@ class StubEngine implements EngineImpl {
   async getRows(q: RowWindowRequest): Promise<RowWindow> {
     requireStage(q.stage);
     return rowWindow(this.project, q);
+  }
+
+  async getPlaces(q: PlacesRequest): Promise<PlacesWindow> {
+    const stage = requireStage(q.stage);
+    const view = (stage === 'working' ? workingView : outputView)(this.project.dataset(q.datasetId));
+    // The sample well data has no coordinates, so the stub places nothing.
+    return {
+      datasetId: q.datasetId,
+      stage,
+      crs: null,
+      source: null,
+      transformed: false,
+      unplaced: {
+        reason: 'The sample data has no coordinates, so its rows cannot be placed on the map.',
+        fix: 'Import a file with coordinates.',
+      },
+      rows: view.rows.length,
+      placed: 0,
+      features: [],
+      truncated: false,
+    };
   }
 
   async getColumnStats(datasetId: DatasetId, columnId: ColumnId): Promise<ColumnStats> {

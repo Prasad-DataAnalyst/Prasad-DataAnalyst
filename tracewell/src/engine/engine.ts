@@ -18,6 +18,10 @@ import {
   type AuditQuery,
   type ByteSource,
   type CellLineage,
+  PLACES_DEFAULT,
+  PLACES_MAX,
+  type PlacesRequest,
+  type PlacesWindow,
   type CrsInfo,
   type ChainReport,
   type CheckSummary,
@@ -85,7 +89,16 @@ import {
 import { supportedCrs } from '@tw/geo';
 import { suggestedFileName } from '@tw/project';
 import { BUILTIN_PACK_JSON, GENERIC_DQ, SYSTEM_RULES, rulePackRef } from '@tw/rules';
-import { conversionFor, crsTransformationOf, describeStep, isWorkingStep, previewStep, validateStep } from '@tw/steps';
+import {
+  conversionFor,
+  crsTransformationOf,
+  describeStep,
+  isWorkingStep,
+  placesOf,
+  previewStep,
+  requireNextStepBuilds,
+  validateStep,
+} from '@tw/steps';
 import { REGISTRY_JSON, REGISTRY_VERSION } from '@tw/units';
 import { checkOverrideValue, datasetOf, decisionDraft, requireReason, requireStepsBuild } from './decisions';
 import { toIssue } from './issues-state';
@@ -109,7 +122,7 @@ import { datasetHealth, listIssues, listOccurrences, listUnits } from './queries
 import { applyEntry, checkDrafts, overrideOutcome, type Prepared } from './reducer';
 import { emptyProject, type DatasetState, type ProjectState } from './state';
 import { outputView, viewFor, workingView } from './views';
-import { columnStats, invalid, requireStage, rowWindow } from './windows';
+import { columnStats, invalid, requireCount, requireStage, rowWindow } from './windows';
 
 export const ENGINE_NAME = 'tracewell-ts';
 
@@ -804,6 +817,13 @@ export class LocalEngine implements EngineImpl {
     return columnStats(this.dataset(datasetId), columnId);
   }
 
+  async getPlaces(q: PlacesRequest): Promise<PlacesWindow> {
+    const ds = this.dataset(q?.datasetId);
+    const stage = requireStage(q.stage);
+    const limit = q.limit === undefined ? PLACES_DEFAULT : requireCount(q.limit, 'limit', PLACES_MAX);
+    return { datasetId: ds.id, stage, ...placesOf(viewFor(ds, stage), limit) };
+  }
+
   async explainCell(datasetId: DatasetId, rowId: RowId, columnId: ColumnId): Promise<CellLineage> {
     const state = this.project();
     return structuredClone(await explainCell(state, datasetOf(state, datasetId), rowId, columnId));
@@ -1177,6 +1197,7 @@ export class LocalEngine implements EngineImpl {
     const schema = isWorkingStep(input) ? workingView(ds).schema : outputView(ds).schema;
     const valid = validateStep(input, schema);
     if (!valid.ok) throw EngineError.from(valid.error);
+    requireNextStepBuilds(ds.dataset, ds, input);
     return { input, schema };
   }
 

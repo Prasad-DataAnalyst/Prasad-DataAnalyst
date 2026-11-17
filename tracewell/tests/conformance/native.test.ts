@@ -39,6 +39,7 @@ import {
   type StepResult,
   type JsonValue,
   type RowWindow,
+  type PlacesWindow,
 } from '@tw/model';
 import { columnDigest } from '@tw/table';
 import { parquetWriteBuffer } from 'hyparquet-writer';
@@ -3332,6 +3333,138 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       rmSync(folder, { recursive: true, force: true });
     }
   }, 180_000);
+  it('places rows on the map as the TypeScript engine does: every source, CRS, stage, limit and refusal', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-places-'));
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    const both = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+      const strip = (v: unknown) =>
+        Array.isArray(v) && v.every((i) => typeof i === 'object' && i !== null && 'hash' in i)
+          ? (v as AuditEntry[]).map(content)
+          : v;
+      expect(strip(x), what).toEqual(strip(y));
+      orderDifferences(strip(x), strip(y), what, found);
+      return [x as T, y as T];
+    };
+    const places = async (
+      what: string,
+      datasetId: string,
+      extra: { stage?: 'working' | 'output'; limit?: number } = {},
+    ) => {
+      const [p] = await both(`${what}: places`, (e) =>
+        e.getPlaces({
+          datasetId,
+          stage: extra.stage ?? 'working',
+          ...(extra.limit === undefined ? {} : { limit: extra.limit }),
+        }),
+      );
+      return p;
+    };
+    const applied = async (e: EngineClient, job: Awaited<ReturnType<EngineClient['applyStep']>>) => {
+      const r = await e.awaitJob<StepResult>(job);
+      return { ...r, audit: content(r.audit) };
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Places', profile: { ...PROFILE } });
+      const imported = async (path: string) => {
+        const file = { kind: 'path' as const, path };
+        const [d] = await both(`import ${path}`, async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+        return d.id;
+      };
+      // Every GeoJSON fixture, and coordinates in columns, as the import finds them.
+      const seen: Record<string, PlacesWindow> = {};
+      for (const name of [
+        ...GEOJSON_FIXTURES,
+        'csv_latlon_swapped_out_of_range.csv' as const,
+        'csv_well_daily_golden.csv' as const,
+      ]) {
+        const id = await imported(fixturePath(name));
+        seen[name] = await places(name, id);
+      }
+      expect(seen['geojson_wells_points_wgs84.geojson']?.placed).toBeGreaterThan(0);
+      expect(seen['geojson_legacy_crs_27700.geojson']?.transformed).toBe(true);
+
+      // British National Grid in columns: transformed for the map, and refused without a CRS.
+      const bng = join(folder, 'wells_bng.csv');
+      writeFileSync(
+        bng,
+        'well,Easting,Northing,depth\nW1,651409.903,313177.270,1200\nW2,577274.99,69740.50,980\nW3,400000,500000,1500\nW4,,250000,800\nW5,9e9,1e12,10\n',
+      );
+      const wells = await imported(bng);
+      expect((await places('no CRS', wells)).unplaced).not.toBeNull();
+      await both('grid stated', (e) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId: wells,
+          property: 'crs',
+          value: { code: 'EPSG:27700', source: 'user' },
+          reason: 'Grid stated by the survey contractor',
+        }),
+      );
+      const grid = await places('British National Grid', wells);
+      expect([grid.transformed, grid.placed, grid.rows]).toEqual([true, 3, 5]);
+      for (const code of ['EPSG:3857', 'EPSG:4258', 'EPSG:2154']) {
+        await both(`CRS ${code}`, (e) =>
+          e.decide({
+            kind: 'override_detection',
+            datasetId: wells,
+            property: 'crs',
+            value: { code, source: 'user' },
+            reason: `Try ${code}`,
+          }),
+        );
+        await places(code, wells);
+      }
+
+      // Stages, limits, filters and selections on the wells of the WGS 84 fixture.
+      const points = await imported(fixturePath('geojson_wells_points_wgs84.geojson'));
+      for (const limit of [0, 1, 2, 100_000]) await places(`limit ${limit}`, points, { limit });
+      for (const limit of [-1, 1.5, 100_001]) await places(`bad limit ${limit}`, points, { limit });
+      await both('bad stage', (e) => e.getPlaces({ datasetId: points, stage: 'final' as 'working' }));
+      await both('no dataset', (e) => e.getPlaces({ datasetId: 'd999', stage: 'working' }));
+      const schema = await lite.getSchema(points);
+      const geometry = schema.geometryColumn as string;
+      await both('filter', async (e) =>
+        applied(
+          e,
+          await e.applyStep(
+            points,
+            { kind: 'filter', predicate: { bbox: [0, 50, 3, 62], geometry } },
+            'Southern block',
+          ),
+        ),
+      );
+      await places('filtered output', points, { stage: 'output' });
+      await places('filtered working', points);
+      const other = schema.columns.find((c) => c.id !== geometry)?.id as string;
+      await both('select', async (e) =>
+        applied(e, await e.applyStep(points, { kind: 'select_columns', columnIds: [other] }, 'Names only')),
+      );
+      expect((await places('no geometry in the output', points, { stage: 'output' })).unplaced).not.toBeNull();
+      // A transformation would hide the geometry the filter reads, so it is refused while the
+      // filter is there; on a dataset without one, the transformed geometry is placed back in WGS 84.
+      for (const toCrs of ['EPSG:32631']) {
+        await both(`${toCrs} after the filter: preview`, (e) =>
+          e.previewStep(points, { kind: 'transform_crs', toCrs }),
+        );
+        await both(`${toCrs} after the filter`, async (e) =>
+          applied(e, await e.applyStep(points, { kind: 'transform_crs', toCrs }, 'UTM')),
+        );
+      }
+      const again = await imported(fixturePath('geojson_wells_points_wgs84.geojson'));
+      await both('to UTM', async (e) =>
+        applied(e, await e.applyStep(again, { kind: 'transform_crs', toCrs: 'EPSG:32631' }, 'UTM')),
+      );
+      expect((await places('UTM', again)).transformed).toBe(true);
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 if (!nativeBuilt) {

@@ -23,7 +23,14 @@ import {
   type TableSchema,
 } from '@tw/model';
 import { sha256Hex } from '@tw/io';
-import { buildOutputView, buildWorkingView, describeStep, isWorkingStep, validateStep } from '@tw/steps';
+import {
+  buildOutputView,
+  buildWorkingView,
+  describeStep,
+  isWorkingStep,
+  requireNextStepBuilds,
+  validateStep,
+} from '@tw/steps';
 import type { DatasetState } from './state';
 import { workingView } from './views';
 
@@ -242,6 +249,12 @@ export function planRecipe(
       const valid = validateStep(input, at);
       if (!valid.ok) {
         problems.push(`Step ${i + 1} cannot be applied: ${valid.error.message}`);
+        break;
+      }
+      try {
+        requireNextStepBuilds(ds.dataset, st, input);
+      } catch (e) {
+        problems.push(`Step ${i + 1} cannot be applied: ${EngineError.from(e).message}`);
         break;
       }
       descriptions.push(describeStep(input, at));

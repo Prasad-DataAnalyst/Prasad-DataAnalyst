@@ -32,6 +32,10 @@ use std::time::Instant;
 
 pub const ENGINE_NAME: &str = "tracewell-native";
 pub const PROTOCOL_VERSION: &str = "0.3.0";
+
+/// The most features one answer to getPlaces gives, and how many it gives when not asked.
+const PLACES_MAX: u64 = 100_000;
+const PLACES_DEFAULT: u64 = 50_000;
 const ROW_WINDOW_MAX: u64 = 1000;
 const DISTINCT_CAP: i64 = 10_000;
 
@@ -729,6 +733,120 @@ impl Engine {
                 .get::<_, Option<String>>(i)?
                 .map_or(Value::Null, |text| geometry_cell(&text)),
         })
+    }
+
+    /// Where a stage's rows are, in WGS 84 longitude and latitude, for the map (getPlaces,
+    /// placesOf): each row's geometry of a valid shape, or the point of its coordinate columns,
+    /// transformed from the stage's CRS when it is another, the first `limit` in row order.
+    pub fn get_places(&self, q: &Value) -> Result<Value> {
+        use crate::steps::{Coordinates, coordinate_source, pair_name};
+        let d = self.dataset(&q["datasetId"])?;
+        let stage = q["stage"].as_str().unwrap_or("");
+        if stage != "working" && stage != "output" {
+            return Err(EngineError::invalid(
+                format!("The stage {stage} does not exist."),
+                "Ask for the 'working' or the 'output' stage.",
+            ));
+        }
+        let limit = count(&q["limit"], "limit", PLACES_DEFAULT, PLACES_MAX)? as usize;
+        let stages = d.stages()?;
+        let (cols, view, rows) = if stage == "output" {
+            (&stages.output, d.out_view(), d.output_rows)
+        } else {
+            (&stages.working, d.view.clone(), d.visible_rows())
+        };
+        let crs = stages
+            .places
+            .code()
+            .filter(|c| *c != "unknown")
+            .map(String::from);
+        let nothing = |reason: String, fix: &str| {
+            Ok(json!({
+                "datasetId": d.id,
+                "stage": stage,
+                "crs": crs,
+                "source": null,
+                "transformed": false,
+                "unplaced": { "reason": reason, "fix": fix },
+                "rows": rows,
+                "placed": 0,
+                "features": [],
+                "truncated": false,
+            }))
+        };
+        let Some(code) = crs.as_deref() else {
+            return nothing(
+                "The coordinate reference system of the data is not known, so its rows cannot be placed on the map.".into(),
+                "Set the coordinate reference system of the dataset first.",
+            );
+        };
+        let Some(t) = crate::geodesy::Transformer::new(code, "EPSG:4326") else {
+            return nothing(
+                format!("{code} is not a coordinate reference system this edition can transform."),
+                "Choose a listed coordinate reference system.",
+            );
+        };
+        let Some(src) = coordinate_source(cols, &stages.places, t.from.geographic) else {
+            let pair = pair_name(t.from.geographic);
+            return nothing(
+                format!(
+                    "The data has no geometry column and no numeric {pair} columns, so its rows cannot be placed on the map."
+                ),
+                &format!("Set the {pair} roles on the coordinate columns first."),
+            );
+        };
+        let (select, source) = match &src {
+            Coordinates::Geometry(g) => (quote_ident(g.id()), json!({ "geometry": g.id() })),
+            Coordinates::Pair(x, y) => (
+                format!("{}, {}", quote_ident(x.id()), quote_ident(y.id())),
+                json!({ "x": x.id(), "y": y.id() }),
+            ),
+        };
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT __rid, {select} FROM {} ORDER BY __rid",
+            quote_ident(&view)
+        ))?;
+        let mut result = stmt.query([])?;
+        let mut features = Vec::new();
+        let mut placed = 0u64;
+        while let Some(row) = result.next()? {
+            let geometry = match &src {
+                Coordinates::Geometry(_) => row
+                    .get::<_, Option<String>>(1)?
+                    .and_then(|text| crate::json::parse(&text).ok())
+                    .filter(crate::geo::has_shape)
+                    .and_then(|g| crate::geodesy::transform_geometry(&g, &t))
+                    .and_then(|g| serde_json::from_str::<Value>(&crate::json::stringify(&g)).ok()),
+                Coordinates::Pair(..) => {
+                    match (row.get::<_, Option<f64>>(1)?, row.get::<_, Option<f64>>(2)?) {
+                        (Some(x), Some(y)) => t.forward(x, y).map(
+                            |(lon, lat)| json!({ "type": "Point", "coordinates": [lon, lat] }),
+                        ),
+                        _ => None,
+                    }
+                }
+            };
+            let Some(geometry) = geometry else {
+                continue;
+            };
+            placed += 1;
+            if features.len() < limit {
+                features.push(json!({ "rowId": row.get::<_, i64>(0)?, "geometry": geometry }));
+            }
+        }
+        let truncated = placed > features.len() as u64;
+        Ok(json!({
+            "datasetId": d.id,
+            "stage": stage,
+            "crs": crs,
+            "source": source,
+            "transformed": !t.operations().is_empty(),
+            "unplaced": null,
+            "rows": rows,
+            "placed": placed,
+            "features": features,
+            "truncated": truncated,
+        }))
     }
 
     pub fn rows(&self, q: &Value) -> Result<Value> {
@@ -2542,7 +2660,14 @@ impl Engine {
     pub fn preview_step(&self, dataset: &Value, s: &Value) -> Result<Value> {
         let d = self.dataset(dataset)?;
         let stages = d.stages()?;
-        if let Err(e) = crate::steps::validate(s, &stages) {
+        if let Err(e) = crate::steps::validate(s, &stages).and_then(|()| {
+            crate::steps::require_next_step_builds(
+                &d.base_columns(),
+                &d.steps,
+                &Places::of(&d.spec),
+                s,
+            )
+        }) {
             return Ok(
                 json!({ "ok": false, "error": e.to_json(), "description": "", "sample": [] }),
             );
@@ -3458,6 +3583,12 @@ fn commit_step(
     let d = engine.dataset(&json!(dataset_id))?;
     let stages = d.stages()?;
     crate::steps::validate(input, &stages)?;
+    crate::steps::require_next_step_builds(
+        &d.base_columns(),
+        &d.steps,
+        &Places::of(&d.spec),
+        input,
+    )?;
     let convert = input["kind"] == "convert_unit";
     let method = if convert {
         Some(crate::steps::conversion_for(input, &stages.working)?)
@@ -3857,6 +3988,7 @@ pub fn apply_step(
     let d = engine.dataset(dataset)?;
     require_step_kind(s)?;
     crate::steps::validate(s, &d.stages()?)?;
+    crate::steps::require_next_step_builds(&d.base_columns(), &d.steps, &Places::of(&d.spec), s)?;
     let dataset_id = d.id.clone();
     let input = s.clone();
     let (job, _cancel) = engine.start_job();

@@ -716,39 +716,19 @@ pub fn crs_plan(step: &Value, cols: &[StageColumn], places: &Places) -> Result<C
         return Err(unknown_crs(from));
     }
     let transformer = Transformer::new(from, to).ok_or_else(|| unknown_crs(to))?;
-    let geometry = places
-        .geometry_column
-        .as_deref()
-        .and_then(|g| cols.iter().find(|c| c.id() == g))
-        .filter(|c| c.typ() == "geometry")
-        .cloned();
-    if geometry.is_some() {
-        return Ok(CrsPlan {
+    match coordinate_source(cols, places, transformer.from.geographic) {
+        Some(Coordinates::Geometry(g)) => Ok(CrsPlan {
             transformer,
-            geometry,
+            geometry: Some(g),
             pair: None,
-        });
-    }
-    let geographic = transformer.from.geographic;
-    let with_role = |role: &str| {
-        cols.iter()
-            .find(|c| c.schema["role"]["value"] == role && matches!(c.typ(), "number" | "integer"))
-            .cloned()
-    };
-    let x = with_role(if geographic { "longitude" } else { "easting" });
-    let y = with_role(if geographic { "latitude" } else { "northing" });
-    match (x, y) {
-        (Some(x), Some(y)) => Ok(CrsPlan {
+        }),
+        Some(Coordinates::Pair(x, y)) => Ok(CrsPlan {
             transformer,
             geometry: None,
             pair: Some((x, y)),
         }),
-        _ => {
-            let pair = if geographic {
-                "latitude and longitude"
-            } else {
-                "easting and northing"
-            };
+        None => {
+            let pair = pair_name(transformer.from.geographic);
             Err(EngineError::invalid(
                 format!(
                     "The data has no geometry column and no numeric {pair} columns to transform from {from}."
@@ -756,6 +736,47 @@ pub fn crs_plan(step: &Value, cols: &[StageColumn], places: &Places) -> Result<C
                 format!("Set the {pair} roles on the coordinate columns first."),
             ))
         }
+    }
+}
+
+/// Where a view's coordinates are (coordinateSource).
+pub enum Coordinates {
+    Geometry(StageColumn),
+    /// Longitude or easting, and latitude or northing.
+    Pair(StageColumn, StageColumn),
+}
+
+/// The geometry column, or else the numeric longitude and latitude columns (easting and northing
+/// when the CRS is projected); None when there is neither (coordinateSource).
+pub fn coordinate_source(
+    cols: &[StageColumn],
+    places: &Places,
+    geographic: bool,
+) -> Option<Coordinates> {
+    let geometry = places
+        .geometry_column
+        .as_deref()
+        .and_then(|g| cols.iter().find(|c| c.id() == g))
+        .filter(|c| c.typ() == "geometry");
+    if let Some(g) = geometry {
+        return Some(Coordinates::Geometry(g.clone()));
+    }
+    let with_role = |role: &str| {
+        cols.iter()
+            .find(|c| c.schema["role"]["value"] == role && matches!(c.typ(), "number" | "integer"))
+            .cloned()
+    };
+    let x = with_role(if geographic { "longitude" } else { "easting" })?;
+    let y = with_role(if geographic { "latitude" } else { "northing" })?;
+    Some(Coordinates::Pair(x, y))
+}
+
+/// The coordinate pair a CRS of that kind is read from, as a message names it (pairName).
+pub fn pair_name(geographic: bool) -> &'static str {
+    if geographic {
+        "latitude and longitude"
+    } else {
+        "easting and northing"
     }
 }
 
@@ -1063,6 +1084,46 @@ pub fn build(base: &[StageColumn], steps: &[Value], places: &Places) -> Result<S
         filters,
         places,
     })
+}
+
+/// The step as it would be recorded next, for building the views with it.
+fn next_step_of(steps: &[Value], s: &Value) -> Value {
+    let mut next = s.clone();
+    next["id"] = json!(format!("s{}", steps.len() + 1));
+    next["seq"] = json!(9_007_199_254_740_991u64);
+    next
+}
+
+/// Refuses a step whose views would not build (requireNextStepBuilds): a conversion or
+/// transformation runs before every filter and selection, so one that replaces a column an earlier
+/// filter or selection reads would leave that step without its column.
+pub fn require_next_step_builds(
+    base: &[StageColumn],
+    steps: &[Value],
+    places: &Places,
+    s: &Value,
+) -> Result<()> {
+    let builds = |upto: &[Value]| {
+        let mut all = upto.to_vec();
+        all.push(next_step_of(steps, s));
+        build(base, &all, places).is_ok()
+    };
+    if builds(steps) {
+        return Ok(());
+    }
+    let broken = (0..steps.len())
+        .find(|&i| !builds(&steps[..=i]))
+        .and_then(|i| steps[i]["id"].as_str())
+        .unwrap_or("a later step");
+    let that = if broken == "a later step" {
+        "that step"
+    } else {
+        broken
+    };
+    Err(EngineError::invalid(
+        format!("This step would break step {broken}, which uses a column it replaces."),
+        format!("Remove step {that} first, then apply it again after this step."),
+    ))
 }
 
 /// Checks a new step against the columns it would see (validateStep): the working view's for a

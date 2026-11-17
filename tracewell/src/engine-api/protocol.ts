@@ -52,10 +52,12 @@ import type {
   TemplateId,
   UnitInfo,
   UserProfile,
+  PlacesRequest,
+  PlacesWindow,
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.7.0';
+export const PROTOCOL_VERSION = '0.8.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -96,6 +98,8 @@ export interface EngineApi {
   getSchema(datasetId: DatasetId, stage?: 'working' | 'output'): Promise<TableSchema>;
   getRows(q: RowWindowRequest): Promise<RowWindow>;
   getColumnStats(datasetId: DatasetId, columnId: ColumnId): Promise<ColumnStats>;
+  /** Where a stage's rows are, in WGS 84 longitude and latitude, for the map (FR-MAP-01). Protocol 0.8. */
+  getPlaces(q: PlacesRequest): Promise<PlacesWindow>;
   explainCell(datasetId: DatasetId, rowId: RowId, columnId: ColumnId): Promise<CellLineage>;
   /** Result: CheckSummary. */
   runChecks(datasetId: DatasetId): Promise<JobHandle>;
@@ -204,6 +208,7 @@ export const ENGINE_METHODS = [
   'getSchema',
   'getRows',
   'getColumnStats',
+  'getPlaces',
   'explainCell',
   'runChecks',
   'listIssues',

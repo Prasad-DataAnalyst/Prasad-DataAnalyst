@@ -496,7 +496,11 @@ pub fn plan(
         for (i, raw) in recipe["steps"].as_array().into_iter().flatten().enumerate() {
             let input = map_step_columns(raw, &map);
             let checked = crate::steps::build(base, &so_far, places)
-                .and_then(|stages| crate::steps::validate(&input, &stages).map(|()| stages));
+                .and_then(|stages| crate::steps::validate(&input, &stages).map(|()| stages))
+                .and_then(|stages| {
+                    crate::steps::require_next_step_builds(base, &so_far, places, &input)
+                        .map(|()| stages)
+                });
             let stages = match checked {
                 Ok(s) => s,
                 Err(e) => {

@@ -131,6 +131,11 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
     expect(w.rows[2]?.cells[2]).toBe(-4);
     expect(w.rows[2]?.issue[2]).toBe('error');
   },
+  getPlaces: async (c) => {
+    const places = await c.getPlaces({ datasetId: 'd1', stage: 'working' });
+    expect(places).toMatchObject({ placed: 0, features: [], source: null });
+    expect(places.unplaced?.reason).toMatch(/no coordinates/);
+  },
   getColumnStats: async (c) => {
     expect(await c.getColumnStats('d1', 'c3')).toMatchObject({
       count: 10,

@@ -12,7 +12,7 @@ import type { ColumnPlan, ColumnRole, CrsRef, DateFormat, TimezoneMode } from '.
 import type { Step } from './steps';
 import type { TemplateApplied, TemplateId } from './templates';
 import type { ConversionMethod } from './units';
-import type { CellValue, LogicalType } from './values';
+import type { CellValue, Geometry, LogicalType } from './values';
 
 export interface PageRequest {
   offset: number;
@@ -32,6 +32,39 @@ export interface RowWindowRequest {
   /** At most ROW_WINDOW_MAX. */
   limit: number;
   columns?: ColumnId[];
+}
+
+/** A request for where a dataset's rows are, for the map (getPlaces, FR-MAP-01). */
+export interface PlacesRequest {
+  datasetId: DatasetId;
+  stage: 'working' | 'output';
+  /** At most this many features, the first in row order; at most PLACES_MAX, PLACES_DEFAULT if left out. */
+  limit?: number;
+}
+
+/**
+ * Where the rows of a dataset's stage are, as WGS 84 longitude and latitude: each row's geometry,
+ * or the point of its coordinate columns, transformed from the data's CRS when it is another.
+ */
+export interface PlacesWindow {
+  datasetId: DatasetId;
+  stage: 'working' | 'output';
+  /** The CRS of the data at this stage, or null when it is not known. */
+  crs: string | null;
+  /** What the positions are read from: the geometry column, or the x (longitude or easting) and y columns. */
+  source: { geometry: ColumnId } | { x: ColumnId; y: ColumnId } | null;
+  /** True when the positions were transformed to WGS 84; false when the data is in it already. */
+  transformed: boolean;
+  /** Why no row can be placed, and what to do about it; null when the rows can be. */
+  unplaced: { reason: string; fix: string } | null;
+  /** Rows at this stage. */
+  rows: number;
+  /** Rows with a position: a geometry of a valid shape, or two numbers, inside what the CRS holds. */
+  placed: number;
+  /** The first placed rows, in row order. */
+  features: { rowId: RowId; geometry: Geometry }[];
+  /** True when more rows are placed than features given. */
+  truncated: boolean;
 }
 
 export interface RowWindowColumn {
