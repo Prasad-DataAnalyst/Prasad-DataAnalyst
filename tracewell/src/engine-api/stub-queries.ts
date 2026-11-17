@@ -187,7 +187,7 @@ function history(project: StubProject, ds: StubDataset, rowId: RowId, root: Colu
       at: e.at,
       actor: actorName(e.actor),
       action: e.action,
-      old: structuredClone(e.old),
+      ...(e.old === undefined ? {} : { old: structuredClone(e.old) }),
       new: structuredClone(e.new),
       reason: e.reason,
     };

@@ -409,11 +409,14 @@ const selectColumnsStep = z.strictObject({
     .refine((ids) => duplicates(ids).length === 0, 'Each column can be selected only once.'),
 });
 
-const stepInput = z.discriminatedUnion('kind', [convertUnitStep, filterStep, selectColumnsStep]);
+const transformCrsStep = z.strictObject({ kind: z.literal('transform_crs'), toCrs: nonEmpty });
+
+const stepInput = z.discriminatedUnion('kind', [convertUnitStep, transformCrsStep, filterStep, selectColumnsStep]);
 
 const stepIdentity = { id: stepId, seq: auditSeq };
 const step = z.discriminatedUnion('kind', [
   convertUnitStep.extend(stepIdentity),
+  transformCrsStep.extend(stepIdentity),
   filterStep.extend(stepIdentity),
   selectColumnsStep.extend(stepIdentity),
 ]);

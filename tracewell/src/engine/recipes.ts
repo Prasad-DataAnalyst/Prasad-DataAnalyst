@@ -23,7 +23,7 @@ import {
   type TableSchema,
 } from '@tw/model';
 import { sha256Hex } from '@tw/io';
-import { buildOutputView, buildWorkingView, describeStep, validateStep } from '@tw/steps';
+import { buildOutputView, buildWorkingView, describeStep, isWorkingStep, validateStep } from '@tw/steps';
 import type { DatasetState } from './state';
 import { workingView } from './views';
 
@@ -49,10 +49,13 @@ function predicateColumns(p: Predicate): ColumnId[] {
   return [p.column];
 }
 
+/** The columns a step names; a coordinate transformation finds its columns by their roles. */
 function stepColumns(s: StepInput): ColumnId[] {
   switch (s.kind) {
     case 'convert_unit':
       return [s.columnId];
+    case 'transform_crs':
+      return [];
     case 'filter':
       return predicateColumns(s.predicate);
     case 'select_columns':
@@ -74,6 +77,8 @@ export function mapStepColumns(s: StepInput, f: (c: ColumnId) => ColumnId): Step
   switch (s.kind) {
     case 'convert_unit':
       return { ...s, columnId: f(s.columnId) };
+    case 'transform_crs':
+      return { ...s };
     case 'filter':
       return { ...s, predicate: mapPredicate(s.predicate, f) };
     case 'select_columns':
@@ -231,10 +236,9 @@ export function planRecipe(
     for (const [i, raw] of recipe.steps.entries()) {
       const input = mapStepColumns(raw, map);
       const st = { overlay: ds.overlay, excluded: ds.excluded, steps: applied };
-      const at: TableSchema =
-        input.kind === 'convert_unit'
-          ? buildWorkingView(ds.dataset, st).schema
-          : buildOutputView(ds.dataset, st).schema;
+      const at: TableSchema = isWorkingStep(input)
+        ? buildWorkingView(ds.dataset, st).schema
+        : buildOutputView(ds.dataset, st).schema;
       const valid = validateStep(input, at);
       if (!valid.ok) {
         problems.push(`Step ${i + 1} cannot be applied: ${valid.error.message}`);

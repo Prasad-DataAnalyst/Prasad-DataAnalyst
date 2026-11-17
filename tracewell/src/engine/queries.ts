@@ -187,14 +187,21 @@ export function listOccurrences(state: ProjectState, id: string, p: PageRequest)
   const { ds, st } = found;
   const view = workingView(ds);
   const first = st.draft.columns[0];
-  // The issue's column when it is still in the view; after a replacing conversion, its converted column.
+  // The issue's column when it is still in the view; after a replacing step, the column that
+  // replaced it. A column a removed step had computed is in no view: its rows are still listed.
+  const root = (c: ColumnId): ColumnId => {
+    try {
+      return rootColumn(view, c);
+    } catch {
+      return c;
+    }
+  };
   const column =
     first === undefined
       ? undefined
       : (view.schema.columns.find((c) => c.id === first) ??
-        view.schema.columns.find((c) => rootColumn(view, c.id) === rootColumn(view, first)));
-  const plan =
-    first === undefined ? undefined : ds.dataset.schema.columns.find((c) => c.id === rootColumn(view, first));
+        view.schema.columns.find((c) => root(c.id) === root(first)));
+  const plan = first === undefined ? undefined : ds.dataset.schema.columns.find((c) => c.id === root(first));
   const rows = st.flagged.toArray();
   const items = rows.slice(offset, offset + limit).map((rowId): IssueOccurrence => {
     const state = occurrenceState(st, ds.excluded, rowId);

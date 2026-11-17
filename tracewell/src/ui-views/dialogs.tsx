@@ -1,6 +1,7 @@
 /**
- * The dialogs commands and column menus open: unit conversion, filter, columns, detection
- * overrides, project area, the Open report, licences, comments and the first-start profile.
+ * The dialogs commands and column menus open: unit conversion, coordinate transformation, filter,
+ * columns, detection overrides, project area, the Open report, licences, comments and the
+ * first-start profile.
  * Each one previews its effect where the engine can, and every change asks for a reason.
  */
 import { useEffect, useMemo, useState } from 'react';
@@ -8,6 +9,7 @@ import type { EngineClient } from '@tw/engine-api';
 import type {
   ColumnId,
   ColumnSchema,
+  CrsInfo,
   DatasetId,
   EngineErrorData,
   IssueId,
@@ -42,6 +44,8 @@ export function DialogHost(p: { engine: EngineClient }): React.JSX.Element | nul
           onClose={closeDialog}
         />
       );
+    case 'transform':
+      return <TransformCrsDialog engine={p.engine} datasetId={d.datasetId} onClose={closeDialog} />;
     case 'filter':
       return <FilterDialog engine={p.engine} datasetId={d.datasetId} onClose={closeDialog} />;
     case 'columns':
@@ -265,6 +269,126 @@ export function ConvertUnitsDialog(p: {
                   </th>
                   <th scope="col" className="tw-num">
                     After [{toUnit}]
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.sample.slice(0, 8).map((s) => (
+                  <tr key={s.rowId}>
+                    <td className="tw-num">{s.rowId + 1}</td>
+                    <td className="tw-num">{formatCell(s.before, 'number')}</td>
+                    <td className="tw-num">{formatCell(s.after, 'number')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {reason.element}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Transform coordinates
+
+/**
+ * Moves the dataset's coordinates to another coordinate reference system (FR-PRC-02): the geometry
+ * column, or the longitude and latitude or easting and northing columns, are replaced by
+ * transformed ones. The preview names the EPSG operations and their accuracy, which the log keeps.
+ */
+export function TransformCrsDialog(p: {
+  engine: EngineClient;
+  datasetId: DatasetId;
+  onClose(): void;
+}): React.JSX.Element {
+  const { engine, datasetId } = p;
+  const schema = useSchema(engine, datasetId, 'working');
+  const systems = useEngineQuery<CrsInfo[]>(engine, 'crs', () => engine.listCrs(), []);
+  const from = schema.data?.crs?.value.code ?? 'unknown';
+  const nameOf = (code: string) => systems.data?.find((s) => s.code === code)?.name;
+  const [chosen, setChosen] = useState<string | null>(null);
+  // WGS 84 unless the data is in it already, which is what a map and GeoJSON need.
+  const toCrs = chosen ?? (from === 'EPSG:4326' || from === 'OGC:CRS84' ? '' : 'EPSG:4326');
+  const reason = useReasonPrompt();
+  const step: StepInput | null = toCrs === '' ? null : { kind: 'transform_crs', toCrs };
+  const preview = useStepPreview(engine, datasetId, step);
+
+  const apply = async () => {
+    if (step === null || preview?.ok !== true) return;
+    const label = `Transform coordinates to ${toCrs}`;
+    const why = await reason.ask(label, `Report the coordinates in ${nameOf(toCrs) ?? toCrs}`);
+    if (why === null) return;
+    if (await applyStep(engine, datasetId, step, why, label)) p.onClose();
+  };
+
+  const group = (kind: CrsInfo['kind']) =>
+    (systems.data ?? [])
+      .filter((s) => s.kind === kind && s.code !== from)
+      .map((s) => (
+        <option key={s.code} value={s.code}>
+          {s.code} {s.name}
+        </option>
+      ));
+
+  return (
+    <Modal
+      title="Transform coordinates"
+      testId={TID.transformDialog}
+      wide
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" data-testid={TID.dialogCancel} onClick={p.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="tw-primary"
+            data-testid={TID.dialogApply}
+            disabled={preview?.ok !== true}
+            onClick={() => void apply()}
+          >
+            Transform…
+          </button>
+        </>
+      }
+    >
+      <div className="tw-form-grid">
+        <div className="tw-field">
+          <span>From</span>
+          <span>{from === 'unknown' ? 'Not known' : `${from} ${nameOf(from) ?? ''}`}</span>
+        </div>
+        <label className="tw-field">
+          <span>To</span>
+          <select data-testid={TID.transformTarget} value={toCrs} onChange={(e) => setChosen(e.target.value)}>
+            <option value="">Choose a coordinate reference system</option>
+            <optgroup label="Latitude and longitude">{group('geographic')}</optgroup>
+            <optgroup label="Projected (easting and northing)">{group('projected')}</optgroup>
+          </select>
+        </label>
+      </div>
+      <p className="tw-hint">
+        The coordinate columns, or the geometry column, are replaced by transformed ones. The original values stay in
+        the data and in each cell's lineage.
+      </p>
+      <div data-testid={TID.transformPreview} aria-live="polite">
+        {preview !== null && !preview.ok && <ErrorNote error={preview.error} />}
+        {preview !== null && preview.ok && (
+          <div className="tw-preview-box">
+            <p>
+              <strong>{preview.description}</strong>
+            </p>
+            <table className="tw-table tw-sample">
+              <thead>
+                <tr>
+                  <th scope="col">Row</th>
+                  <th scope="col" className="tw-num">
+                    Before [{from}]
+                  </th>
+                  <th scope="col" className="tw-num">
+                    After [{toCrs}]
                   </th>
                 </tr>
               </thead>

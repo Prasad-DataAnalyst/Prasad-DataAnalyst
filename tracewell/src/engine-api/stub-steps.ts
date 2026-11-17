@@ -96,6 +96,8 @@ export function describeStep(ds: StubDataset, s: StepInput): string {
       const how = s.mode === 'replace' ? 'replacing the column' : 'as a new column';
       return `Convert ${column?.name ?? s.columnId} from ${column?.unit.value ?? '?'} to ${s.toUnit}, ${how}`;
     }
+    case 'transform_crs':
+      return `Transform coordinates to ${s.toCrs}`;
     case 'filter':
       return s.label ?? `Keep rows where ${describePredicate(s.predicate, view)}`;
     case 'select_columns':

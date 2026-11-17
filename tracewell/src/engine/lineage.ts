@@ -134,7 +134,8 @@ export async function explainCell(
       at: e.at,
       actor: actorName(e),
       action: e.action,
-      old: e.old,
+      // A step entry has no old value; the member is left out, as an answer sent as JSON would be.
+      ...(e.old === undefined ? {} : { old: e.old }),
       new: e.new,
       reason: e.reason,
       ...(e.method === undefined ? {} : { method: { ...e.method } }),

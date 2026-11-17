@@ -8,7 +8,7 @@ const SAD_MENUS: Record<string, string[]> = {
   file: ['New project…', 'Open project…', 'Save project', 'Import file…', 'Export…', 'Project area…'],
   edit: ['Edit cell', 'Undo last change…'],
   view: ['Issues panel', 'Log panel', 'Jobs panel'],
-  data: ['Run checks', 'Convert units…', 'Filter…', 'Columns…', 'Exclude rows…'],
+  data: ['Run checks', 'Convert units…', 'Transform coordinates…', 'Filter…', 'Columns…', 'Exclude rows…'],
   help: ['Open-source licences'],
 };
 

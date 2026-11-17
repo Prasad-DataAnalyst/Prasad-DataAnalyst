@@ -1,12 +1,15 @@
 //! Steps (SAD section 7.7), as the TypeScript src/steps and src/units/convert.ts: a unit
-//! conversion adds a derived column to the working view, which the checks read; filters and column
-//! selections shape the output view, which exports write, in step order. Conversions go through SI
-//! with the registry's factors and are refused, with the reason and a fix, where the result would
-//! depend on something the data does not say. Filters become SQL with the TypeScript semantics:
-//! every comparison with null is false, even under `not`.
+//! conversion adds a derived column to the working view, and a coordinate transformation replaces
+//! the coordinate columns or the geometry column with transformed ones and changes the view's CRS;
+//! the checks read the working view. Filters and column selections shape the output view, which
+//! exports write, in step order. Conversions go through SI with the registry's factors and are
+//! refused, with the reason and a fix, where the result would depend on something the data does
+//! not say. Filters become SQL with the TypeScript semantics: every comparison with null is false,
+//! even under `not`.
 
 use crate::canonical::canonical_number;
 use crate::error::{EngineError, Result};
+use crate::geodesy::{Transformer, crs_definition};
 use crate::import::{quote_ident, quote_text};
 use crate::parse::Kind;
 use crate::units::{Unit, all_units, get_unit, quantity_label, registry_version, same_family};
@@ -673,11 +676,222 @@ pub fn conversion_for(step: &Value, cols: &[StageColumn]) -> Result<Method> {
     conversion_method(from, step["toUnit"].as_str().unwrap_or_default())
 }
 
-/// A conversion's derived column (derivedFor).
+// ---------------------------------------------------------------------------------------------
+// Coordinate transformations (views.ts crsPlanFor)
+
+/// What a coordinate transformation reads: the geometry column, or the x and y columns.
+pub struct CrsPlan {
+    pub transformer: Transformer,
+    pub geometry: Option<StageColumn>,
+    /// Longitude or easting, and latitude or northing.
+    pub pair: Option<(StageColumn, StageColumn)>,
+}
+
+fn unknown_crs(code: &str) -> EngineError {
+    EngineError::invalid(
+        format!("{code} is not a coordinate reference system this edition can transform."),
+        "Choose a listed coordinate reference system.",
+    )
+}
+
+/// The plan of a transformation step against the columns and places it sees (crsPlanFor).
+pub fn crs_plan(step: &Value, cols: &[StageColumn], places: &Places) -> Result<CrsPlan> {
+    let to = step["toCrs"].as_str().unwrap_or_default();
+    let from = match places.code() {
+        Some(code) if code != "unknown" => code,
+        _ => {
+            return Err(EngineError::invalid(
+                "The coordinate reference system of the data is not known, so its coordinates cannot be transformed.",
+                "Set the coordinate reference system of the dataset first.",
+            ));
+        }
+    };
+    if from == to {
+        return Err(EngineError::invalid(
+            format!("The coordinates are already in {from}."),
+            "Choose another coordinate reference system.",
+        ));
+    }
+    if crs_definition(from).is_none() {
+        return Err(unknown_crs(from));
+    }
+    let transformer = Transformer::new(from, to).ok_or_else(|| unknown_crs(to))?;
+    let geometry = places
+        .geometry_column
+        .as_deref()
+        .and_then(|g| cols.iter().find(|c| c.id() == g))
+        .filter(|c| c.typ() == "geometry")
+        .cloned();
+    if geometry.is_some() {
+        return Ok(CrsPlan {
+            transformer,
+            geometry,
+            pair: None,
+        });
+    }
+    let geographic = transformer.from.geographic;
+    let with_role = |role: &str| {
+        cols.iter()
+            .find(|c| c.schema["role"]["value"] == role && matches!(c.typ(), "number" | "integer"))
+            .cloned()
+    };
+    let x = with_role(if geographic { "longitude" } else { "easting" });
+    let y = with_role(if geographic { "latitude" } else { "northing" });
+    match (x, y) {
+        (Some(x), Some(y)) => Ok(CrsPlan {
+            transformer,
+            geometry: None,
+            pair: Some((x, y)),
+        }),
+        _ => {
+            let pair = if geographic {
+                "latitude and longitude"
+            } else {
+                "easting and northing"
+            };
+            Err(EngineError::invalid(
+                format!(
+                    "The data has no geometry column and no numeric {pair} columns to transform from {from}."
+                ),
+                format!("Set the {pair} roles on the coordinate columns first."),
+            ))
+        }
+    }
+}
+
+/// The transformed columns of a transformation (crsDerived), each to replace its source column,
+/// with the columns it reads and the SQL that computes it.
+fn crs_columns(step: &Value, plan: &CrsPlan) -> Vec<(StageColumn, Derived)> {
+    let t = &plan.transformer;
+    let to = step["toCrs"].as_str().unwrap_or_default();
+    let systems = format!("{}, {}", quote_text(&t.from.code), quote_text(&t.to.code));
+    let derived = |c: &StageColumn, reads: Vec<String>, sql: String| Derived {
+        id: derived_id(c.id(), to),
+        source: c.id().to_string(),
+        reads,
+        sql,
+    };
+    let from_step = |c: &StageColumn| json!({ "column": c.id(), "step": step["id"] });
+    if let Some(g) = &plan.geometry {
+        let mut schema = g.schema.clone();
+        schema["id"] = json!(derived_id(g.id(), to));
+        schema["derivedFrom"] = from_step(g);
+        let sql = format!("tw_crs_geometry({}, {systems})", quote_ident(g.id()));
+        let d = derived(g, vec![g.id().to_string()], sql);
+        return vec![(
+            StageColumn {
+                schema,
+                kind: Kind::Geometry,
+            },
+            d,
+        )];
+    }
+    let Some((x, y)) = &plan.pair else {
+        return Vec::new();
+    };
+    let geographic = t.to.geographic;
+    let same_kind = t.from.geographic == geographic;
+    let by = format!("Set by step {}.", step["id"].as_str().unwrap_or_default());
+    let reads = vec![x.id().to_string(), y.id().to_string()];
+    [(x, 0), (y, 1)]
+        .into_iter()
+        .map(|(c, axis)| {
+            let mut schema = c.schema.clone();
+            schema["id"] = json!(derived_id(c.id(), to));
+            let (name, role) = match (geographic, axis) {
+                (true, 0) => ("Longitude", "longitude"),
+                (true, _) => ("Latitude", "latitude"),
+                (false, 0) => ("Easting", "easting"),
+                (false, _) => ("Northing", "northing"),
+            };
+            if !same_kind {
+                schema["name"] = json!(name);
+            }
+            schema["type"]["value"] = json!("number");
+            if !same_kind {
+                schema["role"]["value"] = json!(role);
+                schema["role"]["source"] = json!("user");
+                schema["role"]["evidence"] = json!(by);
+                schema["unit"]["value"] = if geographic { Value::Null } else { json!("m") };
+                schema["unit"]["source"] = json!("user");
+                schema["unit"]["evidence"] = json!(by);
+                schema["quantity"] = if geographic {
+                    Value::Null
+                } else {
+                    json!("length")
+                };
+            }
+            schema["derivedFrom"] = from_step(c);
+            let sql = format!(
+                "tw_crs_transform(CAST({} AS DOUBLE), CAST({} AS DOUBLE), {systems}, CAST({axis} AS INTEGER))",
+                quote_ident(x.id()),
+                quote_ident(y.id())
+            );
+            let d = derived(c, reads.clone(), sql);
+            (
+                StageColumn {
+                    schema,
+                    kind: Kind::Number,
+                },
+                d,
+            )
+        })
+        .collect()
+}
+
+/// What the audit log records of a transformation (crsTransformationOf): the systems, the EPSG
+/// operations, the accuracy and the registry they come from.
+pub fn crs_transformation(step: &Value, stages: &Stages) -> Result<Value> {
+    let t = crs_plan(step, &stages.working, &stages.places)?.transformer;
+    Ok(json!({
+        "from": t.from.code,
+        "to": t.to.code,
+        "operations": t.operations(),
+        "accuracy": t.accuracy(),
+        "registryVersion": crate::geodesy::registry_version(),
+        "source": crate::geodesy::registry_source(),
+    }))
+}
+
+/// A column a step derives: what it is computed from and the SQL that computes it from the layer
+/// below, where every earlier column, hidden or not, is still there.
 pub struct Derived {
     pub id: String,
+    /// The column it replaces or is added beside.
     pub source: String,
-    pub method: Method,
+    /// Every column its values are computed from.
+    pub reads: Vec<String>,
+    pub sql: String,
+}
+
+/// Where a view's places are (the schema's `crs` and `geometryColumn`): as the import found them or
+/// the user set them, until a coordinate transformation gives the view a new CRS.
+#[derive(Clone, Debug)]
+pub struct Places {
+    pub crs: Value,
+    pub geometry_column: Option<String>,
+}
+
+impl Places {
+    /// The places of a dataset as its import plan records them.
+    pub fn of(spec: &Value) -> Places {
+        Places {
+            crs: spec["crs"].clone(),
+            geometry_column: crate::detect::geometry_column_of(spec).map(String::from),
+        }
+    }
+
+    pub fn code(&self) -> Option<&str> {
+        self.crs["value"]["code"].as_str()
+    }
+
+    /// Where an export finds the places.
+    pub fn spatial(&self) -> crate::export::Spatial {
+        crate::export::Spatial {
+            geometry_column: self.geometry_column.clone(),
+            crs: self.code().map(String::from),
+        }
+    }
 }
 
 /// What the steps make of a dataset's columns.
@@ -691,6 +905,26 @@ pub struct Stages {
     pub output: Vec<StageColumn>,
     /// The filters' conditions, in step order.
     pub filters: Vec<String>,
+    /// The places of the working view, which the output view shares.
+    pub places: Places,
+}
+
+/// Steps that read and change the working view, before any filter or selection (isWorkingStep).
+pub fn is_working_step(step: &Value) -> bool {
+    matches!(
+        step["kind"].as_str(),
+        Some("convert_unit" | "transform_crs")
+    )
+}
+
+/// The columns a step reads: the working view's for a conversion or a transformation, the output
+/// so far for a filter or a selection.
+pub fn seen<'s>(step: &Value, stages: &'s Stages) -> &'s [StageColumn] {
+    if is_working_step(step) {
+        &stages.working
+    } else {
+        &stages.output
+    }
 }
 
 fn user_detection(value: &str, seq: &Value) -> Value {
@@ -705,14 +939,15 @@ fn user_detection(value: &str, seq: &Value) -> Value {
     })
 }
 
-/// Builds the working and output views' columns from the dataset's columns and its steps (with
+/// Builds the working and output views' columns from the dataset's columns, places and steps (with
 /// their IDs and seqs), as buildWorkingView and buildOutputView do. Fails as they do when a step
 /// no longer builds.
-pub fn build(base: &[StageColumn], steps: &[Value]) -> Result<Stages> {
+pub fn build(base: &[StageColumn], steps: &[Value], places: &Places) -> Result<Stages> {
     let mut every: Vec<StageColumn> = base.to_vec();
     let mut order: Vec<String> = base.iter().map(|c| c.id().to_string()).collect();
     let mut hidden: HashSet<String> = HashSet::new();
     let mut derived = Vec::new();
+    let mut places = places.clone();
     let visible = |order: &[String], hidden: &HashSet<String>, every: &[StageColumn]| {
         order
             .iter()
@@ -721,7 +956,39 @@ pub fn build(base: &[StageColumn], steps: &[Value]) -> Result<Stages> {
             .collect::<Vec<_>>()
     };
     let mut working = visible(&order, &hidden, &every);
-    for step in steps.iter().filter(|s| s["kind"] == "convert_unit") {
+    for step in steps.iter().filter(|s| is_working_step(s)) {
+        if step["kind"] == "transform_crs" {
+            let plan = crs_plan(step, &working, &places)?;
+            for (column, d) in crs_columns(step, &plan) {
+                for id in order.iter_mut().filter(|id| **id == d.source) {
+                    *id = d.id.clone();
+                }
+                hidden.insert(d.source.clone());
+                every.push(column);
+                derived.push(d);
+            }
+            let to = step["toCrs"].as_str().unwrap_or_default();
+            places = Places {
+                crs: json!({
+                    "value": { "code": plan.transformer.to.code, "source": "user" },
+                    "confidence": "high",
+                    "assumed": false,
+                    "source": "user",
+                    "method": "transform",
+                    "evidence": format!(
+                        "Transformed from {} by step {}.",
+                        plan.transformer.from.code,
+                        step["id"].as_str().unwrap_or_default()
+                    ),
+                }),
+                geometry_column: match &plan.geometry {
+                    Some(g) => Some(derived_id(g.id(), to)),
+                    None => places.geometry_column,
+                },
+            };
+            working = visible(&order, &hidden, &every);
+            continue;
+        }
         let column = step["columnId"].as_str().unwrap_or_default().to_string();
         let source = find_column(&working, &column)?.clone();
         let method = conversion_for(step, &working)?;
@@ -746,7 +1013,8 @@ pub fn build(base: &[StageColumn], steps: &[Value]) -> Result<Stages> {
         derived.push(Derived {
             id: id.clone(),
             source: column.clone(),
-            method,
+            reads: vec![column.clone()],
+            sql: method.sql(&quote_ident(&column)),
         });
         let at = order
             .iter()
@@ -793,6 +1061,7 @@ pub fn build(base: &[StageColumn], steps: &[Value]) -> Result<Stages> {
         derived,
         output,
         filters,
+        places,
     })
 }
 
@@ -800,6 +1069,9 @@ pub fn build(base: &[StageColumn], steps: &[Value]) -> Result<Stages> {
 /// conversion, the output so far for a filter or a selection.
 pub fn validate(step: &Value, stages: &Stages) -> Result<()> {
     match step["kind"].as_str() {
+        Some("transform_crs") => {
+            crs_plan(step, &stages.working, &stages.places)?;
+        }
         Some("convert_unit") => {
             conversion_for(step, &stages.working)?;
             let id = derived_id(
@@ -844,16 +1116,51 @@ pub fn validate(step: &Value, stages: &Stages) -> Result<()> {
                     "The step kind {} does not exist.",
                     other.unwrap_or("undefined")
                 ),
-                "Choose a unit conversion, a filter or a column selection.",
+                "Choose a unit conversion, a coordinate transformation, a filter or a column selection.",
             ));
         }
     }
     Ok(())
 }
 
-/// A step in plain language (describeStep), against the columns it sees.
-pub fn describe(step: &Value, cols: &[StageColumn]) -> String {
+/// A step in plain language (describeStep), against the stage it reads.
+pub fn describe(step: &Value, stages: &Stages) -> String {
+    let cols = seen(step, stages);
     match step["kind"].as_str() {
+        Some("transform_crs") => match crs_plan(step, cols, &stages.places) {
+            Ok(plan) => {
+                let t = plan.transformer;
+                let operations = t.operations();
+                let datum: Vec<String> = operations
+                    .iter()
+                    .filter(|o| !o["accuracy"].is_null())
+                    .map(|o| {
+                        format!(
+                            "{} ({})",
+                            o["name"].as_str().unwrap_or_default(),
+                            o["code"].as_str().unwrap_or_default()
+                        )
+                    })
+                    .collect();
+                let via = if datum.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", through {}, accurate to {} m",
+                        datum.join(" and "),
+                        canonical_number(t.accuracy())
+                    )
+                };
+                format!(
+                    "Transform coordinates from {} ({}) to {} ({}){via}",
+                    t.from.code, t.from.name, t.to.code, t.to.name
+                )
+            }
+            Err(_) => format!(
+                "Transform coordinates to {}",
+                step["toCrs"].as_str().unwrap_or_default()
+            ),
+        },
         Some("convert_unit") => {
             let id = step["columnId"].as_str().unwrap_or_default();
             let name = cols

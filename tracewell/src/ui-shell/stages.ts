@@ -23,7 +23,7 @@ export function stageStates(p: ProjectSummary | null, issues: { open: number } |
   states.review = issues.open > 0 ? 'attention' : 'done';
 
   const steps = datasets.flatMap((d) => d.steps);
-  const processed = steps.some((s) => s.kind === 'convert_unit');
+  const processed = steps.some((s) => s.kind === 'convert_unit' || s.kind === 'transform_crs');
   const extracted = steps.some((s) => s.kind === 'filter' || s.kind === 'select_columns');
   states.process = processed ? 'done' : 'active';
   states.extract = extracted ? 'done' : 'active';

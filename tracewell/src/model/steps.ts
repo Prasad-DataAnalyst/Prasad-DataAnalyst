@@ -23,6 +23,12 @@ export type Predicate =
 
 export type StepInput =
   | { kind: 'convert_unit'; columnId: ColumnId; toUnit: string; mode: 'replace' | 'add_column' }
+  /**
+   * Transforms the dataset's coordinates to another coordinate reference system (FR-PRC-02): its
+   * geometry column, or else its latitude and longitude (easting and northing) columns, replaced in
+   * the working view by the transformed ones.
+   */
+  | { kind: 'transform_crs'; toCrs: string }
   | { kind: 'filter'; predicate: Predicate; label?: string }
   | { kind: 'select_columns'; columnIds: ColumnId[] };
 

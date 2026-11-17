@@ -25,6 +25,8 @@ export interface ViewSpec {
   hidden: ColumnId[];
   rowFilter: RowSet | null;
   columnOrder: ColumnId[] | null;
+  /** The coordinate system and geometry column after a transformation, in place of the dataset's. */
+  places?: { crs: TableSchema['crs']; geometryColumn: ColumnId | null };
 }
 
 export class View {
@@ -52,6 +54,7 @@ export class View {
     this.visibleColumns = this.orderColumns();
     this.schema = {
       ...ds.schema,
+      ...(spec.places === undefined ? {} : spec.places),
       rowCount: this.visibleRows.length,
       columns: this.visibleColumns.map((c) => this.columnSchema(c)),
     };

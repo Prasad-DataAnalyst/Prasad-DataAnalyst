@@ -275,6 +275,7 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "explainCell" => e.explain_cell(param(params, 0), param(params, 1), param(params, 2)),
         "listRulePacks" => e.list_rule_packs(),
         "listUnits" => e.list_units(param(params, 0)),
+        "listCrs" => Ok(e.list_crs()),
         "sniff" => e.sniff(msg, param(params, 0), param(params, 1)),
         "listMappingTemplates" => e.list_mapping_templates(),
         "saveMappingTemplate" => e.save_mapping_template(param(params, 0)),

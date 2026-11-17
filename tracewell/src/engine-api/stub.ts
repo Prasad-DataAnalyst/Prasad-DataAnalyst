@@ -9,6 +9,7 @@ import {
   type AuditEntry,
   type AuditQuery,
   type CellLineage,
+  type CrsInfo,
   type ChainReport,
   type ColumnId,
   type ColumnOverride,
@@ -392,6 +393,15 @@ class StubEngine implements EngineImpl {
 
   async listUnits(q?: { quantity?: QuantityKind; compatibleWith?: string }): Promise<UnitInfo[]> {
     return listUnits(q);
+  }
+
+  async listCrs(): Promise<CrsInfo[]> {
+    // A few systems, enough for the dialog; the real engines list their registry.
+    return [
+      { code: 'EPSG:4326', name: 'WGS 84', kind: 'geographic' },
+      { code: 'EPSG:27700', name: 'OSGB36 / British National Grid', kind: 'projected' },
+      { code: 'EPSG:32631', name: 'WGS 84 / UTM zone 31N', kind: 'projected' },
+    ];
   }
 
   async listRulePacks(): Promise<RulePack[]> {

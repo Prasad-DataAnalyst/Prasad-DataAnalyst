@@ -239,6 +239,11 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
     expect((await c.listUnits({ quantity: 'fraction' })).map((u) => u.code)).toEqual(['fraction', '%']);
     expect(Object.keys((await c.listUnits())[0] ?? {}).sort()).toEqual(['code', 'convention', 'label', 'quantity']);
   },
+  listCrs: async (c) => {
+    const list = await c.listCrs();
+    expect(list.map((x) => x.code)).toContain('EPSG:4326');
+    for (const x of list) expect(Object.keys(x).sort()).toEqual(['code', 'kind', 'name']);
+  },
   listRulePacks: async (c) => {
     const packs = await c.listRulePacks();
     expect(packs).toHaveLength(1);

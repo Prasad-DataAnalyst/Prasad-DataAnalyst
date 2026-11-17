@@ -73,6 +73,8 @@ function stepLabel(s: ProjectSummary['datasets'][number]['steps'][number]): stri
   switch (s.kind) {
     case 'convert_unit':
       return `Convert ${s.columnId} to ${s.toUnit}`;
+    case 'transform_crs':
+      return `Transform coordinates to ${s.toCrs}`;
     case 'filter':
       return s.label ?? 'Filter rows';
     case 'select_columns':

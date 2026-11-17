@@ -413,12 +413,13 @@ pub fn outcome(
             kind: *kind,
         })
         .collect();
+    let places = crate::steps::Places::of(&spec);
     if !changes_rows(property)
         && !d.steps.is_empty()
-        && crate::steps::build(&base, &d.steps).is_err()
+        && crate::steps::build(&base, &d.steps, &places).is_err()
     {
         let later = (0..d.steps.len())
-            .find(|&i| crate::steps::build(&base, &d.steps[..=i]).is_err())
+            .find(|&i| crate::steps::build(&base, &d.steps[..=i], &places).is_err())
             .and_then(|i| d.steps[i]["id"].as_str().map(String::from))
             .unwrap_or_else(|| "a later step".into());
         return Err(EngineError::invalid(

@@ -321,14 +321,14 @@ export async function applyEntry(state: ProjectState, e: AuditEntry, env: Reduce
       const id = e.target.stepId as string;
       ds.steps.push({ ...input, id, seq: e.seq });
       state.nextStep = Math.max(state.nextStep, Number(id.slice(1)) + 1);
-      if (input.kind === 'convert_unit') await recheck(state, ds, e.seq);
+      if (input.kind === 'convert_unit' || input.kind === 'transform_crs') await recheck(state, ds, e.seq);
       return;
     }
     case 'step.remove': {
       const ds = dataset(state, e.target.datasetId);
       const removed = ds.steps.find((s) => s.id === e.target.stepId);
       ds.steps = ds.steps.filter((s) => s.id !== e.target.stepId);
-      if (removed?.kind === 'convert_unit') await recheck(state, ds, e.seq);
+      if (removed?.kind === 'convert_unit' || removed?.kind === 'transform_crs') await recheck(state, ds, e.seq);
       return;
     }
     case 'entry.revert':

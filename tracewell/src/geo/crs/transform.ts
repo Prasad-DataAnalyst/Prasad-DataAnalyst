@@ -253,7 +253,6 @@ function unknownCrs(code: string): EngineError {
     'INVALID_INPUT',
     `${code} is not a coordinate reference system this edition can transform.`,
     'Choose a listed coordinate reference system.',
-    { crs: code },
   );
 }
 

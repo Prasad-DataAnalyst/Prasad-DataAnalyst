@@ -48,6 +48,7 @@ fn step_columns(s: &Value) -> Vec<String> {
     match s["kind"].as_str() {
         Some("convert_unit") => out.extend(s["columnId"].as_str().map(String::from)),
         Some("filter") => predicate_columns(&s["predicate"], &mut out),
+        Some("transform_crs") => {}
         _ => out.extend(
             s["columnIds"]
                 .as_array()
@@ -83,6 +84,7 @@ pub fn map_step_columns(s: &Value, f: &dyn Fn(&str) -> String) -> Value {
     match s["kind"].as_str() {
         Some("convert_unit") => out["columnId"] = json!(f(s["columnId"].as_str().unwrap_or(""))),
         Some("filter") => out["predicate"] = map_predicate(&s["predicate"], f),
+        Some("transform_crs") => {}
         _ => {
             out["columnIds"] = s["columnIds"]
                 .as_array()
@@ -429,6 +431,7 @@ pub fn plan(
     dataset_id: &str,
     dataset_name: &str,
     base: &[StageColumn],
+    places: &crate::steps::Places,
     applied: &[Value],
     available: &[Value],
 ) -> (Value, Vec<Value>) {
@@ -492,7 +495,7 @@ pub fn plan(
         let mut so_far: Vec<Value> = applied.to_vec();
         for (i, raw) in recipe["steps"].as_array().into_iter().flatten().enumerate() {
             let input = map_step_columns(raw, &map);
-            let checked = crate::steps::build(base, &so_far)
+            let checked = crate::steps::build(base, &so_far, places)
                 .and_then(|stages| crate::steps::validate(&input, &stages).map(|()| stages));
             let stages = match checked {
                 Ok(s) => s,
@@ -501,12 +504,7 @@ pub fn plan(
                     break;
                 }
             };
-            let seen = if input["kind"] == "convert_unit" {
-                &stages.working
-            } else {
-                &stages.output
-            };
-            descriptions.push(crate::steps::describe(&input, seen));
+            descriptions.push(crate::steps::describe(&input, &stages));
             let mut placed = input.clone();
             placed["id"] = json!(format!("s_plan_{i}"));
             placed["seq"] = json!(1);

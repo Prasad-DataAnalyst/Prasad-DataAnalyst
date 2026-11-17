@@ -281,6 +281,17 @@ export function defaultCommands(): Command[] {
       },
     },
     {
+      id: 'data.transform',
+      label: 'Transform coordinates…',
+      menu: 'data',
+      stage: 'process',
+      enabled: hasData,
+      run: (ctx) => {
+        const id = activeDataset(ctx.store);
+        if (id !== null) openDialog({ kind: 'transform', datasetId: id });
+      },
+    },
+    {
       id: 'data.filter',
       label: 'Filter…',
       menu: 'data',

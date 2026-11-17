@@ -68,6 +68,14 @@ export interface ColumnStats {
 }
 
 /** The answer to "where did this value come from?" (SAD section 9.3). */
+/** A coordinate reference system the engine transforms coordinates between (listCrs, FR-PRC-02). */
+export interface CrsInfo {
+  /** For example `EPSG:27700`. */
+  code: string;
+  name: string;
+  kind: 'geographic' | 'projected';
+}
+
 export interface CellLineage {
   datasetId: DatasetId;
   rowId: RowId;
@@ -79,7 +87,8 @@ export interface CellLineage {
     at: IsoUtc;
     actor: string;
     action: AuditAction;
-    old: JsonValue | undefined;
+    /** Absent for an entry with no old value, such as a step. */
+    old?: JsonValue;
     new: JsonValue | undefined;
     reason: string | undefined;
     method?: ConversionMethod;

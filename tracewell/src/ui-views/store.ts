@@ -17,6 +17,7 @@ import type {
 
 export type DialogRequest =
   | { kind: 'convert'; datasetId: DatasetId; columnId?: ColumnId }
+  | { kind: 'transform'; datasetId: DatasetId }
   | { kind: 'filter'; datasetId: DatasetId }
   | { kind: 'columns'; datasetId: DatasetId }
   | { kind: 'override'; datasetId: DatasetId; columnId?: ColumnId }

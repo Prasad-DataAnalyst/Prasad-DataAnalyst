@@ -364,6 +364,8 @@ export function stepColumns(s: StepInput): ColumnId[] {
   switch (s.kind) {
     case 'convert_unit':
       return [s.columnId];
+    case 'transform_crs':
+      return [];
     case 'filter':
       return predicateColumns(s.predicate);
     case 'select_columns':

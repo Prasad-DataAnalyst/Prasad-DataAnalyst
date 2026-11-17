@@ -14,6 +14,7 @@
     clippy::neg_cmp_op_on_partial_ord
 )]
 
+use crate::json::J;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -661,6 +662,16 @@ fn registry() -> &'static Value {
     R.get_or_init(|| serde_json::from_str(REGISTRY_JSON).expect("the CRS registry is JSON"))
 }
 
+/// The registry's version (CRS_REGISTRY_VERSION).
+pub fn registry_version() -> &'static str {
+    registry()["version"].as_str().unwrap_or_default()
+}
+
+/// Where the registry's parameters and formulas come from (CRS_REGISTRY_SOURCE).
+pub fn registry_source() -> &'static str {
+    registry()["source"].as_str().unwrap_or_default()
+}
+
 fn d2r() -> f64 {
     PI / 180.0
 }
@@ -672,7 +683,6 @@ fn r2d() -> f64 {
 /// A datum's transformation to WGS 84. Its code, name, method and accuracy describe a
 /// transformation in the audit log, which only the transformation step reads.
 #[derive(Clone, Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct DatumTransformation {
     pub code: String,
     pub name: String,
@@ -695,7 +705,6 @@ pub enum Projection {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct CrsDefinition {
     pub code: String,
     pub name: String,
@@ -838,6 +847,46 @@ pub fn crs_definition(code: &str) -> Option<CrsDefinition> {
     found
 }
 
+/// Every supported CRS by code, name and kind (supportedCrs): geographic ones first, each kind in
+/// code order.
+pub fn supported_crs() -> Vec<Value> {
+    let r = registry();
+    let mut codes: Vec<String> = Vec::new();
+    for kind in ["geographic", "projected"] {
+        codes.extend(
+            r[kind]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(k, _)| k.clone()),
+        );
+    }
+    for u in r["utm"].as_array().into_iter().flatten() {
+        let first = u["first"].as_i64().unwrap_or(0);
+        let zones = u["lastZone"].as_i64().unwrap_or(0) - u["firstZone"].as_i64().unwrap_or(0);
+        codes.extend((0..=zones).map(|i| (first + i).to_string()));
+    }
+    let mut all: Vec<CrsDefinition> = codes
+        .iter()
+        .filter_map(|c| crs_definition(&format!("EPSG:{c}")))
+        .collect();
+    let number = |c: &CrsDefinition| c.code[5..].parse::<u32>().unwrap_or(0);
+    all.sort_by(|a, b| {
+        b.geographic
+            .cmp(&a.geographic)
+            .then(number(a).cmp(&number(b)))
+    });
+    all.iter()
+        .map(|c| {
+            serde_json::json!({
+                "code": c.code,
+                "name": c.name,
+                "kind": if c.geographic { "geographic" } else { "projected" },
+            })
+        })
+        .collect()
+}
+
 /// The transformation between two systems (crsTransformer).
 pub struct Transformer {
     pub from: CrsDefinition,
@@ -889,7 +938,6 @@ fn shift_datum(from: &Datum, to: &Datum, phi: f64, lambda: f64) -> (f64, f64) {
     (p, wrap(l))
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn method_name(code: &str) -> &'static str {
     match code {
         "9603" => "Geocentric translations (geog2D domain)",
@@ -901,7 +949,6 @@ fn method_name(code: &str) -> &'static str {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn projection_operation(c: &CrsDefinition, reverse: bool) -> Option<Value> {
     let method = match c.projection.as_ref()? {
         Projection::Tm(_) => "9807",
@@ -915,7 +962,6 @@ fn projection_operation(c: &CrsDefinition, reverse: bool) -> Option<Value> {
     }))
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn datum_operation(d: &Datum, reverse: bool) -> Option<Value> {
     let t = d.to_wgs84.as_ref()?;
     Some(serde_json::json!({
@@ -928,7 +974,6 @@ fn datum_operation(d: &Datum, reverse: bool) -> Option<Value> {
 
 impl Transformer {
     /// The operations, as the audit log records them (CrsTransformer.operations).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn operations(&self) -> Vec<Value> {
         if self.identity {
             return Vec::new();
@@ -943,7 +988,6 @@ impl Transformer {
     }
 
     /// The sum of the operations' stated accuracies, in metres.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn accuracy(&self) -> f64 {
         self.operations()
             .iter()
@@ -980,6 +1024,67 @@ impl Transformer {
         }
         let (ox, oy) = project(&self.to, phi, lambda);
         (ox.is_finite() && oy.is_finite()).then_some((ox, oy))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Geometries (places.ts)
+
+fn positions(c: &J, t: &Transformer) -> Option<J> {
+    let J::Arr(items) = c else {
+        return Some(c.clone());
+    };
+    if let [J::Num(x), J::Num(y), rest @ ..] = items.as_slice() {
+        let (ox, oy) = t.forward(*x, *y)?;
+        let mut out = vec![J::Num(ox), J::Num(oy)];
+        out.extend(rest.iter().cloned());
+        return Some(J::Arr(out));
+    }
+    items
+        .iter()
+        .map(|item| positions(item, t))
+        .collect::<Option<Vec<_>>>()
+        .map(J::Arr)
+}
+
+fn walk(g: &J, t: &Transformer) -> Option<J> {
+    let J::Obj(members) = g else {
+        return Some(g.clone());
+    };
+    let mut out = Vec::with_capacity(members.len());
+    for (k, v) in members {
+        match (k.as_str(), v) {
+            ("bbox", _) => {}
+            ("coordinates", _) => out.push((k.clone(), positions(v, t)?)),
+            ("geometries", J::Arr(items)) => out.push((
+                k.clone(),
+                J::Arr(
+                    items
+                        .iter()
+                        .map(|m| walk(m, t))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+            )),
+            _ => out.push((k.clone(), v.clone())),
+        }
+    }
+    Some(J::Obj(out))
+}
+
+/// A geometry transformed position by position (transformGeometry): every position's first two
+/// ordinates are transformed and a third, such as a height, kept; a bounding box is left out,
+/// since it no longer bounds the geometry. None for a value that is not a geometry and for a
+/// geometry with a position the transformation cannot place.
+pub fn transform_geometry(g: &J, t: &Transformer) -> Option<J> {
+    match g {
+        J::Obj(members)
+            if members
+                .iter()
+                .any(|(k, v)| k == "type" && matches!(v, J::Str(_))) =>
+        {
+            walk(g, t)
+        }
+        _ => None,
     }
 }
 

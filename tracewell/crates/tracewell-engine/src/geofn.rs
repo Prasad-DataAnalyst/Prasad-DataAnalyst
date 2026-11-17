@@ -1,6 +1,7 @@
-//! The geometry tests of geo.rs as DuckDB scalar functions, so the spatial checks, the area filter
-//! and the statistics of a geometry column run in SQL beside every other condition. A geometry
-//! is the JSON text its column stores; each function reads that text and asks geo.rs.
+//! The geometry tests of geo.rs and the coordinate transformation of geodesy.rs as DuckDB scalar
+//! functions, so the spatial checks, the area filter, the statistics of a geometry column and a
+//! transformation step run in SQL beside every other condition. A geometry is the JSON text its
+//! column stores; each function reads that text and asks geo.rs or geodesy.rs.
 //!
 //! A missing geometry gives no text from the functions that return text and false from the
 //! tests. DuckDB may also answer NULL for a NULL argument without asking the function at all (it
@@ -9,7 +10,7 @@
 
 use crate::canonical::canonical_json;
 use crate::geo::{self, BBox, Problem};
-use crate::json::{J, parse};
+use crate::json::{J, parse, stringify};
 use duckdb::Connection;
 use duckdb::arrow::array::{Array, ArrayRef, AsArray, BooleanArray, RecordBatch, StringArray};
 use duckdb::arrow::datatypes::{DataType, Float64Type};
@@ -272,6 +273,38 @@ impl VArrowScalar for CrsTransform {
     }
 }
 
+/// tw_crs_geometry(geometry, from, to): the geometry transformed between the two systems
+/// (transformGeometry), as JSON text, or NULL.
+struct CrsGeometry;
+
+impl VArrowScalar for CrsGeometry {
+    type State = ();
+
+    fn invoke(_: &(), batch: RecordBatch) -> Out {
+        let mut cache = Transformers::new();
+        let out: StringArray = (0..batch.num_rows())
+            .map(|i| {
+                let g = geometry_at(batch.column(0), i)?;
+                let from = text_at(batch.column(1), i)?;
+                let to = text_at(batch.column(2), i)?;
+                let t = cache
+                    .entry((from.to_string(), to.to_string()))
+                    .or_insert_with(|| crate::geodesy::Transformer::new(from, to))
+                    .as_ref()?;
+                crate::geodesy::transform_geometry(&g, t).map(|g| stringify(&g))
+            })
+            .collect();
+        Ok(Arc::new(out))
+    }
+
+    fn signatures() -> Vec<ArrowFunctionSignature> {
+        vec![ArrowFunctionSignature::exact(
+            vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+            DataType::Utf8,
+        )]
+    }
+}
+
 /// Makes the functions known to the database behind `conn`; every connection to it sees them.
 pub fn register(conn: &Connection) -> duckdb::Result<()> {
     conn.register_scalar_function::<Defects>("tw_geo_defects")?;
@@ -281,6 +314,7 @@ pub fn register(conn: &Connection) -> duckdb::Result<()> {
     conn.register_scalar_function::<Outside>("tw_geo_outside")?;
     conn.register_scalar_function::<Meets>("tw_geo_meets")?;
     conn.register_scalar_function::<CrsTransform>("tw_crs_transform")?;
+    conn.register_scalar_function::<CrsGeometry>("tw_crs_geometry")?;
     Ok(())
 }
 
@@ -312,6 +346,49 @@ mod tests {
             (e.to_bits(), n.to_bits())
         );
         assert_eq!((got.2, got.3, got.4), (None, None, None));
+    }
+
+    /// Every position moves, a height stays, a box goes, and a position the transformation cannot
+    /// place leaves no geometry.
+    #[test]
+    fn transforms_geometries_in_sql() {
+        let conn = Connection::open_in_memory().unwrap();
+        register(&conn).unwrap();
+        let t = crate::geodesy::Transformer::new("EPSG:4326", "EPSG:32631").unwrap();
+        let (e, n) = t.forward(2.5, 56.0).unwrap();
+        let (e2, n2) = t.forward(3.0, 57.0).unwrap();
+        let num = crate::canonical::canonical_number;
+        let column = |g: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT tw_crs_geometry(?, 'EPSG:4326', 'EPSG:32631')",
+                [g],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            column(r#"{"type":"Point","bbox":[2.5,56,2.5,56],"coordinates":[2.5,56,-120]}"#),
+            Some(format!(
+                r#"{{"type":"Point","coordinates":[{},{},-120]}}"#,
+                num(e),
+                num(n)
+            ))
+        );
+        assert_eq!(
+            column(
+                r#"{"type":"GeometryCollection","geometries":[{"type":"LineString","coordinates":[[2.5,56],[3,57]]}]}"#
+            ),
+            Some(format!(
+                r#"{{"type":"GeometryCollection","geometries":[{{"type":"LineString","coordinates":[[{},{}],[{},{}]]}}]}}"#,
+                num(e),
+                num(n),
+                num(e2),
+                num(n2)
+            ))
+        );
+        assert_eq!(column(r#"{"type":"Point","coordinates":[2.5,95]}"#), None);
+        assert_eq!(column(r#"{"coordinates":[2.5,56]}"#), None);
+        assert_eq!(column("not json"), None);
     }
 
     #[test]

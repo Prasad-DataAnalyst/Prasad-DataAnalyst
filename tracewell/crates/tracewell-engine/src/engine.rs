@@ -19,7 +19,7 @@ use crate::overrides::{Outcome, ReadEnv, original_file, override_of};
 use crate::parse::Kind;
 use crate::parse::Raw;
 use crate::rules::{Draft, RowSet, check_packs, find_rule};
-use crate::steps::{StageColumn, Stages};
+use crate::steps::{Places, StageColumn, Stages};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
 use serde_json::{Map, Value, json};
@@ -141,7 +141,14 @@ impl Dataset {
 
     /// The working and output views' columns after the steps.
     fn stages(&self) -> Result<Stages> {
-        crate::steps::build(&self.base_columns(), &self.steps)
+        crate::steps::build(&self.base_columns(), &self.steps, &Places::of(&self.spec))
+    }
+
+    /// The places of the working view, which a transformation moves to another CRS.
+    fn places(&self) -> Places {
+        self.stages()
+            .map(|st| st.places)
+            .unwrap_or_else(|_| Places::of(&self.spec))
     }
 
     /// The view of the output stage: the working view less the rows the filters drop.
@@ -274,14 +281,6 @@ fn out_columns(cols: &[StageColumn]) -> Vec<crate::export::OutColumn> {
                 .to_string(),
         })
         .collect()
-}
-
-/// Where a dataset's places are, for its exports.
-fn spatial_of(spec: &Value) -> crate::export::Spatial {
-    crate::export::Spatial {
-        geometry_column: geometry_column_of(spec).map(String::from),
-        crs: spec["crs"]["value"]["code"].as_str().map(String::from),
-    }
 }
 
 pub struct Project {
@@ -572,7 +571,7 @@ impl Engine {
                 "exportProfiles": crate::export::NATIVE_PROFILES,
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
-                "crsTransform": false,
+                "crsTransform": true,
             }
         })
     }
@@ -702,8 +701,8 @@ impl Engine {
             "name": d.name,
             "source": source_of(&d.spec),
             "columns": cols.iter().map(|c| c.schema.clone()).collect::<Vec<_>>(),
-            "crs": d.spec["crs"],
-            "geometryColumn": geometry_column_of(&d.spec),
+            "crs": stages.places.crs,
+            "geometryColumn": stages.places.geometry_column,
             "partial": false,
             "rowCount": if output { d.output_rows } else { d.visible_rows() },
         }))
@@ -1050,14 +1049,30 @@ impl Engine {
                 )
             })?;
         let first = st.draft.columns.first();
-        let column = first.and_then(|c| {
-            let kind = d.columns.iter().find(|(id, _)| id == c)?.1;
-            let plan = d.spec["columns"]
+        // The issue's column when it is still in the view; after a replacing step, the column that
+        // replaced it. A computed column has no text of its own; the source column's plan says
+        // where its row is.
+        let stages = d.stages()?;
+        let root = first.map(|c| root_of(&stages, c));
+        let plan = root.as_ref().and_then(|r| {
+            d.spec["columns"]
                 .as_array()?
                 .iter()
-                .find(|p| p["id"] == c.as_str())?
-                .clone();
-            Some((c.clone(), kind, plan))
+                .find(|p| p["id"] == r.as_str())
+                .cloned()
+        });
+        let column = first.and_then(|c| {
+            let shown = stages.working.iter().find(|x| x.id() == c).or_else(|| {
+                stages
+                    .working
+                    .iter()
+                    .find(|x| Some(root_of(&stages, x.id())) == root)
+            })?;
+            Some((
+                shown.id().to_string(),
+                shown.kind,
+                shown.derived_from().is_some(),
+            ))
         });
         let rows: Vec<u64> = st
             .flagged
@@ -1073,7 +1088,8 @@ impl Engine {
                 .collect::<Vec<_>>()
                 .join(", ");
             let (select, raw) = match &column {
-                Some((c, _, _)) => (
+                Some((c, _, true)) => (format!(", v.{}", quote_ident(c)), ", NULL".to_string()),
+                Some((c, _, false)) => (
                     format!(", v.{}", quote_ident(c)),
                     format!(
                         ", (SELECT coalesce(e.raw, e.marker) FROM {exc} e WHERE e.rid = v.__rid AND e.col = {col})",
@@ -1093,15 +1109,15 @@ impl Engine {
             while let Some(row) = result.next()? {
                 let rid: i64 = row.get(0)?;
                 let loc: i64 = row.get(1)?;
-                let (value, raw, locator) = match &column {
-                    Some((_, kind, plan)) => (
+                let (value, raw) = match &column {
+                    Some((_, kind, _)) => (
                         Self::cell(row, 2, *kind)?,
                         row.get::<_, Option<String>>(3)?
                             .map_or(Value::Null, Value::String),
-                        locator(&d.spec, loc, Some(plan)),
                     ),
-                    None => (Value::Null, Value::Null, locator(&d.spec, loc, None)),
+                    None => (Value::Null, Value::Null),
                 };
+                let locator = locator(&d.spec, loc, plan.as_ref());
                 items.push(json!({
                     "issueId": id,
                     "rowId": rid,
@@ -1186,7 +1202,7 @@ impl Engine {
             &quote_ident(&d.out_view()),
             &out_columns(&stages.output),
             d.output_rows,
-            &spatial_of(&d.spec),
+            &stages.places.spatial(),
         )?))
     }
 
@@ -1372,7 +1388,7 @@ fn install_views(conn: &Connection, d: &mut Dataset) -> Result<()> {
     for der in &stages.derived {
         base = format!(
             "SELECT *, {} AS {} FROM ({base})",
-            der.method.sql(&quote_ident(&der.source)),
+            der.sql,
             quote_ident(&der.id)
         );
     }
@@ -1442,8 +1458,8 @@ fn check_ctx<'a>(
         dataset_id: d.id.clone(),
         row_count: d.row_count,
         columns: d.check_columns(),
-        crs: d.spec["crs"]["value"]["code"].as_str().map(String::from),
-        geometry_column: geometry_column_of(&d.spec).map(String::from),
+        crs: d.places().code().map(String::from),
+        geometry_column: d.places().geometry_column,
         notes: &d.notes,
         assumptions: &d.assumptions,
         project_area,
@@ -1494,14 +1510,21 @@ fn recheck_after(
     Ok(())
 }
 
-/// The change a cell edit makes: the values of its column, and of the columns converted from it.
+/// The change a cell edit makes: the values of its column, and of every column computed from it,
+/// such as both coordinates a transformation computes from either of its columns.
 fn edited(d: &Dataset, column: &str) -> Result<Change> {
     let stages = d.stages()?;
+    let mut changed = HashSet::from([column.to_string()]);
+    for der in &stages.derived {
+        if der.reads.iter().any(|r| changed.contains(r)) {
+            changed.insert(der.id.clone());
+        }
+    }
     Ok(Change::Columns(
         stages
             .working
             .iter()
-            .filter(|c| root_of(&stages, c.id()) == column)
+            .filter(|c| changed.contains(c.id()))
             .map(|c| c.id().to_string())
             .collect(),
     ))
@@ -1795,10 +1818,10 @@ fn apply_decision(
             let mut step = e["new"].clone();
             step["id"] = json!(step_id);
             step["seq"] = json!(seq);
-            let convert = step["kind"] == "convert_unit";
+            let working = crate::steps::is_working_step(&step);
             d.steps.push(step);
             install_views(conn, d)?;
-            if convert && !skip(&id, seq) {
+            if working && !skip(&id, seq) {
                 recheck(conn, d, area, seq)?;
             }
         }
@@ -1806,13 +1829,13 @@ fn apply_decision(
             let area = area_of(&p.project_area);
             let d = dataset_mut(p, &id)?;
             let step_id = &e["target"]["stepId"];
-            let convert = d
+            let working = d
                 .steps
                 .iter()
-                .any(|st| st["id"] == *step_id && st["kind"] == "convert_unit");
+                .any(|st| st["id"] == *step_id && crate::steps::is_working_step(st));
             d.steps.retain(|st| st["id"] != *step_id);
             install_views(conn, d)?;
-            if convert && !skip(&id, seq) {
+            if working && !skip(&id, seq) {
                 recheck(conn, d, area, seq)?;
             }
         }
@@ -2477,11 +2500,12 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
 /// created (requireStepsBuild).
 fn require_steps_build(d: &Dataset, steps: Vec<Value>, what: &str) -> Result<()> {
     let base = d.base_columns();
-    if crate::steps::build(&base, &steps).is_ok() {
+    let places = Places::of(&d.spec);
+    if crate::steps::build(&base, &steps, &places).is_ok() {
         return Ok(());
     }
     let later = (0..steps.len())
-        .find(|&i| crate::steps::build(&base, &steps[..=i]).is_err())
+        .find(|&i| crate::steps::build(&base, &steps[..=i], &places).is_err())
         .and_then(|i| steps[i]["id"].as_str().map(String::from));
     Err(EngineError::invalid(
         format!(
@@ -2495,7 +2519,7 @@ fn require_steps_build(d: &Dataset, steps: Vec<Value>, what: &str) -> Result<()>
     ))
 }
 
-const STEP_KINDS: [&str; 3] = ["convert_unit", "filter", "select_columns"];
+const STEP_KINDS: [&str; 4] = ["convert_unit", "transform_crs", "filter", "select_columns"];
 
 fn require_step_kind(s: &Value) -> Result<()> {
     if s["kind"].as_str().is_some_and(|k| STEP_KINDS.contains(&k)) {
@@ -2508,7 +2532,7 @@ fn require_step_kind(s: &Value) -> Result<()> {
                 .as_str()
                 .map_or_else(|| "undefined".to_string(), String::from)
         ),
-        "Choose a unit conversion, a filter or a column selection.",
+        "Choose a unit conversion, a coordinate transformation, a filter or a column selection.",
     ))
 }
 
@@ -2523,19 +2547,13 @@ impl Engine {
                 json!({ "ok": false, "error": e.to_json(), "description": "", "sample": [] }),
             );
         }
-        let convert = s["kind"] == "convert_unit";
-        let seen = if convert {
-            &stages.working
-        } else {
-            &stages.output
-        };
-        let description = crate::steps::describe(s, seen);
+        let description = crate::steps::describe(s, &stages);
         let mut next = s.clone();
         next["id"] = json!(format!("s{}", d.steps.len() + 1));
         next["seq"] = json!(9_007_199_254_740_991u64);
         let mut steps = d.steps.clone();
         steps.push(next);
-        let after = crate::steps::build(&d.base_columns(), &steps)?;
+        let after = crate::steps::build(&d.base_columns(), &steps, &Places::of(&d.spec))?;
         let resulting = if after.filters.is_empty() {
             d.visible_rows()
         } else {
@@ -2550,14 +2568,44 @@ impl Engine {
             )?;
             n.max(0) as u64
         };
-        if !convert {
-            return Ok(
-                json!({ "ok": true, "description": description, "sample": [], "resultingRows": resulting }),
-            );
-        }
-        let method = crate::steps::conversion_for(s, &stages.working)?;
-        let source = s["columnId"].as_str().unwrap_or_default();
-        let kind = stages
+        // The column a working step changes first, before and after: the converted column, or the
+        // geometry or the longitude or easting a transformation replaces.
+        let (method, source, to) = match s["kind"].as_str() {
+            Some("convert_unit") => (
+                Some(crate::steps::conversion_for(s, &stages.working)?),
+                s["columnId"].as_str().unwrap_or_default().to_string(),
+                s["toUnit"].as_str().unwrap_or_default(),
+            ),
+            Some("transform_crs") => {
+                let plan = crate::steps::crs_plan(s, &stages.working, &stages.places)?;
+                let source = match (plan.geometry, plan.pair) {
+                    (Some(g), _) => g,
+                    (None, Some((x, _))) => x,
+                    (None, None) => {
+                        return Err(EngineError::internal("The transformation reads no column."));
+                    }
+                };
+                (
+                    None,
+                    source.id().to_string(),
+                    s["toCrs"].as_str().unwrap_or_default(),
+                )
+            }
+            _ => {
+                return Ok(
+                    json!({ "ok": true, "description": description, "sample": [], "resultingRows": resulting }),
+                );
+            }
+        };
+        let id = crate::steps::derived_id(&source, to);
+        let (sql, kind) = after
+            .derived
+            .iter()
+            .find(|der| der.id == id)
+            .zip(after.every.iter().find(|c| c.id() == id))
+            .map(|(der, c)| (der.sql.clone(), c.kind))
+            .ok_or_else(|| EngineError::internal("The step derives no column."))?;
+        let source_kind = stages
             .working
             .iter()
             .find(|c| c.id() == source)
@@ -2565,10 +2613,9 @@ impl Engine {
         let shown = d.visible_rows().min(20);
         let mut sample = Vec::new();
         if shown > 0 {
-            let src = quote_ident(source);
             let mut stmt = self.conn.prepare(&format!(
-                "SELECT __rid, {src}, {} FROM {} WHERE __rid >= ? AND __rid < ? ORDER BY __rid",
-                method.sql(&src),
+                "SELECT __rid, {}, {sql} FROM {} WHERE __rid >= ? AND __rid < ? ORDER BY __rid",
+                quote_ident(&source),
                 quote_ident(&d.view)
             ))?;
             let mut rows = stmt.query(duckdb::params![
@@ -2578,18 +2625,19 @@ impl Engine {
             while let Some(row) = rows.next()? {
                 sample.push(json!({
                     "rowId": row.get::<_, i64>(0)?,
-                    "before": Self::cell(row, 1, kind)?,
-                    "after": Self::cell(row, 2, Kind::Number)?,
+                    "before": Self::cell(row, 1, source_kind)?,
+                    "after": Self::cell(row, 2, kind)?,
                 }));
             }
         }
-        Ok(json!({
-            "ok": true,
-            "method": method.to_json(),
-            "description": description,
-            "sample": sample,
-            "resultingRows": resulting,
-        }))
+        let mut out = json!({ "ok": true });
+        if let Some(m) = method {
+            out["method"] = m.to_json();
+        }
+        out["description"] = json!(description);
+        out["sample"] = json!(sample);
+        out["resultingRows"] = json!(resulting);
+        Ok(out)
     }
 }
 
@@ -2604,6 +2652,11 @@ impl Engine {
             })
             .collect::<Result<Vec<_>>>()
             .map(Value::from)
+    }
+
+    /// The coordinate reference systems a transformation can use (listCrs).
+    pub fn list_crs(&self) -> Value {
+        Value::from(crate::geodesy::supported_crs())
     }
 
     /// The units of the registry (listUnits): of one quantity, or those a unit converts to
@@ -3406,17 +3459,18 @@ fn commit_step(
     let stages = d.stages()?;
     crate::steps::validate(input, &stages)?;
     let convert = input["kind"] == "convert_unit";
-    let seen = if convert {
-        &stages.working
-    } else {
-        &stages.output
-    };
     let method = if convert {
-        Some(crate::steps::conversion_for(input, seen)?)
+        Some(crate::steps::conversion_for(input, &stages.working)?)
     } else {
         None
     };
-    let description = crate::steps::describe(input, seen);
+    let description = crate::steps::describe(input, &stages);
+    // A coordinate transformation records its systems, EPSG operations and accuracy (FR-PRC-02).
+    let transformation = if input["kind"] == "transform_crs" {
+        Some(crate::steps::crs_transformation(input, &stages)?)
+    } else {
+        None
+    };
     let mut target = json!({ "datasetId": dataset_id, "stepId": step_id });
     if convert {
         target["columnId"] = input["columnId"].clone();
@@ -3427,7 +3481,11 @@ fn commit_step(
     if let Some(m) = &method {
         entry.insert("method".into(), m.to_json());
     }
-    entry.insert("payload".into(), json!({ "description": description }));
+    let mut payload = json!({ "description": description });
+    if let Some(t) = transformation {
+        payload["transformation"] = t;
+    }
+    entry.insert("payload".into(), payload);
     let appended = engine.append(entry, None)?;
     let Engine {
         conn,
@@ -3585,6 +3643,7 @@ impl Engine {
             &d.id,
             &d.name,
             &d.base_columns(),
+            &Places::of(&d.spec),
             &d.steps,
             &builtin_packs(),
         )
@@ -3650,6 +3709,7 @@ pub fn apply_recipe(
                 &d.id,
                 &d.name,
                 &d.base_columns(),
+                &Places::of(&d.spec),
                 &d.steps,
                 &builtin_packs(),
             );
@@ -3958,8 +4018,9 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
     let exceptions = quote_ident(&d.exceptions_view());
     let row_count = d.row_count;
     let columns = d.check_columns();
-    let crs = d.spec["crs"]["value"]["code"].as_str().map(String::from);
-    let geometry_column = geometry_column_of(&d.spec).map(String::from);
+    let places = d.places();
+    let crs = places.code().map(String::from);
+    let geometry_column = places.geometry_column;
     let notes = d.notes.clone();
     let assumptions = d.assumptions.clone();
     let project_area = area_of(&engine.project()?.project_area);
@@ -4081,7 +4142,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
     let target = target_path(&req["target"])?;
     let stages = d.stages()?;
     let columns = out_columns(&stages.output);
-    let spatial = spatial_of(&d.spec);
+    let spatial = stages.places.spatial();
     if let Some((reason, fix)) = crate::export::refusal(&columns, &spatial, &profile) {
         return Err(EngineError::new("EXPORT_REFUSED", reason, fix));
     }
@@ -4096,7 +4157,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
                 .iter()
                 .find(|e| e["seq"] == st["seq"])
                 .and_then(|e| e["payload"]["description"].as_str().map(String::from))
-                .unwrap_or_else(|| crate::steps::describe(st, &stages.working))
+                .unwrap_or_else(|| crate::steps::describe(st, &stages))
         })
         .collect();
     let base_name = req["baseName"]

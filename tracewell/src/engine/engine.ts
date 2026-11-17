@@ -18,6 +18,7 @@ import {
   type AuditQuery,
   type ByteSource,
   type CellLineage,
+  type CrsInfo,
   type ChainReport,
   type CheckSummary,
   type Clock,
@@ -81,9 +82,10 @@ import {
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
+import { supportedCrs } from '@tw/geo';
 import { suggestedFileName } from '@tw/project';
 import { BUILTIN_PACK_JSON, GENERIC_DQ, SYSTEM_RULES, rulePackRef } from '@tw/rules';
-import { conversionFor, describeStep, previewStep, validateStep } from '@tw/steps';
+import { conversionFor, crsTransformationOf, describeStep, isWorkingStep, previewStep, validateStep } from '@tw/steps';
 import { REGISTRY_JSON, REGISTRY_VERSION } from '@tw/units';
 import { checkOverrideValue, datasetOf, decisionDraft, requireReason, requireStepsBuild } from './decisions';
 import { toIssue } from './issues-state';
@@ -276,7 +278,7 @@ export class LocalEngine implements EngineImpl {
         exportProfiles: EXPORT_PROFILES.map((p) => p.id),
         memoryBudgetBytes: this.memoryBudgetBytes,
         spillToDisk: false,
-        crsTransform: false,
+        crsTransform: true,
       },
     };
   }
@@ -947,13 +949,15 @@ export class LocalEngine implements EngineImpl {
     const stepId = `s${state.nextStep}`;
     const method = input.kind === 'convert_unit' ? conversionFor(input, schema) : undefined;
     const description = describeStep(input, schema);
+    // A coordinate transformation records its systems, EPSG operations and accuracy (FR-PRC-02).
+    const transformation = input.kind === 'transform_crs' ? crsTransformationOf(input, schema) : undefined;
     const entry = await this.commit(state, {
       action: 'step.apply',
       target: { datasetId: ds.id, stepId, ...(input.kind === 'convert_unit' ? { columnId: input.columnId } : {}) },
       new: asJson(input),
       reason,
       ...(method === undefined ? {} : { method }),
-      payload: { description },
+      payload: transformation === undefined ? { description } : asJson({ description, transformation }),
     });
     const step = ds.steps.find((x) => x.id === stepId);
     if (step === undefined)
@@ -996,6 +1000,10 @@ export class LocalEngine implements EngineImpl {
     return listUnits(q);
   }
 
+  async listCrs(): Promise<CrsInfo[]> {
+    return supportedCrs();
+  }
+
   async listRulePacks(): Promise<RulePack[]> {
     return structuredClone([GENERIC_DQ, SYSTEM_RULES]);
   }
@@ -1005,7 +1013,8 @@ export class LocalEngine implements EngineImpl {
 
   async listExportProfiles(datasetId: DatasetId): Promise<ExportProfileStatus[]> {
     const ds = this.dataset(datasetId);
-    return structuredClone(profileStatuses(outputView(ds), ds.dataset.schema.crs));
+    const view = outputView(ds);
+    return structuredClone(profileStatuses(view, view.schema.crs));
   }
 
   async exportData(req: ExportRequest): Promise<JobHandle> {
@@ -1017,7 +1026,8 @@ export class LocalEngine implements EngineImpl {
       );
     }
     this.requireTarget(req.target);
-    const plan = planExport(outputView(ds), req.profile, ds.dataset.schema.crs);
+    const out = outputView(ds);
+    const plan = planExport(out, req.profile, out.schema.crs);
     if (!plan.available) {
       throw new EngineError(
         'EXPORT_REFUSED',
@@ -1155,15 +1165,16 @@ export class LocalEngine implements EngineImpl {
 
   private validStep(ds: DatasetState, s: StepInput): { input: StepInput; schema: TableSchema } {
     const kind = (s as { kind?: unknown } | undefined)?.kind;
-    if (kind !== 'convert_unit' && kind !== 'filter' && kind !== 'select_columns') {
+    if (kind !== 'convert_unit' && kind !== 'transform_crs' && kind !== 'filter' && kind !== 'select_columns') {
       throw invalid(
         `The step kind ${String(kind)} does not exist.`,
-        'Choose a unit conversion, a filter or a column selection.',
+        'Choose a unit conversion, a coordinate transformation, a filter or a column selection.',
       );
     }
     const input = roundTrip(s);
-    // A conversion reads the working view (every column); filters and selections the output so far.
-    const schema = input.kind === 'convert_unit' ? workingView(ds).schema : outputView(ds).schema;
+    // A conversion or transformation reads the working view (every column); filters and selections
+    // the output so far.
+    const schema = isWorkingStep(input) ? workingView(ds).schema : outputView(ds).schema;
     const valid = validateStep(input, schema);
     if (!valid.ok) throw EngineError.from(valid.error);
     return { input, schema };
@@ -1182,7 +1193,7 @@ export class LocalEngine implements EngineImpl {
       owner: this.o.owner,
       project: { id: state.id, name: state.name },
       view,
-      crs: ds.dataset.schema.crs,
+      crs: view.schema.crs,
       sources: original === undefined ? [] : [{ ...original.info }],
       rulePacks: ds.checkPacks,
       unitRegistry: { version: REGISTRY_VERSION, sha256: sha256Hex(REGISTRY_JSON) },

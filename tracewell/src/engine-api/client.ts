@@ -4,6 +4,7 @@ import {
   type AuditEntry,
   type AuditQuery,
   type CellLineage,
+  type CrsInfo,
   type ChainReport,
   type ColumnId,
   type ColumnStats,
@@ -167,6 +168,10 @@ export class EngineClient implements EngineApi {
 
   listRulePacks(): Promise<RulePack[]> {
     return this.invoke('listRulePacks');
+  }
+
+  listCrs(): Promise<CrsInfo[]> {
+    return this.invoke('listCrs');
   }
 
   listExportProfiles(datasetId: DatasetId): Promise<ExportProfileStatus[]> {

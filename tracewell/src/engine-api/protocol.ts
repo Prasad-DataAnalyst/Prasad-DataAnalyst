@@ -8,6 +8,7 @@ import type {
   AuditEntry,
   AuditQuery,
   CellLineage,
+  CrsInfo,
   ChainReport,
   ColumnId,
   ColumnStats,
@@ -54,7 +55,7 @@ import type {
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.6.0';
+export const PROTOCOL_VERSION = '0.7.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -111,6 +112,8 @@ export interface EngineApi {
   removeStep(datasetId: DatasetId, stepId: StepId, reason: string): Promise<AuditEntry>;
   listUnits(q?: { quantity?: QuantityKind; compatibleWith?: string }): Promise<UnitInfo[]>;
   listRulePacks(): Promise<RulePack[]>;
+  /** The coordinate reference systems a transformation step can use (FR-PRC-02). Protocol 0.7. */
+  listCrs(): Promise<CrsInfo[]>;
   listExportProfiles(datasetId: DatasetId): Promise<ExportProfileStatus[]>;
   /** Result: ExportResult. */
   exportData(req: ExportRequest): Promise<JobHandle>;
@@ -214,6 +217,7 @@ export const ENGINE_METHODS = [
   'removeStep',
   'listUnits',
   'listRulePacks',
+  'listCrs',
   'listExportProfiles',
   'exportData',
   'cancelJob',

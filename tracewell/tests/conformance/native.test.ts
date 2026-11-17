@@ -2374,8 +2374,9 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   });
 
-  it('lists the same rule packs and units', async () => {
+  it('lists the same rule packs, units and coordinate reference systems', async () => {
     expect(await native.client.listRulePacks()).toEqual(await reference.listRulePacks());
+    expect(await native.client.listCrs()).toEqual(await reference.listCrs());
     for (const q of [
       undefined,
       { quantity: 'pressure_abs' as const },
@@ -2517,6 +2518,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       for (const e of [nat.client, lite]) await e.newProject({ name: 'Order', profile: { ...PROFILE } });
       await both('hello', (e) => e.hello());
       await both('listUnits', (e) => e.listUnits());
+      await both('listCrs', (e) => e.listCrs());
       await both('listRulePacks', (e) => e.listRulePacks());
       const files = [
         'csv_well_daily_golden.csv',
@@ -2695,8 +2697,12 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     const [rows] = await pair('rows', (e) => allRows(e, id));
     for (const c of schema.columns) {
       await pair(`statistics of ${c.name}`, (e) => e.getColumnStats(id, c.id));
+      // When an entry was written is each engine's clock, which other calls also read.
       for (let r = 0; r < rows.length; r++)
-        await pair(`lineage of ${c.name} row ${r}`, (e) => e.explainCell(id, r, c.id));
+        await pair(`lineage of ${c.name} row ${r}`, async (e) => {
+          const l = await e.explainCell(id, r, c.id);
+          return { ...l, history: l.history.map(({ at: _at, ...h }) => h) };
+        });
     }
     const [issues] = await pair('issues', async (e) => (await e.listIssues({ datasetId: id, limit: 1000 })).items);
     for (const i of issues) {
@@ -3113,6 +3119,219 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       lite.close();
     }
   }, 90_000);
+  it('transforms coordinates as the TypeScript engine does: previews, entries, views, checks, edits, exports and refusals', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-crs-'));
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    const both = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+      const strip = (v: unknown) =>
+        Array.isArray(v) && v.every((x) => typeof x === 'object' && x !== null && 'hash' in x)
+          ? (v as AuditEntry[]).map(content)
+          : v;
+      expect(strip(x), what).toEqual(strip(y));
+      orderDifferences(strip(x), strip(y), what, found);
+      return [x as T, y as T];
+    };
+    const step = async (what: string, id: string, s: StepInput) => {
+      await both(`${what}: preview`, (e) => e.previewStep(id, s));
+      const [a, b] = await both(`${what}: apply`, async (e) => {
+        const r = await e.awaitJob<StepResult>(await e.applyStep(id, s, `Step: ${what}`));
+        return { ...r, audit: content(r.audit) };
+      });
+      expect(a.audit, what).toEqual(b.audit);
+      for (const stage of ['working', 'output'] as const) {
+        await both(`${what}: ${stage} schema`, (e) => e.getSchema(id, stage));
+      }
+      await sameDataset(nat.client, lite, id, what, found);
+      return a.step.id;
+    };
+    const exported = async (what: string, id: string) => {
+      for (const profile of ['geojson', 'csv'] as const) {
+        const run = async (e: EngineClient) => e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
+        const [a, b] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+        if ('code' in (b as object)) {
+          expect(a, `${what} as ${profile}: refusal`).toEqual(b);
+          continue;
+        }
+        const [x, y] = [a as ExportResult, b as ExportResult];
+        expect([x.ok, y.ok], `${what} as ${profile}`).toEqual([true, true]);
+        expect(x.manifest.dataset, `${what} as ${profile}`).toEqual(y.manifest.dataset);
+        const file = (r: ExportResult) =>
+          new TextDecoder().decode(readZip(r.bytes as Uint8Array).read(`data.${profile}`));
+        expect(file(x), `${what} as ${profile}`).toBe(file(y));
+      }
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Coordinates', profile: { ...PROFILE } });
+      // Wells on British National Grid: one without an easting, one far off any grid.
+      const bng = join(folder, 'wells_bng.csv');
+      writeFileSync(
+        bng,
+        'well,Easting,Northing,depth\nW1,651409.903,313177.270,1200\nW2,577274.99,69740.50,980\nW3,400000,500000,1500\nW4,,250000,800\nW5,9e9,1e12,10\n',
+      );
+      const imported = async (path: string) => {
+        const file = { kind: 'path' as const, path };
+        const [d] = await both(`import ${path}`, async (e) => {
+          const ds = await e.awaitJob<DatasetSummary>(await e.importFile(file));
+          await e.awaitJob<CheckSummary>(await e.runChecks(ds.id));
+          return ds;
+        });
+        return d.id;
+      };
+      const wells = await imported(bng);
+      const plainPath = join(folder, 'plain.csv');
+      writeFileSync(plainPath, 'a,b\n1,2\n');
+      const plain = await imported(plainPath);
+      const golden = await imported(fixturePath('csv_well_daily_golden.csv'));
+      // Refused alike: a dataset whose CRS is not known, and one already in the CRS asked for.
+      await both('no CRS', (e) => e.previewStep(plain, { kind: 'transform_crs', toCrs: 'EPSG:4326' }));
+      await both('already there', (e) => e.previewStep(golden, { kind: 'transform_crs', toCrs: 'EPSG:4326' }));
+      await both('no CRS, applied', async (e) =>
+        e.awaitJob<StepResult>(await e.applyStep(plain, { kind: 'transform_crs', toCrs: 'EPSG:4326' }, 'x')),
+      );
+      await both('grid stated', (e) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId: wells,
+          property: 'crs',
+          value: { code: 'EPSG:27700', source: 'user' },
+          reason: 'Grid stated by the survey contractor',
+        }),
+      );
+      const sourceEasting = (await lite.getSchema(wells)).columns.find((c) => c.role.value === 'easting')?.id as string;
+      for (const toCrs of ['EPSG:27700', 'EPSG:9999', 'EPSG:3857', 'OGC:CRS83', '']) {
+        await both(`to ${toCrs}`, (e) => e.previewStep(wells, { kind: 'transform_crs', toCrs }));
+      }
+      await step('wells to WGS 84', wells, { kind: 'transform_crs', toCrs: 'EPSG:4326' });
+      await step('wells to UTM 30N', wells, { kind: 'transform_crs', toCrs: 'EPSG:32630' });
+      await exported('wells in UTM', wells);
+      // An edit of either coordinate moves both transformed ones; the checks see it.
+      const base = (await lite.getSchema(wells)).columns;
+      const easting = base.find((c) => c.derivedFrom !== undefined && c.role.value === 'easting')?.id as string;
+      await both('edit a transformed cell', (e) =>
+        e.decide({
+          kind: 'edit_cell',
+          datasetId: wells,
+          rowId: 0,
+          columnId: easting,
+          value: { value: 1 },
+          reason: 'x',
+        }),
+      );
+      await both('edit the source easting', (e) =>
+        e.decide({
+          kind: 'edit_cell',
+          datasetId: wells,
+          rowId: 1,
+          columnId: sourceEasting,
+          value: { value: 590000 },
+          reason: 'Corrected easting',
+        }),
+      );
+      await sameDataset(nat.client, lite, wells, 'easting edited', found);
+      await both('remove the first transformation', async (e) =>
+        content(await e.removeStep(wells, 's1', 'Straight to UTM')),
+      );
+      await sameDataset(nat.client, lite, wells, 'first transformation removed', found);
+      await exported('wells straight to UTM', wells);
+
+      // A recipe carries the transformation to next month's wells on the same grid, and does not
+      // fit data whose CRS is not known.
+      const noTimes = <T>(x: T): T =>
+        JSON.parse(JSON.stringify(x).replace(/"(savedAt|createdAt)":"[^"]*"/g, '"$1":""')) as T;
+      const nextPath = join(folder, 'wells_bng_next.csv');
+      writeFileSync(nextPath, 'well,Easting,Northing,depth\nW6,612000,288000,1300\nW7,455000,1205000,700\n');
+      const nextWells = await imported(nextPath);
+      await both('next grid stated', (e) =>
+        e.decide({
+          kind: 'override_detection',
+          datasetId: nextWells,
+          property: 'crs',
+          value: { code: 'EPSG:27700', source: 'user' },
+          reason: 'Same survey contractor',
+        }),
+      );
+      const recipes = new Map<EngineClient, Uint8Array>();
+      await both('save the recipe', async (e) => {
+        const r = await e.saveRecipe({ datasetId: wells, name: 'Wells to UTM', export: null });
+        recipes.set(e, r.bytes);
+        return noTimes(r.recipe);
+      });
+      const recipeFile = (e: EngineClient) => ({
+        kind: 'bytes' as const,
+        bytes: recipes.get(e) as Uint8Array,
+        name: 'wells.twr',
+      });
+      const fits: boolean[] = [];
+      for (const id of [nextWells, plain]) {
+        const [plan] = await both(`plan the recipe on ${id}`, async (e) =>
+          noTimes(await e.planRecipe(id, recipeFile(e))),
+        );
+        fits.push(plan.fits);
+      }
+      expect(fits).toEqual([true, false]);
+      await both('run the recipe', async (e) =>
+        noTimes(await e.awaitJob<RecipeRun>(await e.applyRecipe(nextWells, recipeFile(e), 'Next month'))),
+      );
+      expect((await lite.getSchema(nextWells)).crs?.value.code).toBe('EPSG:32630');
+      await sameDataset(nat.client, lite, nextWells, 'recipe run', found);
+
+      // Geometries: a legacy CRS member, points, every geometry type, and broken geometries.
+      for (const [name, chain] of [
+        ['geojson_legacy_crs_27700.geojson', ['EPSG:4326']],
+        ['geojson_wells_points_wgs84.geojson', ['EPSG:32631', 'EPSG:23031']],
+        ['geojson_mixed_geometry_nested_props.geojson', ['EPSG:2154']],
+        ['geojson_invalid_geometries.geojson', ['EPSG:25831']],
+        ['csv_latlon_swapped_out_of_range.csv', ['EPSG:27700', 'EPSG:4258']],
+      ] as const) {
+        const id = await imported(fixturePath(name));
+        for (const toCrs of chain) {
+          const [p] = await both(`${name} to ${toCrs}: preview`, (e) =>
+            e.previewStep(id, { kind: 'transform_crs', toCrs }),
+          );
+          if (!p.ok) continue;
+          await step(`${name} to ${toCrs}`, id, { kind: 'transform_crs', toCrs });
+        }
+        await exported(name, id);
+      }
+      // An export's record names when the package was made, and the package holds that time.
+      const log = async (e: EngineClient) =>
+        (await e.listAudit({ offset: 0, limit: 500 })).items.map(({ at: _a, prev: _p, hash: _h, ...rest }) =>
+          JSON.parse(
+            JSON.stringify(rest)
+              .replace(/"(createdAt|savedAt)":"[^"]*"/g, '"$1":""')
+              .replace(/"packageSha256":"[0-9a-f]*"/g, '"packageSha256":""'),
+          ),
+        );
+      expect(await log(nat.client)).toEqual(await log(lite));
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+
+      // The steps come back with the project: the TypeScript engine and a fresh native engine open
+      // the native file with every check passing and every view as it was.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const bytes = saved.bytes as Uint8Array;
+      const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+      const { report, opened } = await openNatively(bytes);
+      try {
+        const byReference = await opener.awaitJob<ProjectOpenReport>(
+          await opener.openProject({ kind: 'bytes', bytes, name: saved.fileName }),
+        );
+        expect(byReference.checks.filter((c) => !c.ok)).toEqual([]);
+        expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+        await sameState(opener, nat.client);
+        await sameState(opened.client, nat.client);
+      } finally {
+        opener.close();
+        stopNative(opened);
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 180_000);
 });
 
 if (!nativeBuilt) {
