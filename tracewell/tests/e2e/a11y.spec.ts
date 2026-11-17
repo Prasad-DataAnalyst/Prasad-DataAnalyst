@@ -14,7 +14,7 @@ async function expectNoSeriousViolations(page: Page, where: string): Promise<voi
   expect(serious, where).toEqual([]);
 }
 
-test('the start screen, data grid, issues register and export centre have no serious violations', async ({
+test('the start screen, data grid, issues register, export centre and map have no serious violations', async ({
   app,
   page,
 }) => {
@@ -35,6 +35,10 @@ test('the start screen, data grid, issues register and export centre have no ser
   await page.keyboard.press('Control+e');
   await expect(page.getByTestId('tw-export-centre')).toBeVisible();
   await expectNoSeriousViolations(page, 'export centre');
+  // The golden well file has latitude and longitude, so the map places its rows.
+  await app.menu('View', 'Map');
+  await expect(page.getByTestId('tw-map-canvas')).toHaveAttribute('data-ready', 'true', { timeout: 30_000 });
+  await expectNoSeriousViolations(page, 'map');
 });
 
 test('keyboard only: import, check and export', async ({ app, page }) => {

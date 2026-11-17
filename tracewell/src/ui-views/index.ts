@@ -1,11 +1,12 @@
 // Public entry point of the ui-views module, imported elsewhere as '@tw/ui-views': the content of
 // the workbench (data grid, import preview, issues register, export centre, mapping templates, recipes,
-// properties and the bottom panels), the dialogs, the concrete command list and the stable test hooks.
+// map, properties and the bottom panels), the dialogs, the concrete command list and the stable test hooks.
 import type { ShellViews } from '@tw/ui-shell';
 import { DataGridView } from './DataGridView';
 import { ExportCentreView } from './ExportCentreView';
 import { ImportPreviewView } from './ImportPreviewView';
 import { IssuesPanel, IssuesView } from './IssuesView';
+import { MapView } from './MapView';
 import { JobsPanel, LogPanel } from './panels';
 import { PropertiesPane } from './PropertiesPanel';
 import { RecipesView } from './RecipesView';
@@ -16,6 +17,7 @@ export { DataGridView } from './DataGridView';
 export { ImportPreviewView } from './ImportPreviewView';
 export { IssuesPanel, IssuesView } from './IssuesView';
 export { ExportCentreView } from './ExportCentreView';
+export { MapView } from './MapView';
 export { RecipesView } from './RecipesView';
 export { TemplatesView } from './TemplatesView';
 export { PropertiesPane, PropertiesPanel } from './PropertiesPanel';
@@ -43,6 +45,7 @@ export const SHELL_VIEWS: ShellViews = {
     export: ExportCentreView,
     templates: TemplatesView,
     recipes: RecipesView,
+    map: MapView,
   },
   properties: PropertiesPane,
   issuesPanel: IssuesPanel,

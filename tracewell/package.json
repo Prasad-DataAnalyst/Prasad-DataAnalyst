@@ -37,6 +37,8 @@
     "hyparquet": "1.31.3",
     "hyparquet-writer": "0.16.11",
     "lucide-react": "1.52.0",
+    "maplibre-gl": "6.16.0",
+    "pmtiles": "4.5.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-resizable-panels": "4.14.2",

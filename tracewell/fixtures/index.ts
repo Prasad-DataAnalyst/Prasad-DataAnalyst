@@ -16,6 +16,7 @@ import { FIXTURE_NAMES, type FixtureName } from './names';
 export type { FixtureDetections, FixtureExpectation } from './expectation';
 export type { FixtureName } from './names';
 export { FIXTURE_NAMES } from './names';
+export { rasterPmtiles, solidPng } from './pmtiles';
 
 /** Absolute path of fixtures/messy. */
 export const FIXTURES_DIR: string = fileURLToPath(new URL('./messy', import.meta.url));

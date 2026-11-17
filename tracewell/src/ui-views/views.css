@@ -919,3 +919,19 @@ li.tw-health-fair strong {
 li.tw-health-poor strong {
   color: var(--tw-error);
 }
+
+/* Map view */
+.tw-map-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+}
+.tw-map-area {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tw-gap);
+  padding: 4px var(--tw-pad);
+  border-bottom: 1px solid var(--tw-border);
+  background: var(--tw-surface);
+}

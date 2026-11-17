@@ -68,7 +68,7 @@ export function DialogHost(p: { engine: EngineClient }): React.JSX.Element | nul
 }
 
 /** Applies a step as a job, waits for it and reports a failure in the shell's error banner. */
-async function applyStep(
+export async function applyStep(
   engine: EngineClient,
   datasetId: DatasetId,
   s: StepInput,

@@ -201,6 +201,17 @@ export function defaultCommands(): Command[] {
       run: (ctx) => ctx.store.setBottomTab('jobs'),
     },
     {
+      id: 'view.map',
+      label: 'Map',
+      menu: 'view',
+      enabled: anyData,
+      run: (ctx) => {
+        const id = activeDataset(ctx.store);
+        if (id === null) return;
+        ctx.store.openTab({ id: `map-${id}`, kind: 'map', title: `Map ${datasetName(ctx.store, id)}`, datasetId: id });
+      },
+    },
+    {
       id: 'view.register',
       label: 'Issues register',
       menu: 'view',

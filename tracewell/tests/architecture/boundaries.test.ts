@@ -136,7 +136,7 @@ export const ALLOWED_NPM: Record<ModuleName, string[]> = {
   steps: [],
   export: [],
   project: [],
-  'ui-views': ['react', '@tanstack/react-virtual'],
+  'ui-views': ['react', '@tanstack/react-virtual', 'maplibre-gl', 'pmtiles'],
   engine: [],
   app: ['react', 'react-dom'],
   conformance: [],

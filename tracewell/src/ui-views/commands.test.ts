@@ -7,7 +7,7 @@ import { defaultCommands, lastRevertible } from './commands';
 const SAD_MENUS: Record<string, string[]> = {
   file: ['New project…', 'Open project…', 'Save project', 'Import file…', 'Export…', 'Project area…'],
   edit: ['Edit cell', 'Undo last change…'],
-  view: ['Issues panel', 'Log panel', 'Jobs panel'],
+  view: ['Issues panel', 'Log panel', 'Jobs panel', 'Map'],
   data: ['Run checks', 'Convert units…', 'Transform coordinates…', 'Filter…', 'Columns…', 'Exclude rows…'],
   help: ['Open-source licences'],
 };

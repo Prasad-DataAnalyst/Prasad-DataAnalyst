@@ -313,7 +313,7 @@ Modules with the same build order can be built in parallel. Lower numbers come f
 | 3     | steps           | `src/steps`                                           | model, table, units, geo                                                                  |
 | 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson, formats-parquet |
 | 3     | project         | `src/project`                                         | model, io                                                                                 |
-| 3     | ui-views        | `src/ui-views`                                        | model, engine-api, ui-shell, @tanstack/react-virtual                                      |
+| 3     | ui-views        | `src/ui-views`                                        | model, engine-api, ui-shell, @tanstack/react-virtual, maplibre-gl, pmtiles                |
 | 4     | engine          | `src/engine`                                          | model, io, units, geo, engine-api, table, audit, ingest, rules, steps, export, project    |
 | 5     | app             | `src/app`, `index.html`                               | model, engine-api, ui-shell, ui-views, engine                                             |
 | 5     | conformance     | `tests/conformance`                                   | model, io, engine-api, engine, export, fixtures                                           |
@@ -373,7 +373,7 @@ The UI modules (`ui-shell`, `ui-views`) never import `engine`, `table`, `rules`,
 | project     | `.twp` writer and reader, manifest validation, entry and original checksum checks. Audit-chain and replay checks are done by `engine`.                                                                                                                                   |
 | engine      | `LocalEngine`: project state, a single reducer applied to audit entries (live and replay), jobs with progress and cancel, decisions, issue states, lineage, save and open with replay verification, worker entry.                                                        |
 | ui-shell    | Window layout, menu bar, process toolbar, project tree, centre tab host, properties host, Issues/Log/Jobs panel, status bar, command registry and shortcuts, design tokens and themes, UI store.                                                                         |
-| ui-views    | Data grid with editing and reason flow, import preview with detections and overrides, issues register with drill-down, Convert, Filter and Columns dialogs, export centre, properties content (column metadata, cell lineage), log view, jobs view, project open report. |
+| ui-views    | Data grid with editing and reason flow, import preview with detections and overrides, issues register with drill-down, Convert, Transform, Filter and Columns dialogs, map view, export centre, properties content (column metadata, cell lineage), log view, jobs view, project open report. |
 | app         | Bootstraps the worker engine, profile setup on first start, mounts the shell with views.                                                                                                                                                                                 |
 | conformance | Engine-agnostic workflow scenarios that every engine must pass.                                                                                                                                                                                                          |
 | e2e         | Playwright specs, the offline guard, independent oracle readers in Python and LibreOffice.                                                                                                                                                                               |
@@ -858,6 +858,7 @@ Nothing is lost when the page or the app closes unexpectedly. The engine's state
 
   The meta tag is injected at build time only, because the development server needs inline styles. The CSP is the technical guarantee.
 
+- **Map (slice 3).** MapLibre's worker is built as a file of the application's own origin and named to MapLibre (`setWorkerUrl`), so it starts under `worker-src 'self'` without a `blob:` URL. A basemap is read from a PMTiles file the user chooses, through MapLibre's protocol hook, so tiles are read from that file and never fetched; the map has no glyph or sprite URLs, since it draws no text. The CSP is unchanged. An online basemap (FR-MAP-02's optional one) would need `connect-src` for its host behind an explicit setting, and is not built.
 - **No remote fonts, analytics or update checks.** The system font stack is used. The status bar always shows **Offline** in slice 1.
 - **E2E offline guard.** A shared Playwright fixture routes `**/*` and records any request not to `127.0.0.1:4173`. Every test fails if the list is non-empty.
 - **No downloaded engine code.** DuckDB can fetch and load extensions on first use. The native engine links the JSON and Parquet extensions in and turns automatic installing and loading off at start, so it never fetches code nor loads an extension it finds on the machine.
@@ -870,7 +871,7 @@ Nothing is lost when the page or the app closes unexpectedly. The engine's state
 - **Formula injection.** The XLSX writer never writes formulas. The CSV export has an optional neutralise setting (section 10.4) that prefixes an apostrophe to text a spreadsheet would run as a formula.
 - **Supply chain.**
   - Exact version pins and a committed lockfile.
-  - Few runtime dependencies (11).
+  - Few runtime dependencies (15, each listed in section 14).
   - `scripts/check-licences.mjs` enforces the allow-list on the production dependency tree.
   - A software bill of materials is generated from the lockfile at release (NFR-08).
 - **Privacy.** The application stores data only in memory and in files the user saves. Browser storage is used only for UI preferences (theme, density, panel sizes), each access wrapped in try/catch.
@@ -973,6 +974,8 @@ Versions verified with `npm view <pkg> version license` on 19 October 2026. Each
 | zod                     | 4.6.7                         | MIT     | Schemas for manifests, rule-packs, steps, decisions, audit entries                        |
 | hyparquet               | 1.31.3                        | MIT     | Parquet reader for export read-back and Parquet import (slice 2)                          |
 | hyparquet-writer        | 0.16.11                       | MIT     | Parquet writer for the Parquet export profile (slice 2)                                   |
+| maplibre-gl             | 6.16.0                        | BSD-3   | Map view (slice 3), loaded only when a map tab opens; its worker is a same-origin file   |
+| pmtiles                 | 4.5.0 (+ fflate)              | BSD-3   | Reads a basemap from a local PMTiles file through MapLibre's protocol hook (slice 3)      |
 
 **Development and test only**
 
@@ -1011,7 +1014,7 @@ Versions verified with `npm view <pkg> version license` on 19 October 2026. Each
 
 **Planned for later slices (checked 19 October 2026).**
 
-- npm: maplibre-gl 6.15.0 (BSD-3-Clause), pmtiles 4.5.0 (BSD-3-Clause), proj4 2.22.0 (MIT), @tauri-apps/api 2.12.4 (Apache-2.0 OR MIT).
+- npm: @tauri-apps/api 2.12.4 (Apache-2.0 OR MIT). maplibre-gl and pmtiles were adopted in slice 3 (checked 17 November 2026: maplibre-gl 6.16.0, the newest release at least two weeks old, with its MIT, ISC and BSD dependencies). proj4 is not needed: decision D-15.
 - Rust crates (crates.io): none. Workbooks are read and written by ports of the TypeScript reader and writer, and ZIP archives by the engine's own code, so `calamine`, `rust_xlsxwriter` and `zip` were not adopted.
 - DuckDB's spatial extension needs a licence review first, because it links GEOS (LGPL-2.1).
 
@@ -1064,11 +1067,13 @@ Layout follows PRD §11.2 with fixed, resizable regions (docking comes later):
 | ---- | ------------------------------------------------------------------------------------ |
 | File | New project, Open project…, Save project, Import file…, Export…, Project area…       |
 | Edit | Edit cell, Undo last change (revert with reason)                                     |
-| View | Panels, Light/Dark theme, Compact/Comfortable density                                |
+| View | Panels, Map, Light/Dark theme, Compact/Comfortable density                           |
 | Data | Run checks, Convert units…, Transform coordinates…, Filter…, Columns…, Exclude rows… |
 | Help | Keyboard shortcuts, Open-source licences, About Tracewell (owner's name)             |
 
 Other menus from the PRD (Analysis, Map, Reports, Tools) appear when they have content.
+
+**Map view (slice 3; FR-MAP-01, FR-MAP-02, FR-MAP-04).** View › Map opens a tab for the active dataset. It draws what `getPlaces` gives for the working or the output stage (section 7.6) with MapLibre, as points, lines and polygons in the accent colour, fitted to them when first shown; a status line says how many rows are placed, from which CRS, and whether only the first 50,000 are drawn. When nothing can be placed, it shows the engine's reason and fix. Clicking a place selects that row's coordinate cell: the properties panel shows its lineage and an open grid scrolls to it; a cell selected anywhere marks its place on the map, larger and in the text colour, since red, amber and green mean status. Without a basemap a graticule every 10° shows where the map is; Basemap chooses a local PMTiles file, raster or vector, and any vector schema is drawn plainly (a fill and a line for each source layer, water as water), with the attribution the archive names. Draw area turns a drag into a box in WGS 84 longitude and latitude; the view previews the filter step it makes (rows whose geometry meets the box, or whose point is inside it) with the rows it keeps, and Filter… asks for a reason and applies it. A box filters only data whose positions needed no transformation; for other data the view says to transform the coordinates to EPSG:4326 first. MapLibre is in its own code-split chunk, so the rest of the application does not load it. The browser tests draw the map with WebGL in headless Chromium (SwiftShader), load a generated PMTiles file, click a place, draw a box and apply the filter, on both engines, and the accessibility scan includes the map.
 
 **Keyboard.** F10 or Alt focuses the menu bar; F6 cycles regions; Ctrl+O, Ctrl+S, Ctrl+I and Ctrl+E; Enter or F2 edits a cell; Esc cancels.
 
@@ -1107,7 +1112,7 @@ Other menus from the PRD (Analysis, Map, Reports, Tools) appear when they have c
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | **1 (this document)** | Core workflow end to end on CSV/TSV, XLSX and GeoJSON in the browser engine; `.twp`; validated export packages                                                                                                                                                                                                                                                                                                                                              | `npm test` green; oracles pass                                            |
 | **2**                 | Native headless engine (Rust + DuckDB + Parquet) behind `stdioTransport`; conformance parity on slice 1 scenarios; 10 GB benchmark; Parquet working files and `.twp` caches (FR-IMP-09); recipes `.twr` with "only new or changed issues" (FR-RCP-01..03); autosave/crash recovery journal (OPFS / disk); `.xls`, Parquet and JSON import; Parquet export profile; mapping templates (FR-IMP-06); data health score (FR-VAL-05); CSV formula neutralisation | Parity suite green on both engines; benchmark published                   |
-| **3**                 | CRS transformation (one exact implementation in both engines, decision D-15: done, the `transform_crs` step in both engines and the UI); map view with MapLibre and offline PMTiles; draw-an-area filter; Shapefile, GeoPackage, FlatGeobuf, KML/KMZ; QGIS/ArcGIS and Google Earth profiles; Shapefile rules (FR-EXP-04)                                                                                                                                                                                                     | Spatial reference cases; GDAL read-back                                   |
+| **3**                 | CRS transformation (one exact implementation in both engines, decision D-15: done, the `transform_crs` step in both engines and the UI); map view with MapLibre and offline PMTiles, linked to the grid, and the draw-an-area filter (done, section 15); density view for large point sets (FR-MAP-03); Shapefile, GeoPackage, FlatGeobuf, KML/KMZ; QGIS/ArcGIS and Google Earth profiles; Shapefile rules (FR-EXP-04)                                                                                                                                                                                                     | Spatial reference cases; GDAL read-back                                   |
 | **4**                 | Conventions engine (FR-CNV); signed `.twrules` rule-packs with offline install and policy lock; local profiles with roles, Reviewer mode, sign-off stamps, assignment (FR-AUD-03/04); comparison view (FR-AUD-05); time-series resampling (FR-PRC-03); joins and calculated fields (FR-PRC-04)                                                                                                                                                              | Rule-pack signature tests; method reference cases                         |
 | **5**                 | Tauri desktop shell on a Windows build runner; installers (per-user, MSI, portable); code signing; software bill of materials; dockable panels, command palette, saved layouts, i18n/RTL; full WCAG 2.2 AA audit; PDF report                                                                                                                                                                                                                                | R0 exit: core suite green, 10 GB benchmark met, messy-file library passes |
 
