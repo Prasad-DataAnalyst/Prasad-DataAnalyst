@@ -14,6 +14,7 @@ use duckdb::Connection;
 use duckdb::arrow::array::{Array, ArrayRef, AsArray, BooleanArray, RecordBatch, StringArray};
 use duckdb::arrow::datatypes::{DataType, Float64Type};
 use duckdb::vscalar::{ArrowFunctionSignature, VArrowScalar};
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -218,6 +219,59 @@ impl VArrowScalar for Meets {
     }
 }
 
+/// tw_crs_transform(x, y, from, to, axis): coordinate `axis` (0 for x, 1 for y) of the point
+/// (x, y) of system `from` transformed to system `to` (geodesy.rs); NULL for a point either system
+/// cannot hold, or a system the registry does not know.
+struct CrsTransform;
+
+type Transformers = HashMap<(String, String), Option<crate::geodesy::Transformer>>;
+
+impl VArrowScalar for CrsTransform {
+    type State = ();
+
+    fn invoke(_: &(), batch: RecordBatch) -> Out {
+        use duckdb::arrow::array::Float64Array;
+        use duckdb::arrow::datatypes::Int32Type;
+        let mut cache = Transformers::new();
+        let (xs, ys, axis) = (batch.column(0), batch.column(1), batch.column(4));
+        let value = |a: &ArrayRef, i: usize| {
+            (!a.is_null(i))
+                .then(|| a.as_primitive_opt::<Float64Type>().map(|p| p.value(i)))
+                .flatten()
+        };
+        let out: Float64Array = (0..batch.num_rows())
+            .map(|i| {
+                let (x, y) = (value(xs, i)?, value(ys, i)?);
+                let from = text_at(batch.column(2), i)?.to_string();
+                let to = text_at(batch.column(3), i)?.to_string();
+                let t = cache
+                    .entry((from.clone(), to.clone()))
+                    .or_insert_with(|| crate::geodesy::Transformer::new(&from, &to))
+                    .as_ref()?;
+                let (ox, oy) = t.forward(x, y)?;
+                let k = (!axis.is_null(i))
+                    .then(|| axis.as_primitive_opt::<Int32Type>().map(|p| p.value(i)))
+                    .flatten()?;
+                Some(if k == 0 { ox } else { oy })
+            })
+            .collect();
+        Ok(Arc::new(out))
+    }
+
+    fn signatures() -> Vec<ArrowFunctionSignature> {
+        vec![ArrowFunctionSignature::exact(
+            vec![
+                DataType::Float64,
+                DataType::Float64,
+                DataType::Utf8,
+                DataType::Utf8,
+                DataType::Int32,
+            ],
+            DataType::Float64,
+        )]
+    }
+}
+
 /// Makes the functions known to the database behind `conn`; every connection to it sees them.
 pub fn register(conn: &Connection) -> duckdb::Result<()> {
     conn.register_scalar_function::<Defects>("tw_geo_defects")?;
@@ -226,12 +280,39 @@ pub fn register(conn: &Connection) -> duckdb::Result<()> {
     conn.register_scalar_function::<Swapped>("tw_geo_swapped")?;
     conn.register_scalar_function::<Outside>("tw_geo_outside")?;
     conn.register_scalar_function::<Meets>("tw_geo_meets")?;
+    conn.register_scalar_function::<CrsTransform>("tw_crs_transform")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The SQL function gives the bits the transformer gives, and NULL where it gives none.
+    #[test]
+    fn transforms_coordinates_in_sql() {
+        let conn = Connection::open_in_memory().unwrap();
+        register(&conn).unwrap();
+        let t = crate::geodesy::Transformer::new("EPSG:4326", "EPSG:27700").unwrap();
+        let (e, n) = t.forward(-1.5, 53.25).unwrap();
+        type Row = (f64, f64, Option<f64>, Option<f64>, Option<f64>);
+        let got: Row = conn
+            .query_row(
+                "SELECT tw_crs_transform(-1.5, 53.25, 'EPSG:4326', 'EPSG:27700', 0), \
+                        tw_crs_transform(-1.5, 53.25, 'EPSG:4326', 'EPSG:27700', 1), \
+                        tw_crs_transform(-1.5, 95, 'EPSG:4326', 'EPSG:27700', 0), \
+                        tw_crs_transform(-1.5, 53.25, 'EPSG:4326', 'EPSG:9999', 0), \
+                        tw_crs_transform(NULL::DOUBLE, 53.25, 'EPSG:4326', 'EPSG:27700', 0)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (got.0.to_bits(), got.1.to_bits()),
+            (e.to_bits(), n.to_bits())
+        );
+        assert_eq!((got.2, got.3, got.4), (None, None, None));
+    }
 
     #[test]
     fn the_functions_answer_in_sql_and_take_missing_geometries() {

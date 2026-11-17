@@ -1,0 +1,207 @@
+{
+  "version": "2026.1",
+  "source": "EPSG Geodetic Parameter Dataset, as published at epsg.io (checked 17 November 2026). Formulas: IOGP Geomatics Guidance Note 7-2 (September 2019).",
+  "ellipsoids": {
+    "7030": { "name": "WGS 84", "a": 6378137, "invF": 298.257223563 },
+    "7019": { "name": "GRS 1980", "a": 6378137, "invF": 298.257222101 },
+    "7001": { "name": "Airy 1830", "a": 6377563.396, "invF": 299.3249646 },
+    "7022": { "name": "International 1924", "a": 6378388, "invF": 297 },
+    "7008": { "name": "Clarke 1866", "a": 6378206.4, "b": 6356583.8 }
+  },
+  "datums": {
+    "6326": { "name": "World Geodetic System 1984", "ellipsoid": "7030", "toWgs84": null },
+    "6258": {
+      "name": "European Terrestrial Reference System 1989",
+      "ellipsoid": "7019",
+      "toWgs84": {
+        "code": "EPSG:1149",
+        "name": "ETRS89 to WGS 84 (1)",
+        "method": "9603",
+        "tx": 0,
+        "ty": 0,
+        "tz": 0,
+        "accuracy": 1,
+        "area": [-16.1, 33.26, 38, 84.73]
+      }
+    },
+    "6171": {
+      "name": "Reseau Geodesique Francais 1993 v1",
+      "ellipsoid": "7019",
+      "toWgs84": {
+        "code": "EPSG:1671",
+        "name": "RGF93 v1 to WGS 84 (1)",
+        "method": "9603",
+        "tx": 0,
+        "ty": 0,
+        "tz": 0,
+        "accuracy": 1,
+        "area": [-9.86, 41.15, 10.38, 51.56]
+      }
+    },
+    "6269": {
+      "name": "North American Datum 1983",
+      "ellipsoid": "7019",
+      "toWgs84": {
+        "code": "EPSG:1188",
+        "name": "NAD83 to WGS 84 (1)",
+        "method": "9603",
+        "tx": 0,
+        "ty": 0,
+        "tz": 0,
+        "accuracy": 4,
+        "area": [-172.54, 23.81, -47.74, 86.46]
+      }
+    },
+    "6283": {
+      "name": "Geocentric Datum of Australia 1994",
+      "ellipsoid": "7019",
+      "toWgs84": {
+        "code": "EPSG:1150",
+        "name": "GDA94 to WGS 84 (1)",
+        "method": "9603",
+        "tx": 0,
+        "ty": 0,
+        "tz": 0,
+        "accuracy": 3,
+        "area": [93.41, -60.55, 173.34, -8.47]
+      }
+    },
+    "6230": {
+      "name": "European Datum 1950",
+      "ellipsoid": "7022",
+      "toWgs84": {
+        "code": "EPSG:1133",
+        "name": "ED50 to WGS 84 (1)",
+        "method": "9603",
+        "tx": -87,
+        "ty": -98,
+        "tz": -121,
+        "accuracy": 10,
+        "area": [-9.56, 34.88, 31.59, 71.24]
+      }
+    },
+    "6277": {
+      "name": "Ordnance Survey of Great Britain 1936",
+      "ellipsoid": "7001",
+      "toWgs84": {
+        "code": "EPSG:1314",
+        "name": "OSGB36 to WGS 84 (6)",
+        "method": "9606",
+        "tx": 446.448,
+        "ty": -125.157,
+        "tz": 542.06,
+        "rx": 0.15,
+        "ry": 0.247,
+        "rz": 0.842,
+        "ds": -20.489,
+        "accuracy": 2,
+        "area": [-8.82, 49.79, 1.92, 60.94]
+      }
+    },
+    "6267": {
+      "name": "North American Datum 1927",
+      "ellipsoid": "7008",
+      "toWgs84": {
+        "code": "EPSG:1173",
+        "name": "NAD27 to WGS 84 (4)",
+        "method": "9603",
+        "tx": -8,
+        "ty": 160,
+        "tz": 176,
+        "accuracy": 10,
+        "area": [-124.79, 24.41, -66.91, 49.38]
+      }
+    }
+  },
+  "geographic": {
+    "4326": { "name": "WGS 84", "datum": "6326" },
+    "4258": { "name": "ETRS89", "datum": "6258" },
+    "4171": { "name": "RGF93 v1", "datum": "6171" },
+    "4269": { "name": "NAD83", "datum": "6269" },
+    "4283": { "name": "GDA94", "datum": "6283" },
+    "4230": { "name": "ED50", "datum": "6230" },
+    "4277": { "name": "OSGB36", "datum": "6277" },
+    "4267": { "name": "NAD27", "datum": "6267" }
+  },
+  "projected": {
+    "27700": {
+      "name": "OSGB36 / British National Grid",
+      "base": "4277",
+      "method": "9807",
+      "lat0": 49,
+      "lon0": -2,
+      "k0": 0.9996012717,
+      "fe": 400000,
+      "fn": -100000
+    },
+    "2154": {
+      "name": "RGF93 v1 / Lambert-93",
+      "base": "4171",
+      "method": "9802",
+      "latF": 46.5,
+      "lonF": 3,
+      "lat1": 49,
+      "lat2": 44,
+      "fe": 700000,
+      "fn": 6600000
+    }
+  },
+  "utm": [
+    {
+      "first": 32601,
+      "firstZone": 1,
+      "lastZone": 60,
+      "base": "4326",
+      "south": false,
+      "name": "WGS 84 / UTM zone {zone}N"
+    },
+    {
+      "first": 32701,
+      "firstZone": 1,
+      "lastZone": 60,
+      "base": "4326",
+      "south": true,
+      "name": "WGS 84 / UTM zone {zone}S"
+    },
+    {
+      "first": 25828,
+      "firstZone": 28,
+      "lastZone": 38,
+      "base": "4258",
+      "south": false,
+      "name": "ETRS89 / UTM zone {zone}N"
+    },
+    {
+      "first": 23028,
+      "firstZone": 28,
+      "lastZone": 38,
+      "base": "4230",
+      "south": false,
+      "name": "ED50 / UTM zone {zone}N"
+    },
+    {
+      "first": 26901,
+      "firstZone": 1,
+      "lastZone": 23,
+      "base": "4269",
+      "south": false,
+      "name": "NAD83 / UTM zone {zone}N"
+    },
+    {
+      "first": 26701,
+      "firstZone": 1,
+      "lastZone": 22,
+      "base": "4267",
+      "south": false,
+      "name": "NAD27 / UTM zone {zone}N"
+    },
+    {
+      "first": 28348,
+      "firstZone": 48,
+      "lastZone": 58,
+      "base": "4283",
+      "south": true,
+      "name": "GDA94 / MGA zone {zone}"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # Byte-exact test inputs: formatting would change their checksums.
 fixtures/messy/
+# Written by src/geo/crs/vectors.test.ts and read as it writes it.
+src/geo/crs/__fixtures__/
 dist/
 coverage/
 playwright-report/

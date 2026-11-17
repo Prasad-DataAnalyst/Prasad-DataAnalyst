@@ -25,6 +25,7 @@ mod error;
 mod export;
 mod framing;
 mod geo;
+mod geodesy;
 mod geofn;
 mod geojson;
 mod import;
