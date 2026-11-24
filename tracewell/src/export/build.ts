@@ -28,11 +28,20 @@ import {
 } from '@tw/model';
 import { esriWkt } from '@tw/geo';
 import { columnDigest, viewDigest, type View } from '@tw/table';
-import { geometrySource, knownCrs, planExport, type DataKind, type ExportPlan } from './plan';
+import {
+  DEFAULT_LIMITS,
+  geometrySource,
+  knownCrs,
+  planExport,
+  type DataKind,
+  type ExportLimits,
+  type ExportPlan,
+} from './plan';
 import { headerFor } from './profiles';
 import { readBack, type ShapefileParts } from './readback';
 import { issuesCsv, renderReadme } from './readme';
 import { expectedShape, type ExpectedShape } from './shape';
+import { analyseFgb, expectedFgbGeometries, fgbColumns, fgbCrs, fgbFeatures } from './flatgeobuf';
 import { expectedKmlGeometries, placemarks } from './kml';
 import {
   analyseShapes,
@@ -77,6 +86,8 @@ export interface ExportInput {
   auditHead: { seq: AuditSeq; hash: Sha256Hex };
   /** CSV data files: prefix an apostrophe to text a spreadsheet would run as a formula. */
   neutralizeFormulas?: boolean;
+  /** Format limits; only tests lower them. */
+  limits?: ExportLimits;
 }
 
 const encoder = new TextEncoder();
@@ -134,10 +145,15 @@ interface WrittenFile {
   companions: { path: string; bytes: Uint8Array }[];
 }
 
+/** The CRS of the data and where its geometries come from; the plan has accepted both. */
+function shapeSourceOf(input: ExportInput): { code: string; source: ShapeSource } {
+  const code = knownCrs(input.crs) as string;
+  return { code, source: shapeSource(input.view, code) as ShapeSource };
+}
+
 /** Where a Shapefile's shapes come from and what they make; the plan has accepted them. */
 function shapesOf(input: ExportInput): { code: string; source: ShapeSource; shapes: ShapeAnalysis } {
-  const code = knownCrs(input.crs) as string;
-  const source = shapeSource(input.view, code) as ShapeSource;
+  const { code, source } = shapeSourceOf(input);
   return { code, source, shapes: analyseShapes(input.view, source) };
 }
 
@@ -186,6 +202,21 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
         const columns = f.columns.map((id) => view.columnSchema(id));
         return { ...one, bytes: writers.kml(view.schema.name, placemarks(view, source, columns)) };
       }
+      case 'flatgeobuf': {
+        const { code, source } = shapeSourceOf(input);
+        const a = analyseFgb(view, source);
+        const columns = f.columns.map((id) => view.columnSchema(id));
+        const header = {
+          name: view.schema.name,
+          envelope: a.envelope,
+          geometryType: a.geometryType,
+          hasZ: a.hasZ,
+          columns: fgbColumns(columns),
+          featuresCount: view.rowCount,
+          crs: fgbCrs(code),
+        };
+        return { ...one, bytes: writers.flatgeobuf(header, fgbFeatures(view, source, columns)) };
+      }
       case 'csv':
         return {
           ...one,
@@ -229,6 +260,17 @@ async function validateFile(
         documentName: input.view.schema.name,
         geometrySha256: columnDigest(expectedKmlGeometries(input.view, geometrySource(input.view) ?? 'latlon')),
       });
+    case 'flatgeobuf': {
+      const { code, source } = shapeSourceOf(input);
+      const a = analyseFgb(input.view, source);
+      return readBack.flatgeobuf(bytes, file.shape, file.path, {
+        name: input.view.schema.name,
+        geometryType: a.geometryType,
+        hasZ: a.hasZ,
+        crs: fgbCrs(code),
+        geometrySha256: columnDigest(expectedFgbGeometries(input.view, source)),
+      });
+    }
     case 'shapefile': {
       const { code, source, shapes } = shapesOf(input);
       const parts: ShapefileParts = {
@@ -274,7 +316,7 @@ export async function buildExport(
   ctx: { signal: AbortSignal; onProgress(p: JobProgress): void },
   writers: ExportWriters = DEFAULT_WRITERS,
 ): Promise<ExportResult> {
-  const plan = planExport(input.view, input.profile, input.crs);
+  const plan = planExport(input.view, input.profile, input.crs, input.limits ?? DEFAULT_LIMITS);
   if (!plan.available) {
     throw new EngineError(
       'EXPORT_REFUSED',

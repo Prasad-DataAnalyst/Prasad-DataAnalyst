@@ -16,7 +16,7 @@ export { expect } from '@playwright/test';
 
 export const ORIGIN = 'http://127.0.0.1:4173';
 
-export type ExportProfileId = 'excel' | 'csv' | 'geojson' | 'shapefile' | 'kml';
+export type ExportProfileId = 'excel' | 'csv' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf';
 
 /** The engine a test's page talks to. */
 export type EngineKind = 'lite' | 'native';

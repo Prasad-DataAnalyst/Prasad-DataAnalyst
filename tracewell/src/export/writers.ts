@@ -3,6 +3,7 @@
  * fault-injection tests can prove that read-back catches a corrupted value, a missing row or sheet.
  */
 import { writeCsv } from '@tw/formats-csv';
+import { writeFlatGeobuf, type FgbWriteFeature, type FgbWriteHeader } from '@tw/formats-flatgeobuf';
 import { writeGeoJson, type GeoJsonFeatureOut } from '@tw/formats-geojson';
 import { writeKml, type KmlPlacemark } from '@tw/formats-kml';
 import { writeParquet, type ParquetColumnIn } from '@tw/formats-parquet';
@@ -27,6 +28,7 @@ export interface ExportWriters {
   parquet(columns: ParquetColumnIn[]): Uint8Array;
   shapefile(input: ShapefileWriteInput): ShapefileBytes;
   kml(name: string, placemarks: Iterable<KmlPlacemark>): Uint8Array;
+  flatgeobuf(header: FgbWriteHeader, features: Iterable<FgbWriteFeature>): Uint8Array;
 }
 
 export const DEFAULT_WRITERS: ExportWriters = Object.freeze({
@@ -36,6 +38,7 @@ export const DEFAULT_WRITERS: ExportWriters = Object.freeze({
   parquet: (columns: ParquetColumnIn[]) => writeParquet(columns),
   shapefile: (input: ShapefileWriteInput) => writeShapefile(input),
   kml: (name: string, placemarks: Iterable<KmlPlacemark>) => writeKml(name, placemarks),
+  flatgeobuf: (header: FgbWriteHeader, features: Iterable<FgbWriteFeature>) => writeFlatGeobuf(header, features),
 });
 
 /** The columns of a Parquet data file: header names, logical types and exported values. */

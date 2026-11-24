@@ -4,8 +4,9 @@
 //! its README, manifest, audit log, issues and checksums, re-open the package and verify everything
 //! again, and only then offer it. A package that fails any check is deleted, never offered.
 //!
-//! The native engine writes every profile: Excel, CSV, Parquet, GeoJSON and Shapefile (shapefile.rs);
-//! the profile list is the same JSON file as the TypeScript engine's.
+//! The native engine writes every profile: Excel, CSV, Parquet, GeoJSON, Shapefile (shapefile.rs),
+//! KML (kml.rs) and FlatGeobuf (flatgeobuf.rs); the profile list is the same JSON file as the
+//! TypeScript engine's.
 
 use crate::canonical::{canonical_json, json_string, sha256_hex, stringify};
 use crate::csv::{TableLayout, TableReader};
@@ -33,7 +34,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
 /// The profiles this engine writes: every one.
-pub const NATIVE_PROFILES: [&str; 6] = ["excel", "csv", "parquet", "geojson", "shapefile", "kml"];
+pub const NATIVE_PROFILES: [&str; 7] = [
+    "excel",
+    "csv",
+    "parquet",
+    "geojson",
+    "shapefile",
+    "kml",
+    "flatgeobuf",
+];
 /// A package up to this size is handed back as bytes when the request names no file.
 pub const RETURN_BYTES_MAX: u64 = 256 << 20;
 const READ_BYTES: usize = 4 << 20;
@@ -161,6 +170,7 @@ enum DataKind {
     GeoJson,
     Shapefile,
     Kml,
+    FlatGeobuf,
 }
 
 /// A data file a profile writes: its path in the package and the columns of the view it holds.
@@ -214,6 +224,20 @@ fn plan_export(
     profile: &str,
     spatial: &Spatial,
 ) -> Result<Plan> {
+    let limit = crate::shapefile::SHAPEFILE_MAX_BYTES;
+    plan_export_within(conn, view, columns, rows, profile, spatial, limit)
+}
+
+/// planExport with the Shapefile's size limit as a parameter, which only tests lower.
+fn plan_export_within(
+    conn: &Connection,
+    view: &str,
+    columns: &[OutColumn],
+    rows: u64,
+    profile: &str,
+    spatial: &Spatial,
+    shapefile_max_bytes: u64,
+) -> Result<Plan> {
     let all: Vec<usize> = (0..columns.len()).collect();
     let single = |path, kind| Plan {
         substitutions: Vec::new(),
@@ -251,10 +275,33 @@ fn plan_export(
             refusal: None,
         });
     }
+    if profile == "flatgeobuf" {
+        let p = crate::flatgeobuf::plan(conn, view, columns, spatial)?;
+        let files = if p.refusal.is_none() {
+            vec![DataFile {
+                path: "data.fgb",
+                kind: DataKind::FlatGeobuf,
+                columns: p.attributes,
+            }]
+        } else {
+            Vec::new()
+        };
+        return Ok(Plan {
+            substitutions: p.substitutions,
+            files,
+            refusal: p.refusal,
+        });
+    }
     if profile == "shapefile" {
-        let p = crate::shapefile::plan(conn, view, columns, rows, spatial)?;
+        let p = crate::shapefile::plan(conn, view, columns, rows, spatial, shapefile_max_bytes)?;
         let mut files = Vec::new();
-        if p.refusal.is_none() {
+        if let Some(attributes) = p.flatgeobuf {
+            files.push(DataFile {
+                path: "data.fgb",
+                kind: DataKind::FlatGeobuf,
+                columns: attributes,
+            });
+        } else if p.refusal.is_none() {
             files.push(DataFile {
                 path: "data.shp",
                 kind: DataKind::Shapefile,
@@ -1694,6 +1741,17 @@ fn read_back(
             path,
             file,
         ),
+        DataKind::FlatGeobuf => crate::flatgeobuf::read_back(
+            conn,
+            &input.view,
+            &input.columns,
+            &input.spatial,
+            expected,
+            &input.dataset_name,
+            input.ordered,
+            path,
+            file,
+        ),
         DataKind::Shapefile => {
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
             // Files taken back out of the package are named inside-data.shp and so on.
@@ -2559,6 +2617,18 @@ pub fn build_export(
                 input.ordered,
                 &path,
             )?,
+            DataKind::FlatGeobuf => crate::flatgeobuf::write(
+                conn,
+                &input.view,
+                &input.columns,
+                &input.spatial,
+                &f.columns,
+                &input.dataset_name,
+                input.row_count,
+                input.ordered,
+                &path,
+                cancel,
+            )?,
             DataKind::Shapefile => crate::shapefile::write(
                 conn,
                 &input.view,
@@ -2839,6 +2909,59 @@ fn scopeguard(dir: PathBuf) -> TempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivers_a_shapefile_past_its_limit_as_flatgeobuf() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE v (c0 VARCHAR, c1 DOUBLE, c2 DOUBLE); INSERT INTO v VALUES ('A', 1.5, 2.5), ('B', 3, 4);",
+        )
+        .unwrap();
+        let column = |id: &str, name: &str, kind, typ: &str, role: &str| OutColumn {
+            id: id.into(),
+            name: name.into(),
+            unit: None,
+            typ: typ.into(),
+            kind,
+            role: role.into(),
+        };
+        let columns = [
+            column("c0", "well", Kind::String, "string", "id"),
+            column("c1", "lon", Kind::Number, "number", "longitude"),
+            column("c2", "lat", Kind::Number, "number", "latitude"),
+        ];
+        let spatial = Spatial {
+            geometry_column: None,
+            crs: Some("EPSG:4326".into()),
+        };
+        let within = |limit| {
+            plan_export_within(&conn, "v", &columns, 2, "shapefile", &spatial, limit).unwrap()
+        };
+        let files = |p: &Plan| {
+            p.files
+                .iter()
+                .map(|f| (f.path, f.kind, f.columns.clone()))
+                .collect::<Vec<_>>()
+        };
+        let fits = within(crate::shapefile::SHAPEFILE_MAX_BYTES);
+        assert_eq!(
+            files(&fits),
+            [("data.shp", DataKind::Shapefile, vec![0, 1, 2])]
+        );
+        let past = within(200);
+        assert!(past.refusal.is_none());
+        assert_eq!(
+            files(&past),
+            [("data.fgb", DataKind::FlatGeobuf, vec![0, 1, 2])]
+        );
+        assert_eq!(past.substitutions[0]["what"], "the Shapefile");
+        let why = past.substitutions[0]["why"].as_str().unwrap();
+        assert!(why.starts_with("It would hold a file of "), "{why}");
+        assert!(
+            why.ends_with(" bytes, more than the 2 GB its format can address."),
+            "{why}"
+        );
+    }
 
     #[test]
     fn plans_excel_substitutions_for_rows_and_text_beyond_its_limits() {

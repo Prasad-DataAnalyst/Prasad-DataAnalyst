@@ -13,7 +13,7 @@ import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { nodeFs } from '@tw/io/node';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
 import { readBack } from '@tw/export';
-import { readZip, writeZip } from '@tw/io';
+import { readZip, sha256Hex, writeZip } from '@tw/io';
 import { openWorkbook } from '@tw/formats-xlsx';
 import {
   canonicalJson,
@@ -205,6 +205,11 @@ function handWorkbook(
  * Two Shapefile packages hold the same files, byte for byte, but for the date of the .dbf header
  * (bytes 1 to 3), which each engine takes from its own clock.
  */
+/** The same bytes, reported by size and digest rather than byte by byte. */
+function sameBytes(a: Uint8Array, b: Uint8Array, what: string): void {
+  expect([a.length, sha256Hex(a)], what).toEqual([b.length, sha256Hex(b)]);
+}
+
 function sameShapefile(a: Uint8Array, b: Uint8Array, what: string): void {
   const [x, y] = [readZip(a), readZip(b)];
   for (const name of ['data.shp', 'data.shx', 'data.dbf', 'data.prj', 'data.cpg', 'data.fields.csv']) {
@@ -3103,7 +3108,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
           await lite.listExportProfiles(db.id),
         );
-        for (const profile of ['geojson', 'csv', 'parquet', 'excel', 'shapefile', 'kml'] as const) {
+        for (const profile of ['geojson', 'csv', 'parquet', 'excel', 'shapefile', 'kml', 'flatgeobuf'] as const) {
           const run = async (e: EngineClient, id: string) =>
             e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
           const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
@@ -3129,9 +3134,12 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
             sameShapefile(zip, y.bytes as Uint8Array, `${name} as ${profile}`);
             continue;
           }
-          const dataFile = profile === 'excel' ? 'data.xlsx' : `data.${profile}`;
+          const dataFile =
+            profile === 'excel' ? 'data.xlsx' : profile === 'flatgeobuf' ? 'data.fgb' : `data.${profile}`;
           const [fx, fy] = [readZip(zip).read(dataFile), readZip(y.bytes as Uint8Array).read(dataFile)];
-          if (profile === 'geojson' || profile === 'csv' || profile === 'kml') {
+          if (profile === 'flatgeobuf') {
+            sameBytes(fx, fy, `${name} as ${profile}`);
+          } else if (profile === 'geojson' || profile === 'csv' || profile === 'kml') {
             // Both engines write the same file, byte for byte.
             expect(new TextDecoder().decode(fx), `${name} as ${profile}`).toBe(new TextDecoder().decode(fy));
           } else if (profile === 'parquet') {
@@ -3176,7 +3184,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       return a.step.id;
     };
     const exported = async (what: string, id: string) => {
-      for (const profile of ['geojson', 'csv', 'shapefile', 'kml'] as const) {
+      for (const profile of ['geojson', 'csv', 'shapefile', 'kml', 'flatgeobuf'] as const) {
         const run = async (e: EngineClient) => e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
         const [a, b] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
         if ('code' in (b as object)) {
@@ -3191,6 +3199,11 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         );
         if (profile === 'shapefile') {
           sameShapefile(x.bytes as Uint8Array, y.bytes as Uint8Array, `${what} as ${profile}`);
+          continue;
+        }
+        if (profile === 'flatgeobuf') {
+          const fgb = (r: ExportResult) => readZip(r.bytes as Uint8Array).read('data.fgb');
+          sameBytes(fgb(x), fgb(y), `${what} as ${profile}`);
           continue;
         }
         const file = (r: ExportResult) =>
@@ -3604,6 +3617,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     };
     const seen: Record<string, { shapeType: number; substitutions: string[] }> = {};
     const kmlSeen: Record<string, string[]> = {};
+    const fgbSeen: Record<string, string[]> = {};
     try {
       for (const e of [nat.client, lite]) await e.newProject({ name: 'Shapefiles', profile: { ...PROFILE } });
       for (const [name, features] of Object.entries(files)) {
@@ -3617,7 +3631,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
           await lite.listExportProfiles(db.id),
         );
-        for (const profile of ['shapefile', 'kml'] as const) {
+        for (const profile of ['shapefile', 'kml', 'flatgeobuf'] as const) {
           const run = async (e: EngineClient, id: string) =>
             e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
           const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
@@ -3640,6 +3654,12 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
             const kml = (r: ExportResult) => new TextDecoder().decode(readZip(r.bytes as Uint8Array).read('data.kml'));
             expect(kml(x), what).toBe(kml(y));
             kmlSeen[name] = x.manifest.substitutions.map((t) => t.what);
+            continue;
+          }
+          if (profile === 'flatgeobuf') {
+            const fgb = (r: ExportResult) => readZip(r.bytes as Uint8Array).read('data.fgb');
+            sameBytes(fgb(x), fgb(y), what);
+            fgbSeen[name] = x.manifest.substitutions.map((t) => t.what);
             continue;
           }
           sameShapefile(x.bytes as Uint8Array, y.bytes as Uint8Array, what);
@@ -3665,6 +3685,8 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         dimensions: [],
         collections: ['the column note', '1 geometry'],
       });
+      // FlatGeobuf holds any mix of kinds and long text, but not heights on only some geometries.
+      expect(fgbSeen).toEqual({ polygons: [], lines: [], points: [] });
     } finally {
       stopNative(nat);
       lite.close();

@@ -15,15 +15,31 @@ import {
 } from '@tw/model';
 import { esriWkt } from '@tw/geo';
 import type { View } from '@tw/table';
+import { analyseFgb, fgbAttributes, fgbCrs } from './flatgeobuf';
 import { analyseKml, kmlAttributes } from './kml';
 import { EXPORT_PROFILES } from './profiles';
-import { SHAPEFILE_MAX_BYTES, analyseShapes, dbfFields, shapeSource, shapefileSizes, unfitColumns } from './shapefile';
+import {
+  SHAPEFILE_MAX_BYTES,
+  analyseShapes,
+  dbfFields,
+  shapeSource,
+  shapefileSizes,
+  unfitColumns,
+  type ShapeSource,
+} from './shapefile';
 import { geometrySource } from './source';
 import { textOf } from './values';
 
 export { geometrySource } from './source';
 
-export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile' | 'kml';
+export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf';
+
+/** Format limits; only tests lower them, to reach a substitution without gigabytes of data. */
+export interface ExportLimits {
+  shapefileMaxBytes: number;
+}
+
+export const DEFAULT_LIMITS: ExportLimits = Object.freeze({ shapefileMaxBytes: SHAPEFILE_MAX_BYTES });
 
 export interface ExportPlan {
   profile: ExportProfileId;
@@ -132,7 +148,7 @@ export function knownCrs(crs: Detection<CrsRef> | null): string | null {
   return code === undefined || code === 'unknown' ? null : code;
 }
 
-function shapefilePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
+function shapefilePlan(view: View, crs: Detection<CrsRef> | null, limits: ExportLimits): ExportPlan {
   const base = { profile: 'shapefile' as const, substitutions: [], dataFiles: [] };
   const refused = (reason: string, fix: string): ExportPlan => ({ ...base, available: false, reason, fix });
   const code = knownCrs(crs);
@@ -159,7 +175,7 @@ function shapefilePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
   if (shapes.problem !== null) {
     return refused(
       shapes.problem,
-      'Filter the rows to one kind of geometry, or export as GeoJSON, which holds any mix.',
+      'Filter the rows to one kind of geometry, or export as FlatGeobuf or GeoJSON, which hold any mix.',
     );
   }
   const attributes = view
@@ -173,11 +189,24 @@ function shapefilePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
   );
   const sizes = shapefileSizes(view, source, shapes, fields);
   const largest = Math.max(sizes.dbf, sizes.shp);
-  if (largest > SHAPEFILE_MAX_BYTES) {
-    return refused(
-      `The Shapefile would hold a file of ${largest} bytes, more than the 2 GB its format can address.`,
-      'Filter the rows, or export as GeoJSON or Parquet.',
-    );
+  if (largest > limits.shapefileMaxBytes) {
+    // FR-EXP-03: the data goes to FlatGeobuf, which keeps the CRS, every column and any size.
+    const fgb = flatgeobufPlan(view, crs);
+    if (!fgb.available) return { ...fgb, profile: 'shapefile' };
+    return {
+      ...fgb,
+      profile: 'shapefile',
+      substitutions: [
+        {
+          ruleId: 'TW-EXP-002',
+          what: 'the Shapefile',
+          why: `It would hold a file of ${largest} bytes, more than the 2 GB its format can address.`,
+          instead:
+            'The data is delivered as data.fgb, a FlatGeobuf file in the same coordinate reference system with every column under its full name, which QGIS, ArcGIS Pro and GDAL open.',
+        },
+        ...fgb.substitutions,
+      ],
+    };
   }
   const substitutions: Substitution[] = [];
   if (unfit.length > 0) {
@@ -205,6 +234,62 @@ function shapefilePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
       { path: 'data.shp', kind: 'shapefile', columns: fields.map((f) => f.column.id) },
       ...(unfit.length > 0 ? [{ path: 'data-long-text.csv', kind: 'csv' as const, columns: unfit }] : []),
     ],
+  };
+}
+
+function flatgeobufPlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
+  const base = { profile: 'flatgeobuf' as const, substitutions: [], dataFiles: [] };
+  const refused = (reason: string, fix: string): ExportPlan => ({ ...base, available: false, reason, fix });
+  const code = knownCrs(crs);
+  const source: ShapeSource | null = shapeSource(view, code);
+  if (source === null) {
+    return refused(
+      'The dataset has no geometry column and no coordinate columns (longitude and latitude, or easting and northing).',
+      'Set the coordinate roles on the coordinate columns, or export as CSV or Excel.',
+    );
+  }
+  if (code === null) {
+    return refused(
+      'The coordinate reference system of the data is not known, and a FlatGeobuf file records it.',
+      'Set the coordinate reference system of the dataset first.',
+    );
+  }
+  if (fgbCrs(code) === null) {
+    return refused(
+      `A FlatGeobuf file records its coordinate reference system by EPSG code, and ${code} has none.`,
+      'Transform the coordinates to a listed coordinate reference system first (Data › Transform coordinates).',
+    );
+  }
+  const a = analyseFgb(view, source);
+  if (a.mixed) {
+    return refused(
+      'A FlatGeobuf file holds geometries all with heights or all without, and this dataset has both.',
+      'Filter the rows to geometries all with or all without heights, or export as GeoJSON, which holds any mix.',
+    );
+  }
+  const geometries = (n: number) => `${n} geometr${n > 1 ? 'ies' : 'y'}`;
+  const substitutions: Substitution[] = [];
+  if (a.bad > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.bad),
+      why: 'They do not have the shape of a geometry: a misplaced array or an unknown type.',
+      instead: 'Their features have no geometry; their other values are kept.',
+    });
+  }
+  if (a.long > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.long),
+      why: 'Their positions hold more than three numbers, and a FlatGeobuf position holds x, y and a height.',
+      instead: 'Each position keeps its first three numbers; the GeoJSON export keeps them all.',
+    });
+  }
+  return {
+    ...base,
+    available: true,
+    substitutions,
+    dataFiles: [{ path: 'data.fgb', kind: 'flatgeobuf', columns: fgbAttributes(view, source).map((c) => c.id) }],
   };
 }
 
@@ -271,7 +356,12 @@ function kmlPlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
   };
 }
 
-export function planExport(view: View, profile: ExportProfileId, crs: Detection<CrsRef> | null): ExportPlan {
+export function planExport(
+  view: View,
+  profile: ExportProfileId,
+  crs: Detection<CrsRef> | null,
+  limits: ExportLimits = DEFAULT_LIMITS,
+): ExportPlan {
   switch (profile) {
     case 'excel':
       return excelPlan(view);
@@ -292,9 +382,11 @@ export function planExport(view: View, profile: ExportProfileId, crs: Detection<
     case 'geojson':
       return geojsonPlan(view, crs);
     case 'shapefile':
-      return shapefilePlan(view, crs);
+      return shapefilePlan(view, crs, limits);
     case 'kml':
       return kmlPlan(view, crs);
+    case 'flatgeobuf':
+      return flatgeobufPlan(view, crs);
   }
 }
 

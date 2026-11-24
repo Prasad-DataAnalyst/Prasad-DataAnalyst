@@ -70,7 +70,7 @@ const FAMILY_NAMES: Record<Family, string> = {
 };
 
 /** The geometry of a row as the source gives it, or null; `bad` when a value has no valid shape. */
-function rowGeometry(view: View, r: number, source: ShapeSource): { g: Geometry | null; bad: boolean } {
+export function geometryOfRow(view: View, r: number, source: ShapeSource): { g: Geometry | null; bad: boolean } {
   if ('geometry' in source) {
     const v = view.value(r, source.geometry);
     if (v === null) return { g: null, bad: false };
@@ -121,7 +121,7 @@ export function analyseShapes(view: View, source: ShapeSource): ShapeAnalysis {
   const dims = new Set<number>();
   let bad = 0;
   for (const r of view.rows()) {
-    const { g, bad: isBad } = rowGeometry(view, r, source);
+    const { g, bad: isBad } = geometryOfRow(view, r, source);
     if (isBad) bad++;
     if (g === null) continue;
     families.add(FAMILY[g.type]);
@@ -256,14 +256,14 @@ export function geometryOfRecord(rec: ShapeRecord | null, shapeType: number): Ge
 /** Each row's geometry as the Shapefile holds it, in the form a reader makes of it. */
 export function* expectedShapes(view: View, source: ShapeSource, a: ShapeAnalysis): IterableIterator<CellValue> {
   for (const r of view.rows()) {
-    const g = geometryOfRecord(shapeRecord(rowGeometry(view, r, source).g, a.shapeType, a.z), a.shapeType);
+    const g = geometryOfRecord(shapeRecord(geometryOfRow(view, r, source).g, a.shapeType, a.z), a.shapeType);
     yield g === null ? null : { geometry: g };
   }
 }
 
 /** Each row's record, as the writer writes it. */
 export function* shapeRecords(view: View, source: ShapeSource, a: ShapeAnalysis): IterableIterator<ShapeRecord | null> {
-  for (const r of view.rows()) yield shapeRecord(rowGeometry(view, r, source).g, a.shapeType, a.z);
+  for (const r of view.rows()) yield shapeRecord(geometryOfRow(view, r, source).g, a.shapeType, a.z);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -31,7 +31,7 @@ const POLYGON_Z: i32 = 15;
 const MULTIPOINT_Z: i32 = 18;
 
 /// The largest file the format can address: offsets are 32-bit counts of 16-bit words.
-const SHAPEFILE_MAX_BYTES: u64 = (1 << 31) - 1;
+pub const SHAPEFILE_MAX_BYTES: u64 = (1 << 31) - 1;
 /// A .dbf character field holds at most 254 bytes.
 const DBF_TEXT_MAX: usize = 254;
 /// "No data" for a measure: any value below -10^38.
@@ -54,7 +54,7 @@ pub enum ShapeSource {
     Pair(usize, usize),
 }
 
-fn known_crs(spatial: &Spatial) -> Option<&str> {
+pub(crate) fn known_crs(spatial: &Spatial) -> Option<&str> {
     spatial.crs.as_deref().filter(|c| *c != "unknown")
 }
 
@@ -81,10 +81,10 @@ pub fn shape_source(columns: &[OutColumn], spatial: &Spatial) -> Option<ShapeSou
 // ---------------------------------------------------------------------------------------------
 // Geometries
 
-type Pos = Vec<f64>;
+pub(crate) type Pos = Vec<f64>;
 
 /// A geometry of a valid shape, as GeoJSON types it.
-enum Geom {
+pub(crate) enum Geom {
     Point(Pos),
     MultiPoint(Vec<Pos>),
     LineString(Vec<Pos>),
@@ -141,7 +141,7 @@ fn geom_of(g: &J) -> Option<Geom> {
     })
 }
 
-fn each_position(g: &Geom, visit: &mut dyn FnMut(&Pos)) {
+pub(crate) fn each_position(g: &Geom, visit: &mut dyn FnMut(&Pos)) {
     match g {
         Geom::Point(p) => visit(p),
         Geom::MultiPoint(ps) | Geom::LineString(ps) => ps.iter().for_each(visit),
@@ -152,7 +152,7 @@ fn each_position(g: &Geom, visit: &mut dyn FnMut(&Pos)) {
 }
 
 /// A row's geometry from the cells of its source columns, and whether a value had no valid shape.
-fn row_geometry(cells: &[Cell]) -> (Option<Geom>, bool) {
+pub(crate) fn row_geometry(cells: &[Cell]) -> (Option<Geom>, bool) {
     match cells {
         [Cell::Geometry(text)] => match parse(text) {
             Ok(g) if crate::geo::has_shape(&g) => match geom_of(&g) {
@@ -356,7 +356,7 @@ fn geometry_cell(parts: Option<&Vec<Vec<Pos>>>, shape_type: i32) -> Cell {
 }
 
 /// Math.min and Math.max as JavaScript has them: -0 is below +0.
-fn js_min(a: f64, b: f64) -> f64 {
+pub(crate) fn js_min(a: f64, b: f64) -> f64 {
     if a < b || (a == b && a.is_sign_negative()) {
         a
     } else {
@@ -364,7 +364,7 @@ fn js_min(a: f64, b: f64) -> f64 {
     }
 }
 
-fn js_max(a: f64, b: f64) -> f64 {
+pub(crate) fn js_max(a: f64, b: f64) -> f64 {
     if a > b || (a == b && a.is_sign_positive()) {
         a
     } else {
@@ -495,7 +495,7 @@ fn order_by(ordered: bool) -> &'static str {
 }
 
 /// Reads the rows of the given columns in row order, each as cells.
-fn each_row(
+pub(crate) fn each_row(
     conn: &Connection,
     view: &str,
     columns: &[OutColumn],
@@ -532,7 +532,7 @@ fn each_row(
     })
 }
 
-fn source_columns(source: ShapeSource) -> Vec<usize> {
+pub(crate) fn source_columns(source: ShapeSource) -> Vec<usize> {
     match source {
         ShapeSource::Geometry(j) => vec![j],
         ShapeSource::Pair(x, y) => vec![x, y],
@@ -549,6 +549,9 @@ pub struct ShapePlan {
     /// The columns the .dbf holds, and those that go to data-long-text.csv.
     pub dbf_columns: Vec<usize>,
     pub unfit: Vec<usize>,
+    /// When the Shapefile would pass its 2 GB limit: the columns of the FlatGeobuf file that
+    /// replaces it (FR-EXP-03).
+    pub flatgeobuf: Option<Vec<usize>>,
 }
 
 fn refused(reason: String, fix: &str) -> ShapePlan {
@@ -557,6 +560,7 @@ fn refused(reason: String, fix: &str) -> ShapePlan {
         substitutions: Vec::new(),
         dbf_columns: Vec::new(),
         unfit: Vec::new(),
+        flatgeobuf: None,
     }
 }
 
@@ -627,6 +631,7 @@ pub fn plan(
     columns: &[OutColumn],
     rows: u64,
     spatial: &Spatial,
+    max_bytes: u64,
 ) -> Result<ShapePlan> {
     let Some(source) = shape_source(columns, spatial) else {
         return Ok(refused(
@@ -657,7 +662,7 @@ pub fn plan(
         Err(problem) => {
             return Ok(refused(
                 problem,
-                "Filter the rows to one kind of geometry, or export as GeoJSON, which holds any mix.",
+                "Filter the rows to one kind of geometry, or export as FlatGeobuf or GeoJSON, which hold any mix.",
             ));
         }
     };
@@ -690,13 +695,26 @@ pub fn plan(
         },
     )?;
     let largest = dbf.max(shp);
-    if largest > SHAPEFILE_MAX_BYTES {
-        return Ok(refused(
-            format!(
-                "The Shapefile would hold a file of {largest} bytes, more than the 2 GB its format can address."
-            ),
-            "Filter the rows, or export as GeoJSON or Parquet.",
-        ));
+    if largest > max_bytes {
+        // FR-EXP-03: the data goes to FlatGeobuf, which keeps the CRS, every column and any size.
+        let fgb = crate::flatgeobuf::plan(conn, view, columns, spatial)?;
+        if let Some((reason, fix)) = fgb.refusal {
+            return Ok(refused(reason, &fix));
+        }
+        let mut substitutions = vec![json!({
+            "ruleId": "TW-EXP-002",
+            "what": "the Shapefile",
+            "why": format!("It would hold a file of {largest} bytes, more than the 2 GB its format can address."),
+            "instead": "The data is delivered as data.fgb, a FlatGeobuf file in the same coordinate reference system with every column under its full name, which QGIS, ArcGIS Pro and GDAL open.",
+        })];
+        substitutions.extend(fgb.substitutions);
+        return Ok(ShapePlan {
+            refusal: None,
+            substitutions,
+            dbf_columns: Vec::new(),
+            unfit: Vec::new(),
+            flatgeobuf: Some(fgb.attributes),
+        });
     }
     let mut substitutions = Vec::new();
     if !unfit.is_empty() {
@@ -721,6 +739,7 @@ pub fn plan(
         substitutions,
         dbf_columns,
         unfit,
+        flatgeobuf: None,
     })
 }
 

@@ -676,11 +676,10 @@ impl Handler for Reader {
             }
             "coordinates" => {
                 let parsed = parse_positions(&self.buffer.take().unwrap_or_default())?;
-                match self.geometry.last_mut() {
-                    Some(Building::Simple { positions, .. } | Building::Ring(positions)) => {
-                        *positions = parsed;
-                    }
-                    _ => {}
+                if let Some(Building::Simple { positions, .. } | Building::Ring(positions)) =
+                    self.geometry.last_mut()
+                {
+                    *positions = parsed;
                 }
             }
             "Point" | "LineString" => {

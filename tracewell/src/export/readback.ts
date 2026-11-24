@@ -4,6 +4,7 @@
  * with the output view by row count, header, per-column digests and format-specific structure.
  */
 import { tokenizeAll } from '@tw/formats-csv';
+import { FGB_COLUMN, readFlatGeobuf, type FgbCrs, type FgbReadValue } from '@tw/formats-flatgeobuf';
 import { readGeoJsonAll } from '@tw/formats-geojson';
 import { readKml } from '@tw/formats-kml';
 import { PARQUET_TYPES, readParquet } from '@tw/formats-parquet';
@@ -17,6 +18,7 @@ import {
   type ColumnId,
   type ExportColumn,
   type ExportManifest,
+  type Geometry,
   type RawField,
   type ValidationCheck,
 } from '@tw/model';
@@ -675,6 +677,161 @@ function readShapefile(parts: ShapefileParts, expected: ExpectedShape, o: Shapef
 }
 
 // ---------------------------------------------------------------------------------------------
+// FlatGeobuf
+
+export interface FlatGeobufReadOptions {
+  /** The name the header must have: the dataset's. */
+  name: string;
+  /** The geometry type the header must state: one every feature has, or Unknown for a mix. */
+  geometryType: number;
+  hasZ: boolean;
+  crs: FgbCrs | null;
+  /** The digest of the rows' geometries, in the form a reader takes back from FlatGeobuf. */
+  geometrySha256: string;
+}
+
+const GEOMETRY_NAMES = [
+  'Unknown',
+  'Point',
+  'LineString',
+  'Polygon',
+  'MultiPoint',
+  'MultiLineString',
+  'MultiPolygon',
+  'GeometryCollection',
+];
+
+/** The FlatGeobuf column type a column's values are written in. */
+function fgbType(type: ExportColumn['type']): number {
+  switch (type) {
+    case 'integer':
+      return FGB_COLUMN.Long;
+    case 'number':
+      return FGB_COLUMN.Double;
+    case 'boolean':
+      return FGB_COLUMN.Bool;
+    case 'date':
+    case 'datetime':
+      return FGB_COLUMN.DateTime;
+    case 'geometry':
+      return FGB_COLUMN.Json;
+    case 'string':
+      return FGB_COLUMN.String;
+  }
+}
+
+function retypeFgb(v: FgbReadValue, type: ExportColumn['type']): CellValue | undefined {
+  if (v === null) return null;
+  switch (type) {
+    case 'integer':
+      return typeof v === 'number' && Number.isInteger(v) ? v : undefined;
+    case 'number':
+      return typeof v === 'number' ? v : undefined;
+    case 'boolean':
+      return typeof v === 'boolean' ? v : undefined;
+    default:
+      return typeof v === 'string' ? retypeText(v, type) : undefined;
+  }
+}
+
+/** Every x and y of a geometry, as the envelope is folded. */
+function eachXy(g: Geometry, visit: (x: number, y: number) => void): void {
+  const walk = (c: unknown): void => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === 'number') visit(c[0], c[1] as number);
+    else for (const item of c) walk(item);
+  };
+  if (g.type === 'GeometryCollection') for (const m of g.geometries) eachXy(m, visit);
+  else walk(g.coordinates);
+}
+
+function readFlatGeobufFile(
+  bytes: Uint8Array,
+  expected: ExpectedShape,
+  file: string,
+  o: FlatGeobufReadOptions,
+): ValidationCheck[] {
+  let doc;
+  try {
+    doc = readFlatGeobuf(bytes);
+  } catch (e) {
+    return [check('RB-OPEN', false, `The file does not parse as FlatGeobuf: ${messageOf(e)}.`, file)];
+  }
+  const checks: ValidationCheck[] = [check('RB-OPEN', true, 'The file parses as FlatGeobuf.', file)];
+  const h = doc.header;
+  const problems: string[] = [];
+  const typeName = (n: number) => GEOMETRY_NAMES[n] ?? `type ${n}`;
+  if (h.name !== o.name) problems.push('the header is not named after the dataset');
+  if (h.featuresCount !== BigInt(doc.features.length)) {
+    problems.push(`the header counts ${h.featuresCount} features and the file holds ${doc.features.length}`);
+  }
+  if (h.indexNodeSize !== 0) problems.push('the header declares a spatial index, which would reorder the rows');
+  if (h.geometryType !== o.geometryType) {
+    problems.push(`the header states ${typeName(h.geometryType)} geometries, not ${typeName(o.geometryType)}`);
+  }
+  if (h.hasZ !== o.hasZ) problems.push(o.hasZ ? 'the header does not declare heights' : 'the header declares heights');
+  if (h.hasM || h.hasT || h.hasTM) problems.push('the header declares measures or times, which the data has none of');
+  const crs = h.crs;
+  if (o.crs === null ? crs !== null : crs?.org !== o.crs.org || crs.code !== o.crs.code || crs.name !== o.crs.name) {
+    problems.push('the header does not record the coordinate reference system of the data by its EPSG code');
+  }
+  expected.columns.forEach((col, j) => {
+    const c = h.columns[j];
+    if (c !== undefined && c.type !== fgbType(col.type)) problems.push(`the column ${c.name} is of type ${c.type}`);
+  });
+  let box: number[] | null = null;
+  let mistyped = 0;
+  for (const f of doc.features) {
+    if (f.geometry === null) continue;
+    if (h.geometryType !== 0 && f.geometry.type !== typeName(h.geometryType)) mistyped++;
+    eachXy(f.geometry, (x, y) => {
+      box =
+        box === null
+          ? [x, y, x, y]
+          : [
+              Math.min(box[0] as number, x),
+              Math.min(box[1] as number, y),
+              Math.max(box[2] as number, x),
+              Math.max(box[3] as number, y),
+            ];
+    });
+  }
+  if (mistyped > 0) problems.push(`${mistyped} features are not of the type the header states`);
+  if (box === null ? h.envelope !== null : h.envelope === null || !sameBox(h.envelope, box)) {
+    problems.push('the header envelope does not bound the geometries');
+  }
+  checks.push(
+    problems.length === 0
+      ? check(
+          'RB-FGB-STRUCTURE',
+          true,
+          `A FlatGeobuf 3 file with ${doc.features.length} features in row order, no spatial index, typed columns, an envelope that bounds the geometries and the EPSG code of the data.`,
+          file,
+        )
+      : check('RB-FGB-STRUCTURE', false, `FlatGeobuf structure problems: ${problems.slice(0, 5).join('; ')}.`, file),
+  );
+  checks.push(
+    headerCheck(
+      expected.columns,
+      h.columns.map((c) => c.name),
+      file,
+    ),
+  );
+  checks.push(rowsCheck(doc.features.length, expected.rowCount, file));
+  const values = expected.columns.map((col, j) =>
+    doc.features.map((f) => retypeFgb(f.properties[j] ?? null, col.type)),
+  );
+  checks.push(valuesCheck(expected.columns, values, file));
+  const shapes: CellValue[] = doc.features.map((f) => (f.geometry === null ? null : { geometry: f.geometry }));
+  checks.push(
+    columnDigest(shapes) === o.geometrySha256 && shapes.length === expected.rowCount
+      ? check('RB-FGB-GEOMETRY', true, "Every feature's geometry matches its row's, coordinate for coordinate.", file)
+      : check('RB-FGB-GEOMETRY', false, 'The feature geometries differ from the geometries of the rows.', file),
+  );
+  return checks;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Package
 
 function readPackage(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[] {
@@ -746,6 +903,7 @@ export const readBack: {
   geojson(bytes: Uint8Array, expected: ExpectedShape, file: string, o: GeoJsonReadOptions): ValidationCheck[];
   shapefile(parts: ShapefileParts, expected: ExpectedShape, o: ShapefileReadOptions): ValidationCheck[];
   kml(bytes: Uint8Array, expected: ExpectedShape, file: string, o: KmlReadOptions): ValidationCheck[];
+  flatgeobuf(bytes: Uint8Array, expected: ExpectedShape, file: string, o: FlatGeobufReadOptions): ValidationCheck[];
   package(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[];
 } = Object.freeze({
   csv: readCsv,
@@ -754,5 +912,6 @@ export const readBack: {
   geojson: readGeoJson,
   shapefile: readShapefile,
   kml: readKmlFile,
+  flatgeobuf: readFlatGeobufFile,
   package: readPackage,
 });

@@ -20,6 +20,7 @@ export const TW_MODULE_DIRS: Readonly<Record<string, string>> = {
   'formats-xlsx': 'src/formats/xlsx',
   'formats-geojson': 'src/formats/geojson',
   'formats-kml': 'src/formats/kml',
+  'formats-flatgeobuf': 'src/formats/flatgeobuf',
   'formats-json': 'src/formats/json',
   'formats-parquet': 'src/formats/parquet',
   detect: 'src/detect',

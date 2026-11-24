@@ -41,6 +41,13 @@
       "destinations": ["Google Earth", "Google My Maps", "ArcGIS Earth", "QGIS"],
       "dataExtension": ".kml",
       "description": "A KML 2.2 file in WGS 84 longitude and latitude: one placemark per row, named by its ID column, with every column as extended data and the geometry, or the point of the latitude and longitude columns."
+    },
+    {
+      "id": "flatgeobuf",
+      "label": "QGIS / ArcGIS / GDAL (FlatGeobuf)",
+      "destinations": ["QGIS", "ArcGIS Pro", "GDAL", "Web maps"],
+      "dataExtension": ".fgb",
+      "description": "A FlatGeobuf file in the coordinate reference system of the data, recorded by its EPSG code: one feature per row, in row order, with any mix of geometry kinds and every column as a typed property named \"Name [unit]\". No field-name or 2 GB limits, so it is also what a Shapefile too large for its format is delivered as."
     }
   ]
 }

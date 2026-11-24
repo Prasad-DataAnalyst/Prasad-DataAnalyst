@@ -23,6 +23,7 @@ mod encoding;
 mod engine;
 mod error;
 mod export;
+mod flatgeobuf;
 mod framing;
 mod geo;
 mod geodesy;
