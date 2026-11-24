@@ -1,8 +1,15 @@
+import { existsSync } from 'node:fs';
 import { defineConfig } from '@playwright/test';
 import type { EngineKind } from './tests/e2e/fixtures';
 
-// Chromium 1194 is preinstalled for @playwright/test 1.56.1; the suite never downloads browsers.
+// Chromium 1194 is the build @playwright/test 1.56.1 expects; the suite never downloads browsers.
+// A machine with a newer build instead keeps a stable link to its headless shell, which the suite
+// then launches.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= '/opt/pw-browsers';
+const BROWSERS = process.env.PLAYWRIGHT_BROWSERS_PATH;
+const LINKED_SHELL = `${BROWSERS}/chromium_headless_shell`;
+const executablePath =
+  !existsSync(`${BROWSERS}/chromium_headless_shell-1194`) && existsSync(LINKED_SHELL) ? LINKED_SHELL : undefined;
 
 const ORIGIN = 'http://127.0.0.1:4173';
 
@@ -26,6 +33,7 @@ export default defineConfig<{ engine: EngineKind }>({
     baseURL: ORIGIN,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    ...(executablePath === undefined ? {} : { launchOptions: { executablePath } }),
   },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium', acceptDownloads: true, engine: 'lite' } },

@@ -11,7 +11,7 @@ mod book;
 mod layout;
 mod legacy;
 pub mod writer;
-mod xml;
+pub(crate) mod xml;
 
 use crate::csv::Note;
 use crate::detect::det;

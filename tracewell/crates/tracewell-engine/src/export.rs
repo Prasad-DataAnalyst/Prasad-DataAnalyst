@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
 /// The profiles this engine writes: every one.
-pub const NATIVE_PROFILES: [&str; 5] = ["excel", "csv", "parquet", "geojson", "shapefile"];
+pub const NATIVE_PROFILES: [&str; 6] = ["excel", "csv", "parquet", "geojson", "shapefile", "kml"];
 /// A package up to this size is handed back as bytes when the request names no file.
 pub const RETURN_BYTES_MAX: u64 = 256 << 20;
 const READ_BYTES: usize = 4 << 20;
@@ -86,6 +86,9 @@ pub fn refusal(
     spatial: &Spatial,
     profile: &str,
 ) -> Option<(String, String)> {
+    if profile == "kml" {
+        return crate::kml::refusal(columns, spatial);
+    }
     if profile != "geojson" {
         return None;
     }
@@ -157,6 +160,7 @@ enum DataKind {
     Xlsx,
     GeoJson,
     Shapefile,
+    Kml,
 }
 
 /// A data file a profile writes: its path in the package and the columns of the view it holds.
@@ -225,6 +229,26 @@ fn plan_export(
             substitutions: Vec::new(),
             files: Vec::new(),
             refusal: Some(why),
+        });
+    }
+    if profile == "kml" {
+        let p = crate::kml::plan(conn, view, columns, spatial)?;
+        let mut files = vec![DataFile {
+            path: "data.kml",
+            kind: DataKind::Kml,
+            columns: p.attributes,
+        }];
+        if !p.unfit.is_empty() {
+            files.push(DataFile {
+                path: "data-long-text.csv",
+                kind: DataKind::Csv,
+                columns: p.unfit,
+            });
+        }
+        return Ok(Plan {
+            substitutions: p.substitutions,
+            files,
+            refusal: None,
         });
     }
     if profile == "shapefile" {
@@ -1659,6 +1683,17 @@ fn read_back(
             input.audit.len() as u64,
         )),
         DataKind::GeoJson => read_back_geojson(path, expected, file, &input.spatial),
+        DataKind::Kml => crate::kml::read_back(
+            conn,
+            &input.view,
+            &input.columns,
+            &input.spatial,
+            expected,
+            &input.dataset_name,
+            input.ordered,
+            path,
+            file,
+        ),
         DataKind::Shapefile => {
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
             // Files taken back out of the package are named inside-data.shp and so on.
@@ -2514,6 +2549,16 @@ pub fn build_export(
             DataKind::Parquet => write_parquet(conn, input, &path)?,
             DataKind::Xlsx => write_xlsx(conn, input, &plan, &f.columns, &digests, &path, cancel)?,
             DataKind::GeoJson => write_geojson(conn, input, &path, cancel)?,
+            DataKind::Kml => crate::kml::write(
+                conn,
+                &input.view,
+                &input.columns,
+                &input.spatial,
+                &f.columns,
+                &input.dataset_name,
+                input.ordered,
+                &path,
+            )?,
             DataKind::Shapefile => crate::shapefile::write(
                 conn,
                 &input.view,

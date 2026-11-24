@@ -31,6 +31,7 @@ mod geojson;
 mod import;
 mod issues;
 mod json;
+mod kml;
 mod memory;
 mod overrides;
 mod parquet;

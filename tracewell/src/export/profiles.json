@@ -34,6 +34,13 @@
       "destinations": ["ArcGIS Pro", "QGIS", "ArcMap", "GDAL"],
       "dataExtension": ".shp",
       "description": "An ESRI Shapefile (.shp, .shx, .dbf) in the coordinate reference system of the data, with its .prj (ESRI WKT) and .cpg (UTF-8), and data.fields.csv, which maps each field name of 10 characters to the full column name and unit."
+    },
+    {
+      "id": "kml",
+      "label": "Google Earth (KML)",
+      "destinations": ["Google Earth", "Google My Maps", "ArcGIS Earth", "QGIS"],
+      "dataExtension": ".kml",
+      "description": "A KML 2.2 file in WGS 84 longitude and latitude: one placemark per row, named by its ID column, with every column as extended data and the geometry, or the point of the latitude and longitude columns."
     }
   ]
 }

@@ -9,13 +9,13 @@ import type { RulePackRef } from './rules';
 import type { Step } from './steps';
 import type { LogicalType } from './values';
 
-export type ExportProfileId = 'excel' | 'csv' | 'parquet' | 'geojson' | 'shapefile';
+export type ExportProfileId = 'excel' | 'csv' | 'parquet' | 'geojson' | 'shapefile' | 'kml';
 
 export interface ExportProfile {
   id: ExportProfileId;
   label: string;
   destinations: string[];
-  dataExtension: '.xlsx' | '.csv' | '.parquet' | '.geojson' | '.shp';
+  dataExtension: '.xlsx' | '.csv' | '.parquet' | '.geojson' | '.shp' | '.kml';
   description: string;
 }
 
@@ -65,6 +65,8 @@ export interface ValidationCheck {
     | 'RB-GEOJSON-STRUCTURE'
     | 'RB-SHP-STRUCTURE'
     | 'RB-SHP-GEOMETRY'
+    | 'RB-KML-STRUCTURE'
+    | 'RB-KML-GEOMETRY'
     | 'RB-PARQUET-TYPES'
     | 'RB-PKG-CHECKSUMS'
     | 'RB-PKG-CONTENTS';

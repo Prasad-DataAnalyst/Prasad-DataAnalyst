@@ -33,6 +33,7 @@ import { headerFor } from './profiles';
 import { readBack, type ShapefileParts } from './readback';
 import { issuesCsv, renderReadme } from './readme';
 import { expectedShape, type ExpectedShape } from './shape';
+import { expectedKmlGeometries, placemarks } from './kml';
 import {
   analyseShapes,
   dbfFields,
@@ -180,6 +181,11 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
           ],
         };
       }
+      case 'kml': {
+        const source = geometrySource(view) ?? 'latlon';
+        const columns = f.columns.map((id) => view.columnSchema(id));
+        return { ...one, bytes: writers.kml(view.schema.name, placemarks(view, source, columns)) };
+      }
       case 'csv':
         return {
           ...one,
@@ -218,6 +224,11 @@ async function validateFile(
 ): Promise<ValidationCheck[]> {
   const bytes = read(file.path) ?? new Uint8Array(0);
   switch (file.kind) {
+    case 'kml':
+      return readBack.kml(bytes, file.shape, file.path, {
+        documentName: input.view.schema.name,
+        geometrySha256: columnDigest(expectedKmlGeometries(input.view, geometrySource(input.view) ?? 'latlon')),
+      });
     case 'shapefile': {
       const { code, source, shapes } = shapesOf(input);
       const parts: ShapefileParts = {

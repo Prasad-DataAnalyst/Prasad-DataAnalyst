@@ -5,6 +5,7 @@
  */
 import { tokenizeAll } from '@tw/formats-csv';
 import { readGeoJsonAll } from '@tw/formats-geojson';
+import { readKml } from '@tw/formats-kml';
 import { PARQUET_TYPES, readParquet } from '@tw/formats-parquet';
 import { openWorkbook, type XlsxSheet } from '@tw/formats-xlsx';
 import { parseChecksumsFile, readZip, sha256Hex } from '@tw/io';
@@ -433,6 +434,79 @@ function headerSame(a: string[], b: string[]): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------
+// KML
+
+export interface KmlReadOptions {
+  /** The name the Document must have: the dataset's. */
+  documentName: string;
+  /** The digest of the rows' geometries, in the form a reader takes back from KML. */
+  geometrySha256: string;
+}
+
+const KML_NAMESPACE = 'http://www.opengis.net/kml/2.2';
+
+function readKmlFile(bytes: Uint8Array, expected: ExpectedShape, file: string, o: KmlReadOptions): ValidationCheck[] {
+  let doc;
+  try {
+    doc = readKml(bytes);
+  } catch (e) {
+    return [check('RB-OPEN', false, `The file does not parse as KML: ${messageOf(e)}.`, file)];
+  }
+  const checks: ValidationCheck[] = [check('RB-OPEN', true, 'The file parses as KML.', file)];
+  const headers = expected.columns.map((c) => c.header);
+  const problems: string[] = [];
+  if (doc.root !== 'kml' || doc.namespace !== KML_NAMESPACE) problems.push('the root is not a KML 2.2 kml element');
+  if (doc.documents !== 1) problems.push(`it has ${doc.documents} Document elements instead of one`);
+  if (doc.name !== o.documentName) problems.push('the Document is not named after the dataset');
+  if (doc.placemarks.length !== expected.rowCount) {
+    problems.push(`it has ${doc.placemarks.length} placemarks instead of ${expected.rowCount}`);
+  }
+  const misnamed = doc.placemarks.filter(
+    (p) =>
+      !headerSame(
+        p.data.map(([n]) => n),
+        headers,
+      ),
+  ).length;
+  if (misnamed > 0) problems.push(`${misnamed} placemarks do not hold the columns in order`);
+  const doubled = doc.placemarks.filter((p) => p.geometries > 1).length;
+  if (doubled > 0) problems.push(`${doubled} placemarks have more than one geometry`);
+  checks.push(
+    problems.length === 0
+      ? check(
+          'RB-KML-STRUCTURE',
+          true,
+          'A KML 2.2 document with one placemark per row, each holding the columns as extended data and at most one geometry.',
+          file,
+        )
+      : check('RB-KML-STRUCTURE', false, `KML structure problems: ${problems.join('; ')}.`, file),
+  );
+  const keys = doc.placemarks[0]?.data.map(([n]) => n) ?? [];
+  checks.push(
+    doc.placemarks.length === 0 || headerSame(keys, headers)
+      ? check('RB-HEADER', true, 'Every placemark holds the columns with the expected names and units, in order.', file)
+      : check(
+          'RB-HEADER',
+          false,
+          `The placemark data are ${JSON.stringify(keys)} instead of ${JSON.stringify(headers)}.`,
+          file,
+        ),
+  );
+  checks.push(rowsCheck(doc.placemarks.length, expected.rowCount, file));
+  const values = expected.columns.map((col, j) =>
+    doc.placemarks.map((p) => retypeText(p.data[j]?.[1] ?? '', col.type)),
+  );
+  checks.push(valuesCheck(expected.columns, values, file));
+  const shapes: CellValue[] = doc.placemarks.map((p) => (p.geometry === null ? null : { geometry: p.geometry }));
+  checks.push(
+    columnDigest(shapes) === o.geometrySha256
+      ? check('RB-KML-GEOMETRY', true, "Every placemark's geometry matches its row's, coordinate for coordinate.", file)
+      : check('RB-KML-GEOMETRY', false, 'The placemark geometries differ from the geometries of the rows.', file),
+  );
+  return checks;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Shapefile
 
 /** The files of a Shapefile, as the package names them; undefined for one that is missing. */
@@ -671,6 +745,7 @@ export const readBack: {
   ): ValidationCheck[];
   geojson(bytes: Uint8Array, expected: ExpectedShape, file: string, o: GeoJsonReadOptions): ValidationCheck[];
   shapefile(parts: ShapefileParts, expected: ExpectedShape, o: ShapefileReadOptions): ValidationCheck[];
+  kml(bytes: Uint8Array, expected: ExpectedShape, file: string, o: KmlReadOptions): ValidationCheck[];
   package(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[];
 } = Object.freeze({
   csv: readCsv,
@@ -678,5 +753,6 @@ export const readBack: {
   xlsx: readXlsx,
   geojson: readGeoJson,
   shapefile: readShapefile,
+  kml: readKmlFile,
   package: readPackage,
 });

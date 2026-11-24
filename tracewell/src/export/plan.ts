@@ -15,11 +15,15 @@ import {
 } from '@tw/model';
 import { esriWkt } from '@tw/geo';
 import type { View } from '@tw/table';
+import { analyseKml, kmlAttributes } from './kml';
 import { EXPORT_PROFILES } from './profiles';
 import { SHAPEFILE_MAX_BYTES, analyseShapes, dbfFields, shapeSource, shapefileSizes, unfitColumns } from './shapefile';
+import { geometrySource } from './source';
 import { textOf } from './values';
 
-export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile';
+export { geometrySource } from './source';
+
+export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile' | 'kml';
 
 export interface ExportPlan {
   profile: ExportProfileId;
@@ -31,12 +35,6 @@ export interface ExportPlan {
 }
 
 const WGS84 = new Set(['OGC:CRS84', 'EPSG:4326']);
-
-export function geometrySource(view: View): 'column' | 'latlon' | null {
-  if (view.schema.geometryColumn !== null && view.columnIds().includes(view.schema.geometryColumn)) return 'column';
-  const roles = view.schema.columns.map((c) => c.role.value);
-  return roles.includes('latitude') && roles.includes('longitude') ? 'latlon' : null;
-}
 
 function longTextColumns(view: View): ColumnId[] {
   const out: ColumnId[] = [];
@@ -210,6 +208,69 @@ function shapefilePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
   };
 }
 
+function kmlPlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
+  const base = { profile: 'kml' as const, substitutions: [], dataFiles: [] };
+  const source = geometrySource(view);
+  if (source === null) {
+    return {
+      ...base,
+      available: false,
+      reason: 'The dataset has no geometry column and no latitude and longitude columns.',
+      fix: 'Set the latitude and longitude roles on the coordinate columns, or export as CSV or Excel.',
+    };
+  }
+  if (crs === null || !WGS84.has(crs.value.code)) {
+    return {
+      ...base,
+      available: false,
+      reason: `KML holds WGS 84 longitude and latitude; this dataset is in ${crs?.value.code ?? 'an undeclared coordinate system'}.`,
+      fix: 'Transform the coordinates to EPSG:4326 first (Data › Transform coordinates), or export as a Shapefile, which keeps the coordinate reference system of the data.',
+    };
+  }
+  const attributes = kmlAttributes(view, source);
+  const a = analyseKml(view, source, attributes);
+  const geometries = (n: number) => `${n} geometr${n > 1 ? 'ies' : 'y'}`;
+  const substitutions: Substitution[] = [];
+  if (a.unfit.length > 0) {
+    const names = a.unfit.map((id) => view.columnSchema(id).name);
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: `the column${a.unfit.length > 1 ? 's' : ''} ${names.join(', ')}`,
+      why: 'Some values hold characters XML cannot carry, such as control characters.',
+      instead: 'These columns are delivered in data-long-text.csv in the package, row for row with the placemarks.',
+    });
+  }
+  if (a.bad > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.bad),
+      why: 'They do not have the shape of a geometry: a misplaced array or an unknown type.',
+      instead: 'Their placemarks have no geometry; their other values are kept.',
+    });
+  }
+  if (a.long > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.long),
+      why: 'Their positions hold more than three numbers, and a KML position holds longitude, latitude and height.',
+      instead: 'Each position keeps its first three numbers; the GeoJSON export keeps them all.',
+    });
+  }
+  return {
+    ...base,
+    available: true,
+    substitutions,
+    dataFiles: [
+      {
+        path: 'data.kml',
+        kind: 'kml',
+        columns: attributes.filter((c) => !a.unfit.includes(c.id)).map((c) => c.id),
+      },
+      ...(a.unfit.length > 0 ? [{ path: 'data-long-text.csv', kind: 'csv' as const, columns: a.unfit }] : []),
+    ],
+  };
+}
+
 export function planExport(view: View, profile: ExportProfileId, crs: Detection<CrsRef> | null): ExportPlan {
   switch (profile) {
     case 'excel':
@@ -232,6 +293,8 @@ export function planExport(view: View, profile: ExportProfileId, crs: Detection<
       return geojsonPlan(view, crs);
     case 'shapefile':
       return shapefilePlan(view, crs);
+    case 'kml':
+      return kmlPlan(view, crs);
   }
 }
 

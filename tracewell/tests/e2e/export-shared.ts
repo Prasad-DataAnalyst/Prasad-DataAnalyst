@@ -12,7 +12,7 @@ export async function expectAllChecksPassed(page: Page, profile: string): Promis
 
 export function expectOracleAgrees(
   path: string,
-  script: 'check_csv.py' | 'check_xlsx.py' | 'check_geojson.py' | 'check_shapefile.py',
+  script: 'check_csv.py' | 'check_xlsx.py' | 'check_geojson.py' | 'check_shapefile.py' | 'check_kml.py',
 ): Record<string, unknown> {
   const pkg = runOracle('check_package.py', [path]) as {
     ok: boolean;
@@ -25,7 +25,7 @@ export function expectOracleAgrees(
   expect(pkg.ok).toBe(true);
   expect(pkg.owner).toContain('Prasad');
   const data = runOracle(script, [path]) as { columns: { header: string; sha256: string }[] };
-  if (script === 'check_shapefile.py') {
+  if (script === 'check_shapefile.py' || script === 'check_kml.py') {
     // A Shapefile holds the attribute columns in its .dbf and the geometry in its shapes, by header.
     const byHeader = (cs: { header: string; sha256: string }[]) =>
       Object.fromEntries(cs.map((c) => [c.header, c.sha256]));

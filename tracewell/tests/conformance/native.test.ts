@@ -3103,7 +3103,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
           await lite.listExportProfiles(db.id),
         );
-        for (const profile of ['geojson', 'csv', 'parquet', 'excel', 'shapefile'] as const) {
+        for (const profile of ['geojson', 'csv', 'parquet', 'excel', 'shapefile', 'kml'] as const) {
           const run = async (e: EngineClient, id: string) =>
             e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
           const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
@@ -3131,7 +3131,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
           }
           const dataFile = profile === 'excel' ? 'data.xlsx' : `data.${profile}`;
           const [fx, fy] = [readZip(zip).read(dataFile), readZip(y.bytes as Uint8Array).read(dataFile)];
-          if (profile === 'geojson' || profile === 'csv') {
+          if (profile === 'geojson' || profile === 'csv' || profile === 'kml') {
             // Both engines write the same file, byte for byte.
             expect(new TextDecoder().decode(fx), `${name} as ${profile}`).toBe(new TextDecoder().decode(fy));
           } else if (profile === 'parquet') {
@@ -3176,7 +3176,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       return a.step.id;
     };
     const exported = async (what: string, id: string) => {
-      for (const profile of ['geojson', 'csv', 'shapefile'] as const) {
+      for (const profile of ['geojson', 'csv', 'shapefile', 'kml'] as const) {
         const run = async (e: EngineClient) => e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
         const [a, b] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
         if ('code' in (b as object)) {
@@ -3575,8 +3575,35 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         feature({ type: 'Point', coordinates: [2.5, 56] }, { name: 'W1' }),
         feature({ type: 'Point', coordinates: [3, 57, 120] }, { name: 'W2' }),
       ],
+      collections: [
+        feature(
+          {
+            type: 'GeometryCollection',
+            geometries: [
+              { type: 'Point', coordinates: [1, 50] },
+              {
+                type: 'LineString',
+                coordinates: [
+                  [1, 50],
+                  [2, 51],
+                ],
+              },
+            ],
+          },
+          { name: 'Pad & <site>', note: 'tab\there, bell \u0007' },
+        ),
+        feature(
+          { type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [3, 52, 7] }] },
+          {
+            name: 'Single',
+            note: 'line one\r\nline two',
+          },
+        ),
+        feature({ type: 'Point', coordinates: 'nowhere' }, { name: 'Broken', note: null }),
+      ],
     };
     const seen: Record<string, { shapeType: number; substitutions: string[] }> = {};
+    const kmlSeen: Record<string, string[]> = {};
     try {
       for (const e of [nat.client, lite]) await e.newProject({ name: 'Shapefiles', profile: { ...PROFILE } });
       for (const [name, features] of Object.entries(files)) {
@@ -3590,29 +3617,38 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         expect(await nat.client.listExportProfiles(da.id), `${name}: profiles`).toEqual(
           await lite.listExportProfiles(db.id),
         );
-        const run = async (e: EngineClient, id: string) =>
-          e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile: 'shapefile' }));
-        const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
-        if ('code' in (b as object)) {
-          expect(a, `${name}: refusal`).toEqual(b);
-          continue;
+        for (const profile of ['shapefile', 'kml'] as const) {
+          const run = async (e: EngineClient, id: string) =>
+            e.awaitJob<ExportResult>(await e.exportData({ datasetId: id, profile }));
+          const [a, b] = [await settled(() => run(nat.client, da.id)), await settled(() => run(lite, db.id))];
+          const what = `${name} as ${profile}`;
+          if ('code' in (b as object)) {
+            expect(a, `${what}: refusal`).toEqual(b);
+            continue;
+          }
+          const [x, y] = [a as ExportResult, b as ExportResult];
+          expect([x.ok, y.ok], what).toEqual([true, true]);
+          expect(x.validation.checks.map((c) => [c.id, c.file ?? '', c.detail])).toEqual(
+            y.validation.checks.map((c) => [c.id, c.file ?? '', c.detail]),
+          );
+          expect(x.manifest.substitutions, `${what}: substitutions`).toEqual(y.manifest.substitutions);
+          expect(
+            x.manifest.files.map((f) => [f.path, f.role]),
+            what,
+          ).toEqual(y.manifest.files.map((f) => [f.path, f.role]));
+          if (profile === 'kml') {
+            const kml = (r: ExportResult) => new TextDecoder().decode(readZip(r.bytes as Uint8Array).read('data.kml'));
+            expect(kml(x), what).toBe(kml(y));
+            kmlSeen[name] = x.manifest.substitutions.map((t) => t.what);
+            continue;
+          }
+          sameShapefile(x.bytes as Uint8Array, y.bytes as Uint8Array, what);
+          const shp = readZip(x.bytes as Uint8Array).read('data.shp');
+          seen[name] = {
+            shapeType: new DataView(shp.buffer, shp.byteOffset).getInt32(32, true),
+            substitutions: x.manifest.substitutions.map((t) => t.what),
+          };
         }
-        const [x, y] = [a as ExportResult, b as ExportResult];
-        expect([x.ok, y.ok], name).toEqual([true, true]);
-        expect(x.validation.checks.map((c) => [c.id, c.file ?? '', c.detail])).toEqual(
-          y.validation.checks.map((c) => [c.id, c.file ?? '', c.detail]),
-        );
-        expect(x.manifest.substitutions, `${name}: substitutions`).toEqual(y.manifest.substitutions);
-        expect(
-          x.manifest.files.map((f) => [f.path, f.role]),
-          name,
-        ).toEqual(y.manifest.files.map((f) => [f.path, f.role]));
-        sameShapefile(x.bytes as Uint8Array, y.bytes as Uint8Array, name);
-        const shp = readZip(x.bytes as Uint8Array).read('data.shp');
-        seen[name] = {
-          shapeType: new DataView(shp.buffer, shp.byteOffset).getInt32(32, true),
-          substitutions: x.manifest.substitutions.map((t) => t.what),
-        };
       }
       // Polygons with long and padded text, lines with heights, points written as multipoints;
       // geometries with and without heights refused.
@@ -3620,6 +3656,14 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         polygons: { shapeType: 5, substitutions: ['the columns name, note'] },
         lines: { shapeType: 13, substitutions: [] },
         points: { shapeType: 8, substitutions: [] },
+      });
+      // KML holds them all, mixed heights included; text XML cannot carry goes beside it.
+      expect(kmlSeen).toEqual({
+        polygons: [],
+        lines: [],
+        points: [],
+        dimensions: [],
+        collections: ['the column note', '1 geometry'],
       });
     } finally {
       stopNative(nat);
