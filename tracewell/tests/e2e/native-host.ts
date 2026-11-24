@@ -32,8 +32,11 @@ class Session {
   private readonly chunks: Buffer[] = [];
   private waiting: ((data: string | null) => void) | null = null;
   private ended = false;
+  /** Settles once the process has exited, and with it let go of its files and their locks. */
+  readonly exited: Promise<void>;
 
   constructor(private readonly child: ChildProcessWithoutNullStreams) {
+    this.exited = new Promise((resolve) => child.once('exit', () => resolve()));
     child.stdout.on('data', (chunk: Buffer) => {
       if (this.waiting === null) this.chunks.push(chunk);
       else this.deliver(chunk.toString('base64'));
@@ -70,9 +73,10 @@ class Session {
   }
 
   /** Ends the engine as a closed app ends it: no shutdown, so its journal stays for recovery. */
-  kill(): void {
-    this.child.kill('SIGKILL');
+  kill(): Promise<void> {
+    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill('SIGKILL');
     this.finish();
+    return this.exited;
   }
 
   private deliver(data: string | null): void {
@@ -127,8 +131,9 @@ export interface NativeHost {
 export async function attachNativeHost(page: Page, folder: string): Promise<NativeHost> {
   mkdirSync(folder, { recursive: true });
   let session: Session | null = null;
-  await page.exposeBinding('__twBridgeOpen', () => {
-    session?.kill();
+  await page.exposeBinding('__twBridgeOpen', async () => {
+    // The next engine opens the same working folder, so the last one must have let go of it.
+    await session?.kill();
     const child = spawn(NATIVE_BINARY, [
       'serve',
       '--workdir',
@@ -146,5 +151,9 @@ export async function attachNativeHost(page: Page, folder: string): Promise<Nati
   });
   await page.exposeBinding('__twBridgeRead', () => session?.read() ?? Promise.resolve(null));
   await page.addInitScript(installHost);
-  return { stop: () => session?.kill() };
+  return {
+    stop: () => {
+      void session?.kill();
+    },
+  };
 }

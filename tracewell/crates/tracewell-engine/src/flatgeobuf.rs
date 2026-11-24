@@ -10,7 +10,7 @@ use crate::error::{EngineError, Result};
 use crate::export::{
     Expected, OutColumn, Spatial, check, header_check, retype_text, rows_check, values_check,
 };
-use crate::parse::Kind;
+use crate::parse::{Kind, Raw};
 use crate::shapefile::{
     Geom, Pos, ShapeSource, each_position, each_row, js_max, js_min, known_crs, row_geometry,
     shape_source, source_columns,
@@ -701,11 +701,13 @@ pub fn write(
 enum Bad {
     /// A reason the format gives.
     Format(String),
-    /// An offset that points outside its buffer.
-    Range,
+    /// An offset that points outside its buffer, or a string that is not UTF-8.
+    Range(&'static str),
 }
 
 type Got<T> = std::result::Result<T, Bad>;
+
+const OUTSIDE: &str = "an offset points outside the buffer";
 
 fn fail<T>(why: impl Into<String>) -> Got<T> {
     Err(Bad::Format(why.into()))
@@ -719,7 +721,7 @@ impl<'a> Flat<'a> {
     fn get(&self, at: usize, n: usize) -> Got<&'a [u8]> {
         at.checked_add(n)
             .and_then(|end| self.b.get(at..end))
-            .ok_or(Bad::Range)
+            .ok_or(Bad::Range(OUTSIDE))
     }
 
     fn u8(&self, at: usize) -> Got<u8> {
@@ -764,7 +766,7 @@ impl<'a> Flat<'a> {
     fn field(&self, table: usize, slot: usize) -> Got<Option<usize>> {
         let vtable = table as i64 - self.i32(table)? as i64;
         if vtable < 0 {
-            return Err(Bad::Range);
+            return Err(Bad::Range(OUTSIDE));
         }
         let vtable = vtable as usize;
         let size = self.u16(vtable)? as usize;
@@ -788,10 +790,9 @@ impl<'a> Flat<'a> {
         let Some((start, n)) = self.vector(table, slot)? else {
             return Ok(None);
         };
-        // A string that is not UTF-8 fails as a decoder's error would, inside "does not parse".
         String::from_utf8(self.get(start, n)?.to_vec())
             .map(Some)
-            .map_err(|_| Bad::Range)
+            .map_err(|_| Bad::Range("a string is not UTF-8 text"))
     }
 
     fn doubles(&self, table: usize, slot: usize) -> Got<Option<Vec<f64>>> {
@@ -812,6 +813,13 @@ impl<'a> Flat<'a> {
     }
 }
 
+struct CrsRead {
+    org: Option<String>,
+    code: i32,
+    name: Option<String>,
+    code_string: Option<String>,
+}
+
 struct Header {
     name: Option<String>,
     envelope: Option<Vec<f64>>,
@@ -821,7 +829,7 @@ struct Header {
     columns: Vec<(String, u8)>,
     features: u64,
     index_node_size: u16,
-    crs: Option<(Option<String>, i32, Option<String>)>,
+    crs: Option<CrsRead>,
 }
 
 fn read_header(r: &Flat, t: usize) -> Got<Header> {
@@ -846,7 +854,12 @@ fn read_header(r: &Flat, t: usize) -> Got<Header> {
                 Some(at) => r.i32(at)?,
                 None => 0,
             };
-            Some((r.string(c, 0)?, code, r.string(c, 2)?))
+            Some(CrsRead {
+                org: r.string(c, 0)?,
+                code,
+                name: r.string(c, 2)?,
+                code_string: r.string(c, 5)?,
+            })
         }
         None => None,
     };
@@ -1005,8 +1018,9 @@ fn read_geometry(
 enum Prop {
     Bool(bool),
     Num(f64),
-    /// A whole number beyond 2^53, or binary data: no column type here takes either.
-    Other,
+    /// A whole number beyond 2^53, as its digits.
+    Big(String),
+    Bytes(Vec<u8>),
     Text(String),
 }
 
@@ -1014,7 +1028,7 @@ fn whole(v: i128) -> Prop {
     if v.unsigned_abs() <= SAFE as u128 {
         Prop::Num(v as f64)
     } else {
-        Prop::Other
+        Prop::Big(v.to_string())
     }
 }
 
@@ -1077,7 +1091,7 @@ fn read_properties(b: &[u8], columns: &[(String, u8)]) -> Got<Vec<Option<Prop>>>
                 let n = u32::from_le_bytes([a[0], a[1], a[2], a[3]]) as usize;
                 let raw = take(&mut at, n)?;
                 if *typ == 14 {
-                    Prop::Other
+                    Prop::Bytes(raw.to_vec())
                 } else {
                     match std::str::from_utf8(raw) {
                         Ok(t) => Prop::Text(t.to_string()),
@@ -1109,7 +1123,7 @@ fn retype(v: Option<&Prop>, kind: Kind) -> Option<Cell> {
 
 /// Reads one size-prefixed FlatBuffer; None at the end of the file.
 fn next_buffer(r: &mut BufReader<File>, what: &str) -> Got<Option<Vec<u8>>> {
-    let cut = || Bad::Format(format!("the {what} is cut short"));
+    let cut = || Bad::Format(format!("{what} is cut short"));
     if r.fill_buf().map_err(|_| cut())?.is_empty() {
         return Ok(None);
     }
@@ -1124,10 +1138,51 @@ fn next_buffer(r: &mut BufReader<File>, what: &str) -> Got<Option<Vec<u8>>> {
     Ok(Some(buf))
 }
 
+/// Feature `n` (1-based) from the bytes of its FlatBuffer: its geometry and its values by column,
+/// with the bounds of its positions folded into `bounds` (parseFeature).
+fn parse_feature(
+    bytes: &[u8],
+    header: &Header,
+    n: u64,
+    bounds: &mut Option<[f64; 4]>,
+) -> std::result::Result<(Option<Value>, Vec<Option<Prop>>), String> {
+    let f = Flat { b: bytes };
+    let feature = (|| -> Got<(Option<Value>, Vec<Option<Prop>>)> {
+        let root = f.u32(0)? as usize;
+        let g = match f.field(root, 0)? {
+            Some(at) => Some(read_geometry(
+                &f,
+                f.indirect(at)?,
+                header.geometry_type,
+                header.has_z,
+                bounds,
+            )?),
+            None => None,
+        };
+        let props = match f.vector(root, 1)? {
+            Some((start, len)) => read_properties(f.get(start, len)?, &header.columns)?,
+            None => header.columns.iter().map(|_| None).collect(),
+        };
+        Ok((g, props))
+    })();
+    feature.map_err(|e| match e {
+        Bad::Format(m) => format!("feature {n}: {m}"),
+        Bad::Range(m) => format!("feature {n} does not parse ({m})"),
+    })
+}
+
+/// The header from the bytes of its FlatBuffer (parseHeader).
+fn parse_header(bytes: &[u8]) -> std::result::Result<Header, String> {
+    let flat = Flat { b: bytes };
+    flat.u32(0)
+        .and_then(|root| read_header(&flat, root as usize))
+        .map_err(|e| wrap(e, "the header"))
+}
+
 fn wrap(e: Bad, what: &str) -> String {
     match e {
         Bad::Format(m) => m,
-        Bad::Range => format!("{what} does not parse (an offset points outside the buffer)"),
+        Bad::Range(m) => format!("{what} does not parse ({m})"),
     }
 }
 
@@ -1219,14 +1274,10 @@ pub fn read_back(
         if magic[3] != 3 {
             return Err(format!("it is FlatGeobuf version {}, not 3", magic[3]));
         }
-        let bytes = next_buffer(&mut r, "header")
+        let bytes = next_buffer(&mut r, "the header")
             .map_err(|e| wrap(e, "the header"))?
             .ok_or("the header is cut short")?;
-        let flat = Flat { b: &bytes };
-        let header = flat
-            .u32(0)
-            .and_then(|root| read_header(&flat, root as usize))
-            .map_err(|e| wrap(e, "the header"))?;
+        let header = parse_header(&bytes)?;
         let index = index_size(header.features, header.index_node_size);
         let skipped = std::io::copy(&mut (&mut r).take(index), &mut std::io::sink())
             .map_err(|e| e.to_string())?;
@@ -1255,31 +1306,7 @@ pub fn read_back(
             let Some(bytes) = next_buffer(&mut r, &what).map_err(|e| wrap(e, &what))? else {
                 break;
             };
-            let f = Flat { b: &bytes };
-            let feature = (|| -> Got<(Option<Value>, Vec<Option<Prop>>)> {
-                let root = f.u32(0)? as usize;
-                let g = match f.field(root, 0)? {
-                    Some(at) => Some(read_geometry(
-                        &f,
-                        f.indirect(at)?,
-                        out.header.geometry_type,
-                        out.header.has_z,
-                        &mut out.bounds,
-                    )?),
-                    None => None,
-                };
-                let props = match f.vector(root, 1)? {
-                    Some((start, len)) => read_properties(f.get(start, len)?, &out.header.columns)?,
-                    None => out.header.columns.iter().map(|_| None).collect(),
-                };
-                Ok((g, props))
-            })();
-            let (g, props) = feature.map_err(|e| match e {
-                Bad::Format(m) => format!("{what}: {m}"),
-                Bad::Range => {
-                    format!("{what} does not parse (an offset points outside the buffer)")
-                }
-            })?;
+            let (g, props) = parse_feature(&bytes, &out.header, n, &mut out.bounds)?;
             if let Some(g) = &g
                 && out.header.geometry_type != 0
                 && Some(g["type"].as_str().unwrap_or("")) != header_type
@@ -1356,8 +1383,8 @@ pub fn read_back(
     }
     let same_crs = match (&crs, &h.crs) {
         (None, None) => true,
-        (Some((code, crs_name)), Some((org, read_code, read_name))) => {
-            org.as_deref() == Some("EPSG") && read_code == code && read_name == crs_name
+        (Some((code, crs_name)), Some(read)) => {
+            read.org.as_deref() == Some("EPSG") && read.code == *code && &read.name == crs_name
         }
         _ => false,
     };
@@ -1432,6 +1459,407 @@ pub fn read_back(
         },
     );
     Ok(checks)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Import (formats/flatgeobuf/importer.ts)
+
+/// A feature as a row: its 0-based index, its fields by column, and its geometry as the JSON text
+/// JavaScript writes for it.
+pub type Row = (u64, Vec<Raw>, Option<String>);
+
+const PARSE_FIX: &str =
+    "Export the layer again as FlatGeobuf from the GIS tool, then import the new copy.";
+
+fn parse_failed(why: impl std::fmt::Display) -> EngineError {
+    EngineError::new(
+        "PARSE_FAILED",
+        format!("The FlatGeobuf file does not parse: {why}."),
+        PARSE_FIX,
+    )
+}
+
+/// A value as a field (fieldOf): a number that is not finite, a whole number beyond 2^53 and
+/// binary data as text.
+fn raw_of(p: Option<Prop>) -> Raw {
+    match p {
+        None => Raw::Null,
+        Some(Prop::Bool(b)) => Raw::Bool(b),
+        Some(Prop::Num(x)) if x.is_finite() => Raw::Number(x),
+        Some(Prop::Num(x)) => Raw::Text(
+            if x.is_nan() {
+                "NaN"
+            } else if x > 0.0 {
+                "Infinity"
+            } else {
+                "-Infinity"
+            }
+            .into(),
+        ),
+        Some(Prop::Big(digits)) => Raw::Text(digits),
+        Some(Prop::Bytes(b)) => Raw::Text(b.iter().map(|x| format!("{x:02x}")).collect()),
+        Some(Prop::Text(t)) => Raw::Text(t),
+    }
+}
+
+/// A feature as a row; its geometry's numbers that are not finite become null and -0 becomes 0,
+/// as JSON text writes them.
+fn row_of(index: u64, g: Option<Value>, props: Vec<Option<Prop>>) -> Row {
+    (
+        index,
+        props.into_iter().map(raw_of).collect(),
+        g.map(|g| crate::canonical::stringify(&g)),
+    )
+}
+
+/// Reads bytes through, hashing and counting them.
+struct Hashing<'a> {
+    inner: File,
+    hash: sha2::Sha256,
+    size: u64,
+    bytes_read: &'a std::sync::atomic::AtomicU64,
+}
+
+impl Read for Hashing<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use sha2::Digest;
+        let n = self.inner.read(buf)?;
+        self.hash.update(&buf[..n]);
+        self.size += n as u64;
+        self.bytes_read.store(self.size, Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
+/// Reads exactly `buf.len()` bytes; false when the file ends first.
+fn fill(r: &mut impl Read, buf: &mut [u8]) -> Result<bool> {
+    let mut got = 0;
+    while got < buf.len() {
+        let n = r.read(&mut buf[got..])?;
+        if n == 0 {
+            return Ok(false);
+        }
+        got += n;
+    }
+    Ok(true)
+}
+
+/// Checks the magic bytes and the version (the stream reader's first stage).
+fn check_magic(magic: &[u8]) -> std::result::Result<(), String> {
+    if magic.len() < 8 || (0..3).any(|i| magic[i] != MAGIC[i] || magic[i + 4] != MAGIC[i]) {
+        return Err("it does not start with the FlatGeobuf magic bytes".into());
+    }
+    if magic[3] != 3 {
+        return Err(format!("it is FlatGeobuf version {}, not 3", magic[3]));
+    }
+    Ok(())
+}
+
+/// Hashes the file and reads its features as rows, one at a time (importer.ts read). Returns the
+/// notes (none), the SHA-256 and the size.
+pub fn read_rows(
+    path: &Path,
+    send: &mut dyn FnMut(Row) -> Result<()>,
+    cancel: &AtomicBool,
+    bytes_read: &std::sync::atomic::AtomicU64,
+) -> Result<(Vec<crate::csv::Note>, String, u64)> {
+    use sha2::Digest;
+    let mut r = BufReader::with_capacity(
+        4 << 20,
+        Hashing {
+            inner: File::open(path)?,
+            hash: sha2::Sha256::new(),
+            size: 0,
+            bytes_read,
+        },
+    );
+    let mut magic = [0u8; 8];
+    if !fill(&mut r, &mut magic)? {
+        return Err(parse_failed(
+            "it does not start with the FlatGeobuf magic bytes",
+        ));
+    }
+    check_magic(&magic).map_err(parse_failed)?;
+    let mut word = [0u8; 4];
+    let cut = |what: &str| parse_failed(format!("{what} is cut short"));
+    if !fill(&mut r, &mut word)? {
+        return Err(cut("the header"));
+    }
+    let size = u32::from_le_bytes(word) as usize;
+    if size < 4 {
+        return Err(cut("the header"));
+    }
+    let mut bytes = vec![0u8; size];
+    if !fill(&mut r, &mut bytes)? {
+        return Err(cut("the header"));
+    }
+    let header = parse_header(&bytes).map_err(parse_failed)?;
+    let index = index_size(header.features, header.index_node_size);
+    if std::io::copy(&mut (&mut r).take(index), &mut std::io::sink())? < index {
+        return Err(parse_failed("the spatial index is cut short"));
+    }
+    let mut n = 0u64;
+    loop {
+        if n.is_multiple_of(1024) && cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::new(
+                "CANCELLED",
+                "The import was cancelled.",
+                "Start the import again when you are ready.",
+            ));
+        }
+        if r.fill_buf()?.is_empty() {
+            break;
+        }
+        let what = format!("feature {}", n + 1);
+        if !fill(&mut r, &mut word)? {
+            return Err(cut(&what));
+        }
+        let size = u32::from_le_bytes(word) as usize;
+        if size < 4 {
+            return Err(cut(&what));
+        }
+        bytes.resize(size, 0);
+        if !fill(&mut r, &mut bytes)? {
+            return Err(cut(&what));
+        }
+        let (g, props) = parse_feature(&bytes, &header, n + 1, &mut None).map_err(parse_failed)?;
+        send(row_of(n, g, props))?;
+        n += 1;
+    }
+    let inner = r.into_inner();
+    let digest = inner
+        .hash
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Ok((Vec::new(), digest, inner.size))
+}
+
+/// What a sniff finds (importer.ts sniff): the column names, the detections and the sample.
+pub struct Sniff {
+    pub columns: Vec<String>,
+    pub detections: Vec<(String, Value)>,
+    pub rows: Vec<Row>,
+}
+
+fn crs_detection(h: &Header) -> Value {
+    let found = |code: String, evidence: String| {
+        crate::detect::det(
+            json!({ "code": code, "source": "flatgeobuf-header" }),
+            "high",
+            "flatgeobuf-header",
+            evidence,
+            false,
+        )
+    };
+    let unknown = |evidence: String| {
+        crate::detect::det(
+            json!({ "code": "unknown", "source": "flatgeobuf-header" }),
+            "low",
+            "flatgeobuf-header",
+            evidence,
+            false,
+        )
+    };
+    let Some(crs) = &h.crs else {
+        return unknown("The FlatGeobuf header records no coordinate reference system.".into());
+    };
+    let org = crs.org.as_deref().unwrap_or("EPSG").to_uppercase();
+    let named = crs
+        .name
+        .as_ref()
+        .map_or(String::new(), |n| format!(" ({n})"));
+    if org == "EPSG" && crs.code > 0 {
+        let code = format!("EPSG:{}", crs.code);
+        let evidence =
+            format!("The FlatGeobuf header records the coordinate reference system {code}{named}.");
+        return found(code, evidence);
+    }
+    if org == "OGC" && crs.code_string.as_deref().unwrap_or("").to_uppercase() == "CRS84" {
+        return found(
+            "OGC:CRS84".into(),
+            "The FlatGeobuf header records the coordinate reference system OGC:CRS84.".into(),
+        );
+    }
+    let code = if crs.code > 0 {
+        Some(crs.code.to_string())
+    } else {
+        crs.code_string.clone()
+    };
+    let what: Vec<String> = [crs.org.clone(), code].into_iter().flatten().collect();
+    let what = what.join(":");
+    unknown(format!(
+        "The FlatGeobuf header records the coordinate reference system {}{named}, which is not an EPSG code.",
+        if what.is_empty() {
+            "without a code"
+        } else {
+            &what
+        }
+    ))
+}
+
+fn geometry_types_detection(h: &Header, rows: &[Row], complete: bool) -> Value {
+    let name = |t: u8| {
+        GEOMETRY_NAMES
+            .get(t as usize)
+            .map_or(format!("type {t}"), |n| (*n).to_string())
+    };
+    if h.geometry_type != 0 {
+        let n = name(h.geometry_type);
+        return crate::detect::det(
+            json!([n]),
+            "high",
+            "flatgeobuf-header",
+            format!("The FlatGeobuf header states that every geometry is a {n}."),
+            false,
+        );
+    }
+    let mut types: Vec<String> = Vec::new();
+    for (_, _, g) in rows {
+        let t = g
+            .as_deref()
+            .and_then(|g| serde_json::from_str::<Value>(g).ok())
+            .and_then(|g| g["type"].as_str().map(String::from));
+        if let Some(t) = t
+            && !types.contains(&t)
+        {
+            types.push(t);
+        }
+    }
+    let count = crate::csv::format_count(rows.len() as u64);
+    let scope = if complete {
+        format!("all {count} features")
+    } else {
+        format!("the first {count} features")
+    };
+    let found = if types.is_empty() {
+        "no geometry types".to_string()
+    } else {
+        format!("geometry types {}", types.join(", "))
+    };
+    crate::detect::det(
+        json!(types),
+        if complete { "high" } else { "medium" },
+        "geometry-types",
+        format!("The header states no single geometry type; found {found} over {scope}."),
+        false,
+    )
+}
+
+/// The sniff of a FlatGeobuf file (importer.ts sniff): the header, however long; then the
+/// features in the MiB after the spatial index, which is not read through, or the first feature,
+/// however long, as the sample; at most `sample` of them. The windows are those of the TypeScript
+/// reader, which reads a MiB at a time, so both take the same features.
+pub fn sniff(path: &Path, sample: usize) -> Result<Sniff> {
+    use std::io::{Seek, SeekFrom};
+    const MIB: u64 = 1 << 20;
+    let mut f = File::open(path)?;
+    let size = f.metadata()?.len();
+    let mut magic = [0u8; 8];
+    if size < 8 || !fill(&mut f, &mut magic)? {
+        return Err(parse_failed(
+            "it does not start with the FlatGeobuf magic bytes",
+        ));
+    }
+    check_magic(&magic).map_err(parse_failed)?;
+    let mut word = [0u8; 4];
+    if size < 12 || !fill(&mut f, &mut word)? {
+        return Err(parse_failed("the header is cut short"));
+    }
+    let header_size = u32::from_le_bytes(word) as u64;
+    if header_size < 4 || 12 + header_size > size {
+        return Err(parse_failed("the header is cut short"));
+    }
+    let mut bytes = vec![0u8; header_size as usize];
+    fill(&mut f, &mut bytes)?;
+    let header = parse_header(&bytes).map_err(parse_failed)?;
+    let header_end = 12 + header_size;
+    let first = header_end + index_size(header.features, header.index_node_size);
+    // The reads of a MiB from the start that the header took, then the jump past the index.
+    let mut at = size.min(header_end.div_ceil(MIB) * MIB);
+    if at < first {
+        at = first.min(size);
+    }
+    let limit = size.min(first + MIB);
+    let mut rows: Vec<Row> = Vec::new();
+    let mut pos = first;
+    let mut parse_to = |at: u64, rows: &mut Vec<Row>| -> Result<()> {
+        loop {
+            if pos + 4 > at {
+                return Ok(());
+            }
+            f.seek(SeekFrom::Start(pos))?;
+            fill(&mut f, &mut word)?;
+            let len = u32::from_le_bytes(word) as u64;
+            let n = rows.len() as u64 + 1;
+            if len < 4 {
+                return Err(parse_failed(format!("feature {n} is cut short")));
+            }
+            if pos + 4 + len > at {
+                return Ok(());
+            }
+            let mut b = vec![0u8; len as usize];
+            fill(&mut f, &mut b)?;
+            let (g, props) = parse_feature(&b, &header, n, &mut None).map_err(parse_failed)?;
+            rows.push(row_of(n - 1, g, props));
+            pos += 4 + len;
+        }
+    };
+    parse_to(at, &mut rows)?;
+    while rows.len() < sample && (at < limit || (rows.is_empty() && at < size)) {
+        at = size.min(at + MIB);
+        parse_to(at, &mut rows)?;
+    }
+    let complete = at >= size;
+    if complete && pos < size && first <= size {
+        return Err(parse_failed(format!(
+            "feature {} is cut short",
+            rows.len() + 1
+        )));
+    }
+    let all = rows.len();
+    rows.truncate(sample);
+    let mut detections = vec![
+        ("crs".to_string(), crs_detection(&header)),
+        (
+            "columns".to_string(),
+            crate::detect::det(
+                json!(header.columns.iter().map(|c| &c.0).collect::<Vec<_>>()),
+                "high",
+                "flatgeobuf-header",
+                format!(
+                    "The FlatGeobuf header lists {} columns.",
+                    header.columns.len()
+                ),
+                false,
+            ),
+        ),
+        (
+            "geometryTypes".to_string(),
+            geometry_types_detection(&header, &rows, complete && all <= sample),
+        ),
+    ];
+    if header.features > 0 && header.features <= SAFE as u64 {
+        detections.push((
+            "rowCount".to_string(),
+            crate::detect::det(
+                json!(header.features),
+                "high",
+                "flatgeobuf-header",
+                format!(
+                    "The FlatGeobuf header counts {} features.",
+                    crate::csv::format_count(header.features)
+                ),
+                false,
+            ),
+        ));
+    }
+    Ok(Sniff {
+        columns: header.columns.iter().map(|c| c.0.clone()).collect(),
+        detections,
+        rows,
+    })
 }
 
 #[cfg(test)]

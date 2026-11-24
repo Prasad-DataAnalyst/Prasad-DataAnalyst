@@ -1,0 +1,19 @@
+{
+  "file": "fgb_assets_bng_indexed.fgb",
+  "format": "flatgeobuf",
+  "detections": {"crs": "EPSG:27700"},
+  "confidence": {"crs": "high"},
+  "rowCount": 6,
+  "columns": [
+    {"name": "asset_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "kind", "type": "string", "unit": null, "role": "text"},
+    {"name": "Depth", "type": "number", "unit": "m", "role": "measure"},
+    {"name": "slots", "type": "integer", "unit": null, "role": "measure"},
+    {"name": "active", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "commissioned", "type": "date", "unit": null, "role": "time"},
+    {"name": "Throughput", "type": "number", "unit": "m3/d", "role": "measure"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-DQ-001": 12, "TW-GEO-004": 1, "TW-GEO-006": 1, "TW-UNIT-001": 1},
+  "notes": []
+}

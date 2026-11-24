@@ -38,6 +38,7 @@ export const ALL_FIXTURES = Object.freeze([
   'json_api_wrapper_nested.json',
   'jsonl_well_tests_crlf.jsonl',
   'parquet_well_daily_typed.parquet',
+  'fgb_assets_bng_indexed.fgb',
 ]);
 
 /**

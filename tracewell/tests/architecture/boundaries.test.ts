@@ -81,6 +81,7 @@ export const ALLOWED: Record<ModuleName, ModuleName[]> = {
     'formats-geojson',
     'formats-json',
     'formats-parquet',
+    'formats-flatgeobuf',
   ],
   rules: ['model', 'io', 'table', 'units', 'geo'],
   steps: ['model', 'table', 'units', 'geo'],

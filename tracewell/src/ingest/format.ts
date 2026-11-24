@@ -5,6 +5,7 @@
 import { decodeAll, sniffEncoding } from '@tw/io';
 import { detection, type Detection, type Importer, type SourceFormat } from '@tw/model';
 import { csvImporter } from '@tw/formats-csv';
+import { flatgeobufImporter } from '@tw/formats-flatgeobuf';
 import { geojsonImporter } from '@tw/formats-geojson';
 import { jsonImporter } from '@tw/formats-json';
 import { parquetImporter } from '@tw/formats-parquet';
@@ -15,6 +16,8 @@ export const FORMAT_SNIFF_BYTES = 65_536;
 
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
 const PARQUET_MAGIC = [0x50, 0x41, 0x52, 0x31];
+/** "fgb" and major version 3: the start of a FlatGeobuf file. */
+const FLATGEOBUF_MAGIC = [0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62];
 /** An OLE compound file: the container of Excel 97-2003 workbooks (.xls). */
 const OLE_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 /** GeoJSON object types; one of them as the top-level "type" marks a JSON file as GeoJSON. */
@@ -103,6 +106,10 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
     );
   }
 
+  if (startsWith(head, FLATGEOBUF_MAGIC)) {
+    return detection('flatgeobuf', 'high', 'flatgeobuf-magic', 'The file starts with the FlatGeobuf marker fgb.');
+  }
+
   if (startsWith(head, PARQUET_MAGIC)) {
     return detection('parquet', 'high', 'parquet-magic', 'The file starts with the Parquet marker PAR1.');
   }
@@ -169,5 +176,7 @@ export function importerFor(format: SourceFormat): Importer {
       return jsonImporter;
     case 'parquet':
       return parquetImporter;
+    case 'flatgeobuf':
+      return flatgeobufImporter;
   }
 }

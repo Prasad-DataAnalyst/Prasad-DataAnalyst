@@ -17,6 +17,9 @@ const PROFILES: { id: ExportProfileId; label: string }[] = [
   { id: 'csv', label: 'CSV' },
   { id: 'parquet', label: 'Parquet' },
   { id: 'geojson', label: 'GeoJSON' },
+  { id: 'shapefile', label: 'Shapefile' },
+  { id: 'kml', label: 'KML' },
+  { id: 'flatgeobuf', label: 'FlatGeobuf' },
 ];
 
 export function RecipesView(p: CentreViewProps): React.JSX.Element {

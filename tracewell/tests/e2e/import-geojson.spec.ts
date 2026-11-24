@@ -19,3 +19,19 @@ test('geojson_legacy_crs_27700.geojson raises TW-GEO-004 and is not offered as G
   await expect(card).toContainText('TW-EXP-003');
   await expect(card.getByTestId('tw-export-geojson')).toBeDisabled();
 });
+
+test('fgb_assets_bng_indexed.fgb imports with its columns, its CRS and every check the library expects', async ({
+  app,
+  page,
+}) => {
+  const name = 'fgb_assets_bng_indexed.fgb';
+  await app.open();
+  await app.importFixture(name);
+  await app.runChecks();
+  expect(await app.issueCounts()).toEqual(fixtureExpectation(name).issues);
+  await expect(page.getByRole('columnheader', { name: /Throughput/ })).toBeVisible();
+  // A projected CRS: the FlatGeobuf and Shapefile profiles keep it, GeoJSON needs WGS 84.
+  await page.keyboard.press('Control+e');
+  await expect(page.getByTestId('tw-export-flatgeobuf')).toBeEnabled();
+  await expect(page.getByTestId('tw-export-geojson')).toBeDisabled();
+});

@@ -57,17 +57,24 @@ export interface ParquetOptions {
   nested: 'json-text';
 }
 
+export interface FlatGeobufOptions {
+  /** Columns of JSON values become JSON text columns, and binary values hexadecimal text. */
+  nested: 'json-text';
+}
+
 export type FormatOptions =
   | { format: 'csv' | 'tsv'; csv: CsvOptions }
   | { format: 'xlsx'; xlsx: XlsxOptions }
   | { format: 'geojson'; geojson: GeoJsonOptions }
   | { format: 'json'; json: JsonOptions }
-  | { format: 'parquet'; parquet: ParquetOptions };
+  | { format: 'parquet'; parquet: ParquetOptions }
+  | { format: 'flatgeobuf'; flatgeobuf: FlatGeobufOptions };
 
 export interface RawRow {
   /**
-   * CSV physical line (1-based) | sheet row (1-based) | feature index (0-based) | JSON record
-   * index (0-based) or, for JSON Lines, line (1-based) | Parquet row index (0-based).
+   * CSV physical line (1-based) | sheet row (1-based) | GeoJSON or FlatGeobuf feature index
+   * (0-based) | JSON record index (0-based) or, for JSON Lines, line (1-based) | Parquet row index
+   * (0-based).
    */
   srcLoc: number;
   fields: RawField[];

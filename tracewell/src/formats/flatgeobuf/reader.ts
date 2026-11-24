@@ -74,16 +74,6 @@ function fail(why: string): never {
   throw new FlatGeobufFormatError(why);
 }
 
-/** The size-prefixed FlatBuffer at `at`: a reader over its bytes and where its root table is. */
-function sizePrefixed(bytes: Uint8Array, at: number, what: string): { r: FlatReader; root: number; end: number } {
-  if (at + 4 > bytes.length) fail(`the ${what} is cut short`);
-  const size = new DataView(bytes.buffer, bytes.byteOffset + at, 4).getUint32(0, true);
-  const end = at + 4 + size;
-  if (size < 4 || end > bytes.length) fail(`the ${what} is cut short`);
-  const r = new FlatReader(bytes.subarray(at + 4, end));
-  return { r, root: r.uint32(0), end };
-}
-
 function doubles(r: FlatReader, table: number, slot: number): number[] | null {
   const v = r.vector(table, slot);
   if (v === null) return null;
@@ -303,45 +293,152 @@ function readProperties(bytes: Uint8Array, columns: FgbReadColumn[]): FgbReadVal
   return out;
 }
 
-export function readFlatGeobuf(bytes: Uint8Array): FgbDocument {
-  if (bytes.length < 8 || MAGIC.some((m, i) => bytes[i] !== m || bytes[i + 4] !== m)) {
-    fail('it does not start with the FlatGeobuf magic bytes');
-  }
-  const version: [number, number] = [bytes[3] as number, bytes[7] as number];
-  if (version[0] !== 3) fail(`it is FlatGeobuf version ${version[0]}, not 3`);
-  let header: FgbReadHeader;
-  let at: number;
+/** A failure inside a FlatBuffer: a reason the format gives, or an offset or text that is broken. */
+function inside(what: string, e: unknown): never {
+  if (e instanceof FlatGeobufFormatError) throw new FlatGeobufFormatError(`${what}: ${e.message}`);
+  fail(`${what} does not parse (${e instanceof Error ? e.message : String(e)})`);
+}
+
+/** The header of a FlatGeobuf file from the bytes of its FlatBuffer (after the size prefix). */
+export function parseHeader(buffer: Uint8Array): FgbReadHeader {
   try {
-    const h = sizePrefixed(bytes, 8, 'header');
-    header = readHeader(h.r, h.root);
-    at = h.end;
+    const r = new FlatReader(buffer);
+    return readHeader(r, r.uint32(0));
   } catch (e) {
     if (e instanceof FlatGeobufFormatError) throw e;
     fail(`the header does not parse (${e instanceof Error ? e.message : String(e)})`);
   }
-  const count = header.featuresCount;
-  const index = count > BigInt(Number.MAX_SAFE_INTEGER) ? 0 : indexSize(Number(count), header.indexNodeSize);
-  at += index;
-  if (at > bytes.length) fail('the spatial index is cut short');
-  const features: FgbReadFeature[] = [];
-  while (at < bytes.length) {
-    const n = features.length + 1;
-    try {
-      const f = sizePrefixed(bytes, at, `feature ${n}`);
-      const g = f.r.field(f.root, 0);
-      const pv = f.r.vector(f.root, 1);
-      features.push({
-        geometry: g === null ? null : readGeometry(f.r, f.r.indirect(g), header.geometryType, header.hasZ),
-        properties:
-          pv === null
-            ? header.columns.map(() => null)
-            : readProperties(f.r.bytesAt(pv.start, pv.length), header.columns),
-      });
-      at = f.end;
-    } catch (e) {
-      if (e instanceof FlatGeobufFormatError) throw new FlatGeobufFormatError(`feature ${n}: ${e.message}`);
-      fail(`feature ${n} does not parse (${e instanceof Error ? e.message : String(e)})`);
+}
+
+/** Feature `n` (1-based) from the bytes of its FlatBuffer (after the size prefix). */
+export function parseFeature(buffer: Uint8Array, header: FgbReadHeader, n: number): FgbReadFeature {
+  try {
+    const r = new FlatReader(buffer);
+    const root = r.uint32(0);
+    const g = r.field(root, 0);
+    const pv = r.vector(root, 1);
+    return {
+      geometry: g === null ? null : readGeometry(r, r.indirect(g), header.geometryType, header.hasZ),
+      properties:
+        pv === null ? header.columns.map(() => null) : readProperties(r.bytesAt(pv.start, pv.length), header.columns),
+    };
+  } catch (e) {
+    return inside(`feature ${n}`, e);
+  }
+}
+
+/**
+ * Reads a FlatGeobuf file from its bytes as they arrive, in chunks of any size: the magic bytes,
+ * the header, the spatial index (skipped) and then each feature as soon as all of it is there.
+ */
+export class FgbStreamReader {
+  private buf = new Uint8Array(1 << 16);
+  private start = 0;
+  private end = 0;
+  private skip = 0;
+  private stage: 'magic' | 'header' | 'index' | 'features' = 'magic';
+  version: [number, number] = [0, 0];
+  header: FgbReadHeader | null = null;
+  indexBytes = 0;
+  /** Where the header ends in the file, once it has been read: the index or the features follow. */
+  headerEnd = 0;
+  /** Features read so far. */
+  count = 0;
+
+  /**
+   * Goes straight to the features, for a caller that reads the bytes after the spatial index
+   * itself rather than passing the index through.
+   */
+  skipIndex(): void {
+    if (this.stage !== 'index') return;
+    this.start = 0;
+    this.end = 0;
+    this.skip = 0;
+    this.stage = 'features';
+  }
+
+  /** Adds bytes; returns the features they complete. */
+  push(chunk: Uint8Array): FgbReadFeature[] {
+    this.append(chunk);
+    const out: FgbReadFeature[] = [];
+    for (;;) {
+      const available = this.end - this.start;
+      if (this.stage === 'magic') {
+        if (available < 8) return out;
+        const b = this.buf.subarray(this.start, this.start + 8);
+        if (MAGIC.some((m, i) => b[i] !== m || b[i + 4] !== m))
+          fail('it does not start with the FlatGeobuf magic bytes');
+        this.version = [b[3] as number, b[7] as number];
+        if (this.version[0] !== 3) fail(`it is FlatGeobuf version ${this.version[0]}, not 3`);
+        this.start += 8;
+        this.stage = 'header';
+      } else if (this.stage === 'index') {
+        const n = Math.min(this.skip, available);
+        this.start += n;
+        this.skip -= n;
+        if (this.skip > 0) return out;
+        this.stage = 'features';
+      } else {
+        const buffer = this.next();
+        if (buffer === null) return out;
+        if (this.stage === 'header') {
+          const header = parseHeader(buffer);
+          this.header = header;
+          this.headerEnd = 12 + buffer.length;
+          const count = header.featuresCount;
+          this.indexBytes =
+            count > BigInt(Number.MAX_SAFE_INTEGER) ? 0 : indexSize(Number(count), header.indexNodeSize);
+          this.skip = this.indexBytes;
+          this.stage = 'index';
+        } else {
+          this.count++;
+          out.push(parseFeature(buffer, this.header as FgbReadHeader, this.count));
+        }
+      }
     }
   }
-  return { version, header, indexBytes: index, features };
+
+  /** Checks that the file ended where a feature ends. */
+  finish(): void {
+    const left = this.end - this.start;
+    if (this.stage === 'magic') fail('it does not start with the FlatGeobuf magic bytes');
+    if (this.stage === 'header') fail('the header is cut short');
+    if (this.stage === 'index') fail('the spatial index is cut short');
+    if (left > 0) fail(`feature ${this.count + 1} is cut short`);
+  }
+
+  /** The next whole size-prefixed buffer, or null until all of it has arrived. */
+  private next(): Uint8Array | null {
+    const available = this.end - this.start;
+    if (available < 4) return null;
+    const size = new DataView(this.buf.buffer, this.buf.byteOffset + this.start, 4).getUint32(0, true);
+    const what = this.stage === 'header' ? 'the header' : `feature ${this.count + 1}`;
+    if (size < 4) fail(`${what} is cut short`);
+    if (available < 4 + size) return null;
+    const out = this.buf.slice(this.start + 4, this.start + 4 + size);
+    this.start += 4 + size;
+    return out;
+  }
+
+  private append(chunk: Uint8Array): void {
+    if (this.end + chunk.length > this.buf.length) {
+      const kept = this.end - this.start;
+      const size = Math.max(this.buf.length, (kept + chunk.length) * 2);
+      const next = size > this.buf.length ? new Uint8Array(size) : this.buf;
+      next.set(this.buf.subarray(this.start, this.end), 0);
+      this.buf = next;
+      this.start = 0;
+      this.end = kept;
+    }
+    this.buf.set(chunk, this.end);
+    this.end += chunk.length;
+  }
+}
+
+/** A whole FlatGeobuf file. */
+export function readFlatGeobuf(bytes: Uint8Array): FgbDocument {
+  const reader = new FgbStreamReader();
+  const features = reader.push(bytes);
+  reader.finish();
+  return { version: reader.version, header: reader.header as FgbReadHeader, indexBytes: reader.indexBytes, features };
 }

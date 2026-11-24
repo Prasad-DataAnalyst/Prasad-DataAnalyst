@@ -13,3 +13,5 @@ export type {
 export { FGB_COLUMN, FGB_GEOMETRY, FGB_MAGIC, geometryTypeOf, writeFlatGeobuf } from './writer';
 export type { FgbDocument, FgbReadColumn, FgbReadCrs, FgbReadFeature, FgbReadHeader, FgbReadValue } from './reader';
 export { FlatGeobufFormatError, indexSize, readFlatGeobuf } from './reader';
+export { FgbStreamReader } from './reader';
+export { flatgeobufImporter } from './importer';

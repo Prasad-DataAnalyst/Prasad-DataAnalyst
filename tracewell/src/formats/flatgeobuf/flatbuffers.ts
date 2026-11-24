@@ -255,6 +255,11 @@ export class FlatReader {
   string(table: number, slot: number): string | null {
     const v = this.vector(table, slot);
     if (v === null) return null;
-    return STRICT_UTF8.decode(this.bytesAt(v.start, v.length));
+    try {
+      return STRICT_UTF8.decode(this.bytesAt(v.start, v.length));
+    } catch (e) {
+      if (e instanceof RangeError) throw e;
+      throw new RangeError('a string is not UTF-8 text', { cause: e });
+    }
   }
 }

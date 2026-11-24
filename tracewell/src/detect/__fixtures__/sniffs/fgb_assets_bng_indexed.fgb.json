@@ -1,0 +1,93 @@
+{
+  "fixture": "fgb_assets_bng_indexed.fgb",
+  "format": "flatgeobuf",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": "",
+    "geometryColumn": true
+  },
+  "header": [["asset_id", "kind", "Depth [m]", "slots", "active", "commissioned", "Throughput [m3/d]"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": ["W-01", "well", 1250.5, 2, true, "2019-03-04", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [391820.5, 79410]
+      }
+    },
+    {
+      "srcLoc": 1,
+      "fields": ["W-02", "well", 980, 1, false, "2020-07-15", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [392505, 87230.5]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["PL-01", "pipeline", null, null, true, "2018-11-30", 1250.25],
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [391820.5, 79410],
+          [392505, 87230.5],
+          [397640, 88115]
+        ]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["LB-01", "licence block", null, null, true, "2015-01-01", null],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [390000, 78000],
+            [400000, 78000],
+            [400000, 90000],
+            [390000, 90000],
+            [390000, 78000]
+          ],
+          [
+            [394000, 82000],
+            [394000, 84000],
+            [396000, 84000],
+            [396000, 82000],
+            [394000, 82000]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["FD-01", "field", null, 4, false, "2016-06-30", 640.5],
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [391000, 79000],
+              [392000, 79000],
+              [392000, 80000],
+              [391000, 79000]
+            ]
+          ],
+          [
+            [
+              [397000, 87500],
+              [398000, 87500],
+              [398000, 88500],
+              [397000, 87500]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["X-01", "proposed well", null, null, false, null, null],
+      "geometry": null
+    }
+  ]
+}

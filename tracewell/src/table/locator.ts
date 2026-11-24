@@ -36,6 +36,7 @@ export function locator(schema: TableSchema, srcLoc: number, column?: ColumnSche
       return column === undefined ? `${sheet} row ${srcLoc}` : `${sheet}!${columnLetters(column.sourceIndex)}${srcLoc}`;
     }
     case 'geojson':
+    case 'flatgeobuf':
       return column === undefined ? `feature ${srcLoc}` : `feature ${srcLoc}, ${geoJsonMember(schema, column)}`;
     case 'json': {
       const at = `${schema.source.layout === 'lines' ? 'line' : 'record'} ${srcLoc}`;

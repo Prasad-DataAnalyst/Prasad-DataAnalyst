@@ -6,7 +6,7 @@ import type { AuditEntry, DatasetId, DatasetSummary, ProjectOpenReport, SaveResu
 import type { Command, CommandContext, WorkbenchState } from '@tw/ui-shell';
 import { addPendingImport, openDialog, views } from './store';
 
-const ACCEPT = '.csv,.tsv,.txt,.xlsx,.geojson,.json';
+const ACCEPT = '.csv,.tsv,.txt,.xlsx,.xls,.geojson,.json,.jsonl,.ndjson,.parquet,.fgb';
 const TWP_TYPE = 'application/vnd.tracewell.project+zip';
 const REVERTIBLE = new Set([
   'cell.edit',

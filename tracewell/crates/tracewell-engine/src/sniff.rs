@@ -392,6 +392,9 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     if head.starts_with(b"PAR1") {
         return Ok("parquet");
     }
+    if head.starts_with(&[0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62]) {
+        return Ok("flatgeobuf");
+    }
     let sample = &head[..head.len().min(FORMAT_SNIFF_BYTES)];
     let e = sniff_encoding(sample);
     let decoded = decode_all(sample, e.value, e.bom_length)?;
@@ -1815,7 +1818,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         detect_format(&head, src.name)?.to_string()
     } else {
         match options["format"].as_str() {
-            Some(f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson")) => f.to_string(),
+            Some(f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson" | "flatgeobuf")) => {
+                f.to_string()
+            }
             other => {
                 return Err(EngineError::unsupported(format!(
                     "the import preview of {} files",
@@ -1829,6 +1834,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     }
     if format == "geojson" {
         return sniff_geojson(src, &head, options);
+    }
+    if format == "flatgeobuf" {
+        return sniff_flatgeobuf(src, options);
     }
     if format == "xlsx" {
         return sniff_xlsx(src, options);
@@ -2035,6 +2043,34 @@ fn sniff_geojson(src: &Source, head: &[u8], options: &Value) -> Result<Sniffed> 
         let (rows, geometries) = split(geojson_rows(src.path, SAMPLE_MAX_ROWS)?);
         s.rows = rows;
         s.geometries = Some(geometries);
+        s.options = options.clone();
+    }
+    Ok(s)
+}
+
+/// A FlatGeobuf file's sniff (flatgeobuf/importer.ts sniff): the columns, the CRS, the geometry
+/// types and the feature count from its header, and its first features as the sample.
+fn sniff_flatgeobuf(src: &Source, options: &Value) -> Result<Sniffed> {
+    let found = crate::flatgeobuf::sniff(src.path, SAMPLE_MAX_ROWS)?;
+    let (rows, geometries) = found
+        .rows
+        .into_iter()
+        .map(|(loc, fields, geometry)| ((loc, fields), geometry))
+        .unzip();
+    let mut s = Sniffed {
+        format: "flatgeobuf".into(),
+        options: json!({ "format": "flatgeobuf", "flatgeobuf": { "nested": "json-text" } }),
+        detections: found.detections,
+        header: vec![found.columns],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+        sheets: None,
+        geometries: Some(geometries),
+    };
+    // Settings chosen for the file read it again with them, which changes nothing else here.
+    if !options.is_null() && stringify(&s.options) != stringify(options) {
         s.options = options.clone();
     }
     Ok(s)
@@ -2261,8 +2297,8 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
     if src.size <= PREVIEW_MAX_BYTES as u64 && n < SAMPLE_MAX_ROWS {
         return Some(n as u64);
     }
-    if s.format == "parquet" {
-        // The footer states the row count exactly.
+    if s.format == "parquet" || s.format == "flatgeobuf" {
+        // The footer, or the header, states the row count exactly.
         return s.detection("rowCount").and_then(|d| d["value"].as_u64());
     }
     if s.format == "json" || s.format == "geojson" {
@@ -2313,7 +2349,7 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
     let o = DetectOptions {
         decimal: s.decimal,
         thousands: s.thousands.clone(),
-        geometry_column: s.format == "geojson",
+        geometry_column: s.format == "geojson" || s.format == "flatgeobuf",
     };
     let fields: Vec<Vec<Raw>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
     let planned = detect_columns(&s.header, &fields, &o);

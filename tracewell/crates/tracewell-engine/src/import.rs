@@ -59,6 +59,8 @@ pub enum Reading {
     Xlsx(Value),
     /// The features of a GeoJSON file: their properties as fields, their geometries beside them.
     GeoJson,
+    /// The features of a FlatGeobuf file, the same way.
+    FlatGeobuf,
 }
 
 /// What an import does: how the file is read, and how each column is parsed.
@@ -130,7 +132,8 @@ pub fn column_parser(c: &Value, decimal: char, thousands: &str) -> Result<Column
 }
 
 fn plan_columns(spec: &Value, decimal: char, thousands: &str) -> Result<Vec<ColumnSpec>> {
-    let geojson = spec["options"]["format"] == "geojson";
+    let format = &spec["options"]["format"];
+    let geojson = format == "geojson" || format == "flatgeobuf";
     let mut columns = Vec::new();
     for c in spec["columns"].as_array().into_iter().flatten() {
         let parser = column_parser(c, decimal, thousands)?;
@@ -169,6 +172,12 @@ pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
     if format == "geojson" {
         return Ok(ImportPlan {
             reading: Reading::GeoJson,
+            columns: plan_columns(spec, '.', "")?,
+        });
+    }
+    if format == "flatgeobuf" {
+        return Ok(ImportPlan {
+            reading: Reading::FlatGeobuf,
             columns: plan_columns(spec, '.', "")?,
         });
     }
@@ -875,6 +884,30 @@ fn load(
                     Reading::Csv { .. } => read_file(path, plan, &send, cancel, bytes_read),
                     Reading::Parquet => read_parquet(&reader_conn, path, &send, cancel, bytes_read),
                     Reading::Xlsx(options) => read_xlsx(path, options, &send, cancel, bytes_read),
+                    Reading::FlatGeobuf => {
+                        let mut batch = TypedBatch::default();
+                        let read = crate::flatgeobuf::read_rows(
+                            path,
+                            &mut |(loc, fields, geometry)| {
+                                batch.rows.push(fields);
+                                batch.locs.push(loc as i64);
+                                batch.geometries.push(geometry);
+                                if batch.locs.len() == BATCH_ROWS
+                                    && !send(Batch::Typed(std::mem::take(&mut batch)))
+                                {
+                                    return Err(cancelled());
+                                }
+                                Ok(())
+                            },
+                            cancel,
+                            bytes_read,
+                        );
+                        match read {
+                            Ok(r) if batch.locs.is_empty() || send(Batch::Typed(batch)) => Ok(r),
+                            Ok(_) => Err(cancelled()),
+                            Err(e) => Err(e),
+                        }
+                    }
                     Reading::GeoJson => {
                         let mut batch = TypedBatch::default();
                         let read = read_geojson(

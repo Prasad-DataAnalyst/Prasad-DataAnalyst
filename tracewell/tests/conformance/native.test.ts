@@ -13,6 +13,14 @@ import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { nodeFs } from '@tw/io/node';
 import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
 import { readBack } from '@tw/export';
+import {
+  FGB_COLUMN,
+  FGB_GEOMETRY,
+  indexSize,
+  writeFlatGeobuf,
+  type FgbWriteFeature,
+  type FgbWriteHeader,
+} from '@tw/formats-flatgeobuf';
 import { readZip, sha256Hex, writeZip } from '@tw/io';
 import { openWorkbook } from '@tw/formats-xlsx';
 import {
@@ -2740,9 +2748,9 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     await pair('profiles', (e) => e.listExportProfiles(id));
   };
 
-  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => n.endsWith('.geojson'));
+  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => n.endsWith('.geojson') || n.endsWith('.fgb'));
 
-  it('reads GeoJSON files as the TypeScript engine does: preview, rows, lineage, statistics and checks', async () => {
+  it('reads GeoJSON and FlatGeobuf files as the TypeScript engine does: preview, rows, lineage, statistics and checks', async () => {
     const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
     const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
     const found = new Map<string, string>();
@@ -2858,6 +2866,161 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       rmSync(folder, { recursive: true, force: true });
     }
   }, 90_000);
+
+  it('reads unusual FlatGeobuf as the TypeScript engine does, and refuses a damaged file alike', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-fgb-'));
+    const header = (o: Partial<FgbWriteHeader>): FgbWriteHeader => ({
+      name: 'unusual',
+      envelope: null,
+      geometryType: FGB_GEOMETRY.Unknown,
+      hasZ: false,
+      columns: [],
+      featuresCount: 0,
+      crs: null,
+      ...o,
+    });
+    // A header whose index node size is 16, so that a spatial index (of zeros) follows it.
+    const indexed = (h: FgbWriteHeader, features: FgbWriteFeature[]) => {
+      const file = writeFlatGeobuf(h, features);
+      const size = new DataView(file.buffer, 8, 4).getUint32(0, true);
+      const view = new DataView(file.buffer, 12, size);
+      const root = view.getUint32(0, true);
+      const vtable = root - view.getInt32(root, true);
+      view.setUint16(root + view.getUint16(vtable + 4 + 2 * 9, true), 16, true);
+      const index = new Uint8Array(indexSize(features.length, 16));
+      const head = file.subarray(0, 12 + size);
+      return new Uint8Array([...head, ...index, ...file.subarray(12 + size)]);
+    };
+    const points = Array.from({ length: 30_000 }, (_, i) => ({
+      geometry: { type: 'Point' as const, coordinates: [400_000 + i, 80_000 + (i % 97)] },
+      properties: [`P-${i}`, i % 7 === 0 ? null : i / 4],
+    }));
+    const files: [string, Uint8Array][] = [
+      [
+        'numbers.fgb',
+        writeFlatGeobuf(
+          header({
+            columns: [
+              { name: 'n', type: FGB_COLUMN.Double },
+              { name: 'big', type: FGB_COLUMN.Long },
+              { name: 'raw', type: 14 as never },
+              { name: 'tags', type: FGB_COLUMN.Json },
+              { name: 'note', type: FGB_COLUMN.String },
+            ],
+            featuresCount: 3,
+            crs: { org: 'EPSG', code: 4326, name: 'WGS 84' },
+          }),
+          [
+            {
+              geometry: { type: 'Point', coordinates: [Number.NaN, -0] },
+              properties: [Number.NaN, (2n ** 60n) as never, 'AB', '{"a":[1,2]}', ''],
+            },
+            { geometry: null, properties: [-0, -(2 ** 53) + 1, null, null, 'é ü'] },
+            {
+              geometry: {
+                type: 'LineString',
+                coordinates: [
+                  [1, Number.POSITIVE_INFINITY],
+                  [2, 3],
+                ],
+              },
+              properties: [Number.NEGATIVE_INFINITY, 7, null, null, null],
+            },
+          ],
+        ),
+      ],
+      [
+        'heights.fgb',
+        writeFlatGeobuf(header({ hasZ: true, columns: [{ name: 'id', type: FGB_COLUMN.String }], featuresCount: 5 }), [
+          {
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                [1, 2, 3],
+                [4, 5, -6],
+              ],
+            },
+            properties: ['a'],
+          },
+          { geometry: { type: 'Polygon', coordinates: [] }, properties: ['b'] },
+          { geometry: { type: 'MultiPolygon', coordinates: [] }, properties: ['c'] },
+          {
+            geometry: {
+              type: 'GeometryCollection',
+              geometries: [
+                { type: 'Point', coordinates: [7, 8, 9] },
+                { type: 'GeometryCollection', geometries: [] },
+              ],
+            },
+            properties: ['d'],
+          },
+          { geometry: { type: 'Point', coordinates: [] }, properties: ['e'] },
+        ]),
+      ],
+      [
+        'indexed.fgb',
+        indexed(
+          header({
+            geometryType: FGB_GEOMETRY.Point,
+            columns: [
+              { name: 'well_id', type: FGB_COLUMN.String },
+              { name: 'Depth [m]', type: FGB_COLUMN.Double },
+            ],
+            featuresCount: points.length,
+            crs: { org: 'EPSG', code: 27700, name: 'OSGB36 / British National Grid' },
+          }),
+          points,
+        ),
+      ],
+      [
+        'long.fgb',
+        writeFlatGeobuf(header({ columns: [{ name: 'id', type: FGB_COLUMN.String }], featuresCount: 2 }), [
+          {
+            geometry: {
+              type: 'LineString',
+              coordinates: Array.from({ length: 80_000 }, (_, i) => [i, i % 13]),
+            },
+            properties: ['line'],
+          },
+          { geometry: { type: 'Point', coordinates: [1, 2] }, properties: ['point'] },
+        ]),
+      ],
+      ['cut.fgb', writeFlatGeobuf(header({ featuresCount: 1 }), [{ geometry: null, properties: [] }]).subarray(0, -3)],
+      ['magic.fgb', new TextEncoder().encode('fgb\u0002fgb\u0000 and more')],
+    ];
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Unusual', profile: { ...PROFILE } });
+      for (const [name, bytes] of files) {
+        writeFileSync(join(folder, name), bytes);
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        const [pa, pb] = [await settled(() => nat.client.sniff(file)), await settled(() => lite.sniff(file))];
+        expect(pa, `${name}: preview`).toEqual(pb);
+        orderDifferences(pa, pb, `${name}: preview`, found);
+        const imported = async (e: EngineClient) => e.awaitJob<DatasetSummary>(await e.importFile(file));
+        const [da, db] = [await settled(() => imported(nat.client)), await settled(() => imported(lite))];
+        expect(da, `${name}: import`).toEqual(db);
+        if ('code' in (db as object)) continue;
+        const id = (da as DatasetSummary).id;
+        const checked = async (e: EngineClient) => ({
+          ...(await e.awaitJob<CheckSummary>(await e.runChecks(id))),
+          durationMs: 0,
+        });
+        expect(await checked(nat.client), `${name}: checks`).toEqual(await checked(lite));
+        // Explaining every cell of the large files would read them again per cell: their rows do.
+        if (bytes.length > 1 << 20)
+          expect(await allRows(nat.client, id), `${name}: rows`).toEqual(await allRows(lite, id));
+        else await sameDataset(nat.client, lite, id, name, found);
+      }
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 180_000);
 
   it('filters, edits and checks geometries against the project area as the TypeScript engine does', async () => {
     const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);

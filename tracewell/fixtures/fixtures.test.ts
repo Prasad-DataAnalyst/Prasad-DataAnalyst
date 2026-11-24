@@ -53,7 +53,7 @@ const LINE = z.number().int().positive();
 const expectationSchema = z
   .object({
     file: z.enum(FIXTURE_NAMES as [FixtureName, ...FixtureName[]]),
-    format: z.enum(['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet']),
+    format: z.enum(['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet', 'flatgeobuf']),
     detections: z
       .object({
         encoding: z.enum(['utf-8', 'utf-16le', 'utf-16be', 'windows-1252']),
@@ -117,8 +117,8 @@ function rawExpectation(name: FixtureName): unknown {
 // The library and its checksums
 
 describe('the messy-file library', () => {
-  it('lists 31 distinct fixtures', () => {
-    expect(new Set(FIXTURE_NAMES).size).toBe(31);
+  it('lists 32 distinct fixtures', () => {
+    expect(new Set(FIXTURE_NAMES).size).toBe(32);
     expect(DELIMITED).toHaveLength(15);
     expect(XLSX).toHaveLength(6);
     expect(GEOJSON).toHaveLength(5);
@@ -186,7 +186,8 @@ describe('expected files', () => {
   it.each(FIXTURE_NAMES)('%s: the format follows the file extension', (name) => {
     const extension = name.slice(name.lastIndexOf('.') + 1);
     // JSON Lines files are JSON records in the 'lines' layout; a legacy .xls is read as an Excel workbook.
-    const format = extension === 'jsonl' ? 'json' : extension === 'xls' ? 'xlsx' : extension;
+    const format =
+      extension === 'jsonl' ? 'json' : extension === 'xls' ? 'xlsx' : extension === 'fgb' ? 'flatgeobuf' : extension;
     expect(fixtureExpectation(name).format).toBe(format);
   });
 
@@ -202,6 +203,7 @@ const DETECTIONS_BY_FORMAT: Record<FixtureExpectation['format'], string[]> = {
   geojson: ['encoding', 'crs'],
   json: ['encoding'],
   parquet: [],
+  flatgeobuf: ['crs'],
 };
 
 /** Rules flagging rows across the whole dataset: their count can never exceed the row count. */
@@ -249,14 +251,12 @@ function conventionProblems(e: FixtureExpectation): string[] {
   for (const rule of [...DATASET_ROW_RULES, ...GEO_ROW_RULES])
     check(issue(rule) <= e.rowCount, `${rule} within the rows`);
   for (const rule of DATASET_RULES) check(issue(rule) <= 1, `${rule} at most once`);
-  check(
-    e.format === 'geojson' || issue('TW-GEO-001') + issue('TW-GEO-006') === 0,
-    'geometry rules need a geometry column',
-  );
+  const spatial = e.format === 'geojson' || e.format === 'flatgeobuf';
+  check(spatial || issue('TW-GEO-001') + issue('TW-GEO-006') === 0, 'geometry rules need a geometry column');
   check(new Set(e.columns.map((c) => c.name)).size === e.columns.length, 'unique column names');
   check(
-    e.columns.findIndex((c) => c.role === 'geometry') === (e.format === 'geojson' ? e.columns.length - 1 : -1),
-    'geometry column last, GeoJSON only',
+    e.columns.findIndex((c) => c.role === 'geometry') === (spatial ? e.columns.length - 1 : -1),
+    'geometry column last, GeoJSON and FlatGeobuf only',
   );
   check(e.locators === undefined || e.locators.rows.length === e.rowCount, 'a locator for every row');
   return problems;

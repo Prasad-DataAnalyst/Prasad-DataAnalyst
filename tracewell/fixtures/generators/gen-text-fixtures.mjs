@@ -3,7 +3,7 @@
  * Writes the text fixtures of the messy-file library (CSV, TSV, GeoJSON and JSON) with exact bytes:
  * encodings, byte-order marks and line endings are chosen per file, never left to the platform.
  * The Parquet fixture is written here too, by hyparquet-writer, whose output depends only on the
- * values given. Then writes SHA256SUMS over every fixture, the XLSX files included.
+ * values given, and the FlatGeobuf fixture by a FlatBuffers encoder of this file's own. Then writes SHA256SUMS over every fixture, the XLSX files included.
  *
  * Usage: node fixtures/generators/gen-text-fixtures.mjs [--out <dir>] [--no-sums]
  *   --out <dir>  write into <dir> instead of fixtures/messy
@@ -1346,6 +1346,368 @@ function parquetWellDaily() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// FlatGeobuf
+
+/**
+ * FlatBuffers laid out front to back, as some writers do and unlike the product's own writer: each
+ * table is followed by its vtable (so the table's vtable offset is negative), then by the strings,
+ * vectors and tables it points to, in field order. Every value is aligned to its size from the
+ * start of the buffer.
+ *
+ * An object is { table: [slot, kind, value][] }, { string }, { vector: kind, values } or
+ * { bytes }; kinds are 'u8', 'u16', 'i32', 'u32', 'u64', 'f64' and 'object' (an offset).
+ */
+class FrontToBack {
+  constructor() {
+    /** @type {number[]} */
+    this.out = [];
+  }
+
+  get pos() {
+    return this.out.length;
+  }
+
+  /** @param {number} n */
+  align(n) {
+    while (this.out.length % n !== 0) this.out.push(0);
+  }
+
+  /** @param {string} kind @param {number | bigint} v */
+  scalar(kind, v) {
+    const size = { u8: 1, u16: 2, i32: 4, u32: 4, u64: 8, f64: 8 }[kind] ?? 0;
+    const d = new DataView(new ArrayBuffer(size));
+    if (kind === 'u8') d.setUint8(0, Number(v));
+    else if (kind === 'u16') d.setUint16(0, Number(v), true);
+    else if (kind === 'i32') d.setInt32(0, Number(v), true);
+    else if (kind === 'u32') d.setUint32(0, Number(v), true);
+    else if (kind === 'u64') d.setBigUint64(0, BigInt(v), true);
+    else d.setFloat64(0, Number(v), true);
+    this.align(size);
+    const at = this.pos;
+    this.out.push(...new Uint8Array(d.buffer));
+    return at;
+  }
+
+  /** @param {number} at @param {number} v @param {boolean} signed */
+  patch(at, v, signed) {
+    const d = new DataView(new ArrayBuffer(4));
+    if (signed) d.setInt32(0, v, true);
+    else d.setUint32(0, v, true);
+    this.out.splice(at, 4, ...new Uint8Array(d.buffer));
+  }
+
+  /** Writes an object here and what it points to after it; returns where it starts. @param {any} o */
+  object(o) {
+    if ('string' in o) {
+      const bytes = new TextEncoder().encode(o.string);
+      const at = this.scalar('u32', bytes.length);
+      this.out.push(...bytes, 0);
+      return at;
+    }
+    if ('bytes' in o) {
+      const at = this.scalar('u32', o.bytes.length);
+      this.out.push(...o.bytes);
+      return at;
+    }
+    if ('vector' in o) {
+      if (o.vector === 'f64') while (this.pos % 8 !== 4) this.out.push(0);
+      const at = this.scalar('u32', o.values.length);
+      if (o.vector !== 'object') {
+        for (const v of o.values) this.scalar(o.vector, v);
+        return at;
+      }
+      const slots = o.values.map(() => this.scalar('u32', 0));
+      o.values.forEach((/** @type {any} */ v, /** @type {number} */ i) => {
+        const target = this.object(v);
+        this.patch(slots[i], target - slots[i], false);
+      });
+      return at;
+    }
+    this.align(8);
+    const table = this.scalar('i32', 0);
+    /** @type {number[]} */
+    const where = [];
+    /** @type {[number, any][]} */
+    const pending = [];
+    for (const [slot, kind, value] of o.table) {
+      if (kind === 'object') {
+        const at = this.scalar('u32', 0);
+        where[slot] = at - table;
+        pending.push([at, value]);
+      } else {
+        where[slot] = this.scalar(kind, value) - table;
+      }
+    }
+    const size = this.pos - table;
+    this.align(2);
+    const vtable = this.pos;
+    const slots = where.length;
+    this.scalar('u16', 4 + 2 * slots);
+    this.scalar('u16', size);
+    for (let i = 0; i < slots; i++) this.scalar('u16', where[i] ?? 0);
+    this.patch(table, table - vtable, true);
+    for (const [at, value] of pending) {
+      const target = this.object(value);
+      this.patch(at, target - at, false);
+    }
+    return table;
+  }
+
+  /** The finished, size-prefixed buffer of a root table. @param {any} root */
+  static buffer(root) {
+    const b = new FrontToBack();
+    const at = b.scalar('u32', 0);
+    b.patch(at, b.object(root) - at, false);
+    b.align(8);
+    const size = new DataView(new ArrayBuffer(4));
+    size.setUint32(0, b.out.length, true);
+    return [...new Uint8Array(size.buffer), ...b.out];
+  }
+}
+
+/**
+ * Onshore assets on British National Grid as a GIS tool writes FlatGeobuf: a header with the CRS
+ * by EPSG code and its WKT, a title and per-column metadata; a packed R-tree spatial index (node
+ * size 16) before the features; features of mixed kinds (points, a line, a polygon with a hole, a
+ * multipolygon, one without geometry); typed columns (text, double, 32-bit integer, boolean,
+ * date-time text, 32-bit float); one feature whose values are written out of column order.
+ */
+function flatgeobufAssets() {
+  const columns = [
+    { name: 'asset_id', type: 11 },
+    { name: 'kind', type: 11 },
+    { name: 'Depth [m]', type: 10 },
+    { name: 'slots', type: 5 },
+    { name: 'active', type: 2 },
+    { name: 'commissioned', type: 13 },
+    { name: 'Throughput [m3/d]', type: 9 },
+  ];
+  const ring = (/** @type {number[][]} */ r) => r;
+  const assets = [
+    ['W-01', 'well', 1250.5, 2, true, '2019-03-04', null, { type: 1, xy: [[391820.5, 79410]] }],
+    ['W-02', 'well', 980, 1, false, '2020-07-15', null, { type: 1, xy: [[392505, 87230.5]] }],
+    [
+      'PL-01',
+      'pipeline',
+      null,
+      null,
+      true,
+      '2018-11-30',
+      1250.25,
+      {
+        type: 2,
+        xy: [
+          [391820.5, 79410],
+          [392505, 87230.5],
+          [397640, 88115],
+        ],
+      },
+    ],
+    [
+      'LB-01',
+      'licence block',
+      null,
+      null,
+      true,
+      '2015-01-01',
+      null,
+      {
+        type: 3,
+        rings: [
+          ring([
+            [390000, 78000],
+            [400000, 78000],
+            [400000, 90000],
+            [390000, 90000],
+            [390000, 78000],
+          ]),
+          ring([
+            [394000, 82000],
+            [394000, 84000],
+            [396000, 84000],
+            [396000, 82000],
+            [394000, 82000],
+          ]),
+        ],
+      },
+    ],
+    [
+      'FD-01',
+      'field',
+      null,
+      4,
+      false,
+      '2016-06-30',
+      640.5,
+      {
+        type: 6,
+        polygons: [
+          [
+            ring([
+              [391000, 79000],
+              [392000, 79000],
+              [392000, 80000],
+              [391000, 79000],
+            ]),
+          ],
+          [
+            ring([
+              [397000, 87500],
+              [398000, 87500],
+              [398000, 88500],
+              [397000, 87500],
+            ]),
+          ],
+        ],
+      },
+    ],
+    ['X-01', 'proposed well', null, null, false, null, null, null],
+  ];
+  /** @param {any} g */
+  const simple = (g) => {
+    /** @type {[number, string, any][]} */
+    const fields = [];
+    if (g.rings !== undefined) {
+      let end = 0;
+      const ends = g.rings.map((/** @type {number[][]} */ r) => (end += r.length));
+      if (ends.length > 1) fields.push([0, 'object', { vector: 'u32', values: ends }]);
+      fields.push([1, 'object', { vector: 'f64', values: g.rings.flat(2) }]);
+    } else {
+      fields.push([1, 'object', { vector: 'f64', values: g.xy.flat() }]);
+    }
+    fields.push([6, 'u8', g.type]);
+    return { table: fields };
+  };
+  /** @param {any} g */
+  const geometry = (g) =>
+    g.type === 6
+      ? {
+          table: [
+            [6, 'u8', 6],
+            [
+              7,
+              'object',
+              { vector: 'object', values: g.polygons.map((/** @type {any} */ rings) => simple({ type: 3, rings })) },
+            ],
+          ],
+        }
+      : simple(g);
+  /** @param {any[]} values @param {number[]} order */
+  const properties = (values, order) => {
+    /** @type {number[]} */
+    const out = [];
+    const put = (/** @type {number} */ size, /** @type {(d: DataView) => void} */ f) => {
+      const d = new DataView(new ArrayBuffer(size));
+      f(d);
+      out.push(...new Uint8Array(d.buffer));
+    };
+    for (const i of order) {
+      const v = values[i];
+      if (v === null) continue;
+      put(2, (d) => d.setUint16(0, i, true));
+      const type = columns[i]?.type;
+      if (type === 11 || type === 13) {
+        const text = new TextEncoder().encode(String(v));
+        put(4, (d) => d.setUint32(0, text.length, true));
+        out.push(...text);
+      } else if (type === 10) put(8, (d) => d.setFloat64(0, v, true));
+      else if (type === 9) put(4, (d) => d.setFloat32(0, v, true));
+      else if (type === 5) put(4, (d) => d.setInt32(0, v, true));
+      else put(1, (d) => d.setUint8(0, v ? 1 : 0));
+    }
+    return new Uint8Array(out);
+  };
+  const features = assets.map((a, k) => {
+    const values = a.slice(0, 7);
+    // The third feature lists its values from the last column to the first.
+    const order = k === 2 ? [6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6];
+    /** @type {[number, string, any][]} */
+    const fields = [];
+    if (a[7] !== null) fields.push([0, 'object', geometry(a[7])]);
+    fields.push([1, 'object', { bytes: properties(values, order) }]);
+    return FrontToBack.buffer({ table: fields });
+  });
+  /** @param {any} g @returns {number[][]} */
+  const points = (g) => (g === null ? [] : (g.xy ?? g.rings?.flat() ?? g.polygons.flat(2)));
+  const boxOf = (/** @type {number[][]} */ ps) =>
+    ps.length === 0
+      ? [Infinity, Infinity, -Infinity, -Infinity]
+      : [
+          Math.min(...ps.map((p) => /** @type {number} */ (p[0]))),
+          Math.min(...ps.map((p) => /** @type {number} */ (p[1]))),
+          Math.max(...ps.map((p) => /** @type {number} */ (p[0]))),
+          Math.max(...ps.map((p) => /** @type {number} */ (p[1]))),
+        ];
+  const boxes = assets.map((a) => boxOf(points(a[7])));
+  const all = boxOf(assets.flatMap((a) => points(a[7])));
+  const header = FrontToBack.buffer({
+    table: [
+      [0, 'object', { string: 'onshore_assets_bng' }],
+      [1, 'object', { vector: 'f64', values: all }],
+      [2, 'u8', 0],
+      [
+        7,
+        'object',
+        {
+          vector: 'object',
+          values: columns.map((c) => ({
+            table: [
+              [0, 'object', { string: c.name }],
+              [1, 'u8', c.type],
+              [2, 'object', { string: c.name.replace(/ \[.*\]$/, '') }],
+              [4, 'i32', -1],
+              [7, 'u8', 1],
+            ],
+          })),
+        },
+      ],
+      [8, 'u64', BigInt(assets.length)],
+      [9, 'u16', 16],
+      [
+        10,
+        'object',
+        {
+          table: [
+            [0, 'object', { string: 'EPSG' }],
+            [1, 'i32', 27700],
+            [2, 'object', { string: 'OSGB36 / British National Grid' }],
+            [
+              4,
+              'object',
+              {
+                string:
+                  'PROJCS["OSGB36 / British National Grid",GEOGCS["OSGB36",DATUM["Ordnance_Survey_of_Great_Britain_1936",SPHEROID["Airy 1830",6377563.396,299.3249646]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",49],PARAMETER["central_meridian",-2],PARAMETER["scale_factor",0.9996012717],PARAMETER["false_easting",400000],PARAMETER["false_northing",-100000],UNIT["metre",1]]',
+              },
+            ],
+          ],
+        },
+      ],
+      [11, 'object', { string: 'Onshore assets' }],
+    ],
+  });
+  // The packed R-tree: the root, then one leaf per feature with its box and byte offset.
+  /** @type {number[]} */
+  const index = [];
+  const node = (/** @type {number[]} */ box, /** @type {number} */ offset) => {
+    const d = new DataView(new ArrayBuffer(40));
+    box.forEach((x, i) => d.setFloat64(8 * i, x, true));
+    d.setBigUint64(32, BigInt(offset), true);
+    index.push(...new Uint8Array(d.buffer));
+  };
+  node(all, 1);
+  let offset = 0;
+  features.forEach((f, i) => {
+    node(/** @type {number[]} */ (boxes[i]), offset);
+    offset += f.length;
+  });
+  const magic = [0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62, 0x01];
+  return {
+    name: 'fgb_assets_bng_indexed.fgb',
+    bytes: new Uint8Array([...magic, ...header, ...index, ...features.flat()]),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Output
 
 /** @returns {FixtureFile[]} */
@@ -1374,6 +1736,7 @@ export function buildTextFixtures() {
     jsonApiWrapper(),
     jsonLinesWellTests(),
     parquetWellDaily(),
+    flatgeobufAssets(),
   ];
 }
 

@@ -248,8 +248,8 @@ fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
             "row {loc}, column {}",
             serde_json::to_string(&source_name(c)).unwrap_or_default()
         ),
-        (Some("geojson"), None) => format!("feature {loc}"),
-        (Some("geojson"), Some(c)) => {
+        (Some("geojson" | "flatgeobuf"), None) => format!("feature {loc}"),
+        (Some("geojson" | "flatgeobuf"), Some(c)) => {
             if c["id"].as_str().is_some() && c["id"].as_str() == geometry_column_of(spec) {
                 format!("feature {loc}, geometry")
             } else {
@@ -571,7 +571,7 @@ impl Engine {
             "version": self.version,
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
-                "formats": ["csv", "tsv", "xlsx", "geojson", "json", "parquet"],
+                "formats": ["csv", "tsv", "xlsx", "geojson", "json", "parquet", "flatgeobuf"],
                 "exportProfiles": crate::export::NATIVE_PROFILES,
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
@@ -3472,6 +3472,34 @@ impl Engine {
                                 _ => found.flatten(),
                             }
                         }
+                        // The same for FlatGeobuf features.
+                        crate::import::Reading::FlatGeobuf => {
+                            let path =
+                                crate::overrides::original_file(source, &self.workdir, file_id)?;
+                            let of_geometry = geometry_column_of(&d.spec) == Some(root.as_str());
+                            let mut found = None;
+                            let stop = EngineError::new("FOUND", "", "");
+                            let read = crate::flatgeobuf::read_rows(
+                                &path,
+                                &mut |(at, fields, geometry)| {
+                                    if at as i64 == loc {
+                                        found = Some(if of_geometry {
+                                            geometry
+                                        } else {
+                                            fields.get(index).map(Raw::text)
+                                        });
+                                        return Err(stop.clone());
+                                    }
+                                    Ok(())
+                                },
+                                &AtomicBool::new(false),
+                                &std::sync::atomic::AtomicU64::new(0),
+                            );
+                            match read {
+                                Err(e) if e.code != "FOUND" => return Err(e),
+                                _ => found.flatten(),
+                            }
+                        }
                         // The chosen table is read again until the row at this locator.
                         crate::import::Reading::Xlsx(options) => {
                             let path =
@@ -5177,6 +5205,7 @@ fn commit_import(
         Some("parquet") => "application/vnd.apache.parquet",
         Some("json") => "application/json",
         Some("geojson") => "application/geo+json",
+        Some("flatgeobuf") => "application/flatgeobuf",
         // A workbook in an OLE compound file is a legacy .xls (mediaTypeOf).
         Some("xlsx") if crate::xlsx::is_legacy(&file_head(original)) => "application/vnd.ms-excel",
         Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
