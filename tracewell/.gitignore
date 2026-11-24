@@ -7,3 +7,5 @@ coverage/
 # Rust build output and the per-machine lockfile of crates/*
 target/
 crates/*/Cargo.lock
+# Python bytecode the oracles leave behind
+__pycache__/
