@@ -1,0 +1,18 @@
+{
+  "file": "shp_licence_blocks_bng.zip",
+  "format": "shapefile",
+  "detections": {"encoding": "windows-1252", "crs": "EPSG:27700"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 5,
+  "columns": [
+    {"name": "LICENCE", "type": "string", "unit": null, "role": "text"},
+    {"name": "OPERATOR", "type": "string", "unit": null, "role": "text"},
+    {"name": "AREA", "type": "number", "unit": null, "role": "measure"},
+    {"name": "BLOCKS", "type": "integer", "unit": null, "role": "measure"},
+    {"name": "AWARDED", "type": "date", "unit": null, "role": "time"},
+    {"name": "ACTIVE", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-DQ-001": 3, "TW-GEO-004": 1, "TW-GEO-006": 1, "TW-UNIT-001": 2},
+  "notes": []
+}

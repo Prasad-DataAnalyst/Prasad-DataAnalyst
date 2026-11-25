@@ -38,6 +38,10 @@ export function locator(schema: TableSchema, srcLoc: number, column?: ColumnSche
     case 'geojson':
     case 'flatgeobuf':
       return column === undefined ? `feature ${srcLoc}` : `feature ${srcLoc}, ${geoJsonMember(schema, column)}`;
+    case 'shapefile':
+      return column === undefined
+        ? `record ${srcLoc}`
+        : `record ${srcLoc}, ${column.id === schema.geometryColumn ? 'geometry' : `field ${JSON.stringify(sourceName(column))}`}`;
     case 'kml':
       return column === undefined
         ? `placemark ${srcLoc}`

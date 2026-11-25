@@ -53,6 +53,7 @@ const FORMATS: ReadonlySet<string> = new Set<SourceFormat>([
   'parquet',
   'flatgeobuf',
   'kml',
+  'shapefile',
 ]);
 const TYPES: ReadonlySet<string> = new Set<LogicalType>([
   'string',

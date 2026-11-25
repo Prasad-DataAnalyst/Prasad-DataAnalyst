@@ -48,3 +48,16 @@ test('kml_wells_folders_extended.kml and kmz_pipelines_latin1.kmz import with ev
   await app.importFixture('kmz_pipelines_latin1.kmz');
   await expect(page.getByText('Cañon gathering')).toBeVisible();
 });
+
+test('zipped Shapefiles import with their .prj CRS, their encoding and every check the library expects', async ({
+  app,
+  page,
+}) => {
+  await app.open();
+  await app.importFixture('shp_licence_blocks_bng.zip');
+  await app.runChecks();
+  expect(await app.issueCounts()).toEqual(fixtureExpectation('shp_licence_blocks_bng.zip').issues);
+  await expect(page.getByText('Société Nord Énergie').first()).toBeVisible();
+  await app.importFixture('shp_wells_pointz_wgs84.zip');
+  await expect(page.getByText('abandonné')).toBeVisible();
+});

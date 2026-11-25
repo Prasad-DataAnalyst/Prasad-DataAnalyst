@@ -57,6 +57,7 @@ const SOURCE_FORMATS = members<SourceFormat>()([
   'parquet',
   'flatgeobuf',
   'kml',
+  'shapefile',
 ]);
 const QUANTITY_KINDS = members<QuantityKind>()([
   'length',

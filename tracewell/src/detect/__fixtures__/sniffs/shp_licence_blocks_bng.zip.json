@@ -1,0 +1,135 @@
+{
+  "fixture": "shp_licence_blocks_bng.zip",
+  "format": "shapefile",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": "",
+    "geometryColumn": true
+  },
+  "header": [["LICENCE", "OPERATOR", "AREA", "BLOCKS", "AWARDED", "ACTIVE"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": [
+        "P.1234",
+        "Société Nord Énergie",
+        "96.000",
+        "2",
+        {
+          "date": "2015-01-01"
+        },
+        true
+      ],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [390000, 78000],
+            [390000, 88000],
+            [400000, 88000],
+            [400000, 78000],
+            [390000, 78000]
+          ],
+          [
+            [394000, 82000],
+            [396000, 82000],
+            [396000, 84000],
+            [394000, 84000],
+            [394000, 82000]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 1,
+      "fields": [
+        "P.2001",
+        "Försterling Öl",
+        "32.000",
+        "2",
+        {
+          "date": "2017-06-30"
+        },
+        true
+      ],
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [400000, 80000],
+              [400000, 84000],
+              [404000, 84000],
+              [404000, 80000],
+              [400000, 80000]
+            ]
+          ],
+          [
+            [
+              [406000, 80000],
+              [406000, 84000],
+              [410000, 84000],
+              [410000, 80000],
+              [406000, 80000]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": [
+        "P.3010",
+        "Société Nord Énergie",
+        "36.000",
+        "1",
+        {
+          "date": "2019-03-15"
+        },
+        false
+      ],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [410000, 76000],
+            [410000, 82000],
+            [416000, 82000],
+            [416000, 76000],
+            [410000, 76000]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["P.4100", "Ancien Opérateur", null, "1", null, null],
+      "geometry": null
+    },
+    {
+      "srcLoc": 4,
+      "fields": [
+        "P.5002",
+        "Försterling Öl",
+        "25.500",
+        "1",
+        {
+          "date": "2021-12-01"
+        },
+        true
+      ],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [380000, 90000],
+            [380000, 95000],
+            [385000, 95000],
+            [385000, 90000],
+            [380000, 90000]
+          ]
+        ]
+      }
+    }
+  ]
+}

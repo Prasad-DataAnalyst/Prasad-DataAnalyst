@@ -8,6 +8,7 @@ import { csvImporter } from '@tw/formats-csv';
 import { flatgeobufImporter } from '@tw/formats-flatgeobuf';
 import { geojsonImporter } from '@tw/formats-geojson';
 import { kmlImporter } from '@tw/formats-kml';
+import { shapefileImporter } from '@tw/formats-shapefile';
 import { jsonImporter } from '@tw/formats-json';
 import { parquetImporter } from '@tw/formats-parquet';
 import { xlsxImporter } from '@tw/formats-xlsx';
@@ -35,13 +36,31 @@ const GEOJSON_TYPES: ReadonlySet<string> = new Set([
 ]);
 const WORKBOOK_ENTRY = new TextEncoder().encode('xl/workbook');
 
-/** The name of a ZIP archive's first entry, from its local header. */
-function firstZipEntry(head: Uint8Array): string {
-  if (head.length < 30) return '';
+/**
+ * The names of a ZIP archive's entries whose local headers the head holds, walking from one to
+ * the next by their stored sizes; an entry whose sizes come after its data ends the walk.
+ */
+function zipEntries(head: Uint8Array): string[] {
   const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
-  const length = view.getUint16(26, true);
-  return new TextDecoder().decode(head.subarray(30, Math.min(head.length, 30 + length)));
+  const names: string[] = [];
+  let at = 0;
+  while (at + 30 <= head.length && startsWith(head.subarray(at), ZIP_MAGIC)) {
+    const flags = view.getUint16(at + 6, true);
+    const compressed = view.getUint32(at + 18, true);
+    const nameLength = view.getUint16(at + 26, true);
+    const extraLength = view.getUint16(at + 28, true);
+    names.push(new TextDecoder().decode(head.subarray(at + 30, Math.min(head.length, at + 30 + nameLength))));
+    if ((flags & 8) !== 0) break;
+    at += 30 + nameLength + extraLength + compressed;
+  }
+  return names;
 }
+
+/** The parts of a Shapefile, which a zipped Shapefile holds. */
+const SHAPEFILE_PART = /\.(shp|shx|dbf|prj|cpg)$/i;
+
+/** The big-endian file code 9994 that starts a .shp file. */
+const SHP_FILE_CODE = [0x00, 0x00, 0x27, 0x0a];
 
 /** XML whose root element is kml, after any declaration, processing instructions and comments. */
 const KML_ROOT =
@@ -102,8 +121,12 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
     if (contains(head, WORKBOOK_ENTRY)) {
       return detection('xlsx', 'high', 'zip-workbook', 'The file is a ZIP archive holding an Excel workbook.');
     }
-    if (firstZipEntry(head).toLowerCase().endsWith('.kml') || ext === 'kmz') {
+    const names = zipEntries(head);
+    if ((names[0] ?? '').toLowerCase().endsWith('.kml') || ext === 'kmz') {
       return detection('kml', 'high', 'zip-kml', 'The file is a ZIP archive holding a KML document (KMZ).');
+    }
+    if (names.some((n) => SHAPEFILE_PART.test(n))) {
+      return detection('shapefile', 'high', 'zip-shapefile', 'The file is a ZIP archive holding a Shapefile.');
     }
     return detection(
       'xlsx',
@@ -120,6 +143,10 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
       'ole-workbook',
       'The file is an OLE compound file, the container of Excel 97-2003 workbooks (.xls).',
     );
+  }
+
+  if (startsWith(head, SHP_FILE_CODE)) {
+    return detection('shapefile', 'high', 'shp-file-code', 'The file starts with the Shapefile file code 9994.');
   }
 
   if (startsWith(head, FLATGEOBUF_MAGIC)) {
@@ -203,5 +230,7 @@ export function importerFor(format: SourceFormat): Importer {
       return flatgeobufImporter;
     case 'kml':
       return kmlImporter;
+    case 'shapefile':
+      return shapefileImporter;
   }
 }

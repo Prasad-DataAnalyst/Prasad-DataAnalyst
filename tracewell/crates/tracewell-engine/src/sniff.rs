@@ -381,23 +381,57 @@ fn top_level_type(text: &str) -> Option<String> {
 }
 
 /// The source format from the first bytes and the file name (format.ts detectFormat).
+/// The names of a ZIP archive's entries whose local headers the head holds, walking from one to
+/// the next by their stored sizes; an entry whose sizes come after its data ends the walk.
+fn zip_entries(head: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut at = 0usize;
+    while at + 30 <= head.len() && head[at..].starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+        let u16_at = |i: usize| u16::from_le_bytes([head[at + i], head[at + i + 1]]) as usize;
+        let flags = u16_at(6);
+        let compressed =
+            u32::from_le_bytes([head[at + 18], head[at + 19], head[at + 20], head[at + 21]])
+                as usize;
+        let name_length = u16_at(26);
+        let extra_length = u16_at(28);
+        let end = head.len().min(at + 30 + name_length);
+        names.push(String::from_utf8_lossy(&head[at + 30..end]).into_owned());
+        if flags & 8 != 0 {
+            break;
+        }
+        at += 30 + name_length + extra_length + compressed;
+    }
+    names
+}
+
+/// A part of a Shapefile, which a zipped Shapefile holds.
+fn is_shapefile_part(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    [".shp", ".shx", ".dbf", ".prj", ".cpg"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+}
+
 fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     // A ZIP archive is read as an .xlsx workbook, no other ZIP-based format being supported, and
     // an OLE compound file as a legacy .xls; the reader refuses what is not a workbook.
     let ext = extension_of(file_name);
     if head.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
-        // A KMZ: a ZIP whose first entry is a KML document, or a .kmz file that is no workbook.
-        let first = if head.len() >= 30 {
-            let length = u16::from_le_bytes([head[26], head[27]]) as usize;
-            String::from_utf8_lossy(&head[30..head.len().min(30 + length)]).to_lowercase()
-        } else {
-            String::new()
-        };
-        let workbook = head.windows(11).any(|w| w == b"xl/workbook");
+        // What the TypeScript reader sees of a ZIP: the entries whose local headers its head holds.
+        let zip = &head[..head.len().min(FORMAT_SNIFF_BYTES)];
+        let names = zip_entries(zip);
+        let workbook = zip.windows(11).any(|w| w == b"xl/workbook");
+        let first = names.first().map(|n| n.to_lowercase()).unwrap_or_default();
         if !workbook && (first.ends_with(".kml") || ext == "kmz") {
             return Ok("kml");
         }
+        if !workbook && names.iter().any(|n| is_shapefile_part(n)) {
+            return Ok("shapefile");
+        }
         return Ok("xlsx");
+    }
+    if head.starts_with(&[0x00, 0x00, 0x27, 0x0A]) {
+        return Ok("shapefile");
     }
     if head.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         return Ok("xlsx");
@@ -1834,8 +1868,8 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     } else {
         match options["format"].as_str() {
             Some(
-                f
-                @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson" | "flatgeobuf" | "kml"),
+                f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson" | "flatgeobuf" | "kml"
+                | "shapefile"),
             ) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
@@ -1856,6 +1890,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     }
     if format == "kml" {
         return sniff_kml(src, options);
+    }
+    if format == "shapefile" {
+        return sniff_shapefile(src, options);
     }
     if format == "xlsx" {
         return sniff_xlsx(src, options);
@@ -2089,6 +2126,33 @@ fn sniff_flatgeobuf(src: &Source, options: &Value) -> Result<Sniffed> {
         geometries: Some(geometries),
     };
     // Settings chosen for the file read it again with them, which changes nothing else here.
+    if !options.is_null() && stringify(&s.options) != stringify(options) {
+        s.options = options.clone();
+    }
+    Ok(s)
+}
+
+/// A zipped Shapefile's sniff (shapefile/importer.ts sniff): the .dbf fields, the encoding, the
+/// CRS of the .prj, the geometry types and the record count, the first records as the sample.
+fn sniff_shapefile(src: &Source, options: &Value) -> Result<Sniffed> {
+    let found = crate::shapefile_import::sniff(src.path, SAMPLE_MAX_ROWS)?;
+    let (rows, geometries) = found
+        .rows
+        .into_iter()
+        .map(|(loc, fields, geometry)| ((loc, fields), geometry))
+        .unzip();
+    let mut s = Sniffed {
+        format: "shapefile".into(),
+        options: json!({ "format": "shapefile", "shapefile": { "entry": found.entry } }),
+        detections: found.detections,
+        header: vec![found.header],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+        sheets: None,
+        geometries: Some(geometries),
+    };
     if !options.is_null() && stringify(&s.options) != stringify(options) {
         s.options = options.clone();
     }
@@ -2343,7 +2407,7 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
     if src.size <= PREVIEW_MAX_BYTES as u64 && n < SAMPLE_MAX_ROWS {
         return Some(n as u64);
     }
-    if s.format == "parquet" || s.format == "flatgeobuf" {
+    if s.format == "parquet" || s.format == "flatgeobuf" || s.format == "shapefile" {
         // The footer, or the header, states the row count exactly.
         return s.detection("rowCount").and_then(|d| d["value"].as_u64());
     }
@@ -2395,7 +2459,10 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
     let o = DetectOptions {
         decimal: s.decimal,
         thousands: s.thousands.clone(),
-        geometry_column: matches!(s.format.as_str(), "geojson" | "flatgeobuf" | "kml"),
+        geometry_column: matches!(
+            s.format.as_str(),
+            "geojson" | "flatgeobuf" | "kml" | "shapefile"
+        ),
     };
     let fields: Vec<Vec<Raw>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
     let planned = detect_columns(&s.header, &fields, &o);

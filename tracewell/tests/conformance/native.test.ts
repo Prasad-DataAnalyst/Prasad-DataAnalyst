@@ -2748,7 +2748,7 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     await pair('profiles', (e) => e.listExportProfiles(id));
   };
 
-  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(geojson|fgb|kml|kmz)$/.test(n));
+  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(geojson|fgb|kml|kmz|zip)$/.test(n));
 
   it('reads GeoJSON, FlatGeobuf and KML files as the TypeScript engine does: preview, rows, lineage, statistics and checks', async () => {
     const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
@@ -3105,6 +3105,119 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         if (bytes.length > 1 << 20)
           expect(await allRows(nat.client, id), `${name}: rows`).toEqual(await allRows(lite, id));
         else await sameDataset(nat.client, lite, id, name, found);
+      }
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('reads zipped Shapefiles as the TypeScript engine does, its own exports included, and refuses others alike', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-shp-'));
+    const enc = (t: string) => new TextEncoder().encode(t);
+    /** A .shp of point records, the last `cut` bytes taken off. */
+    const shp = (points: number[][], cut = 0) => {
+      const length = 100 + 28 * points.length;
+      const out = new Uint8Array(length);
+      const v = new DataView(out.buffer);
+      v.setInt32(0, 9994, false);
+      v.setInt32(24, length / 2, false);
+      v.setInt32(28, 1000, true);
+      v.setInt32(32, 1, true);
+      points.forEach((p, i) => {
+        v.setInt32(100 + 28 * i, i + 1, false);
+        v.setInt32(104 + 28 * i, 10, false);
+        v.setInt32(108 + 28 * i, 1, true);
+        v.setFloat64(112 + 28 * i, p[0] as number, true);
+        v.setFloat64(120 + 28 * i, p[1] as number, true);
+      });
+      return out.subarray(0, length - cut);
+    };
+    /** A .dbf of one character field. */
+    const dbf = (values: string[]) => {
+      const header = 32 + 32 + 1;
+      const out = new Uint8Array(header + values.length * 9 + 1).fill(0x20, header);
+      const v = new DataView(out.buffer);
+      out[0] = 3;
+      v.setUint32(4, values.length, true);
+      v.setUint16(8, header, true);
+      v.setUint16(10, 9, true);
+      out.set(enc('NAME'), 32);
+      out[43] = 0x43;
+      out[48] = 8;
+      out[header - 1] = 0x0d;
+      values.forEach((t, i) => out.set(enc(t), header + 9 * i + 1));
+      return out;
+    };
+    const files: [string, Uint8Array][] = [
+      [
+        'more-records.zip',
+        writeZip([
+          {
+            path: 'a.shp',
+            data: shp([
+              [1, 2],
+              [Number.NaN, -0],
+            ]),
+          },
+          { path: 'A.dbf', data: dbf(['one', 'two', 'three']) },
+          { path: 'a.prj', data: enc('GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984"]]') },
+        ]),
+      ],
+      ['bare.shp', shp([[1, 2]])],
+      ['no-shp.zip', writeZip([{ path: 'a.dbf', data: dbf(['x']) }])],
+      ['damaged.zip', new Uint8Array([0x50, 0x4b, 0x03, 0x04, 9, 9, 9])],
+      [
+        'cpg.zip',
+        writeZip([
+          { path: 'a.shp', data: shp([[1, 2]]) },
+          { path: 'a.dbf', data: dbf(['x']) },
+          { path: 'a.cpg', data: enc('Big5') },
+        ]),
+      ],
+      ['cut.zip', writeZip([{ path: 'a.shp', data: shp([[1, 2]], 5) }])],
+    ];
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Shapefiles', profile: { ...PROFILE } });
+      // The Shapefile packages both engines export from the spatial fixtures, read back.
+      for (const name of [
+        'geojson_wells_points_wgs84.geojson',
+        'geojson_legacy_crs_27700.geojson',
+        'kml_wells_folders_extended.kml',
+      ] as const) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        for (const e of [nat.client, lite]) {
+          const d = await e.awaitJob<DatasetSummary>(await e.importFile(file));
+          const r = await settled(async () =>
+            e.awaitJob<ExportResult>(await e.exportData({ datasetId: d.id, profile: 'shapefile' })),
+          );
+          if ('code' in (r as object)) continue;
+          files.push([`${name}-${e === lite ? 'lite' : 'native'}.zip`, (r as ExportResult).bytes as Uint8Array]);
+        }
+      }
+      expect(files.filter(([n]) => n.endsWith('-lite.zip')).length).toBeGreaterThan(0);
+      for (const [name, bytes] of files) {
+        writeFileSync(join(folder, name), bytes);
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        const [pa, pb] = [await settled(() => nat.client.sniff(file)), await settled(() => lite.sniff(file))];
+        expect(pa, `${name}: preview`).toEqual(pb);
+        orderDifferences(pa, pb, `${name}: preview`, found);
+        const imported = async (e: EngineClient) => e.awaitJob<DatasetSummary>(await e.importFile(file));
+        const [da, db] = [await settled(() => imported(nat.client)), await settled(() => imported(lite))];
+        expect(da, `${name}: import`).toEqual(db);
+        if ('code' in (db as object)) continue;
+        const id = (da as DatasetSummary).id;
+        const checked = async (e: EngineClient) => ({
+          ...(await e.awaitJob<CheckSummary>(await e.runChecks(id))),
+          durationMs: 0,
+        });
+        expect(await checked(nat.client), `${name}: checks`).toEqual(await checked(lite));
+        await sameDataset(nat.client, lite, id, name, found);
       }
       expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
     } finally {

@@ -43,6 +43,7 @@ mod recipes;
 mod recovery;
 mod rules;
 mod shapefile;
+mod shapefile_import;
 mod sniff;
 mod steps;
 mod stream;

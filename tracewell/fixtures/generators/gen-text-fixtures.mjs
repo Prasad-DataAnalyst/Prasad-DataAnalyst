@@ -23,6 +23,8 @@ import { parquetWriteBuffer } from 'hyparquet-writer';
 import { ALL_FIXTURES, hampelFlags, isEntryScript, longestRun, mulberry32, noise } from './shared.mjs';
 
 const DEFAULT_OUT = fileURLToPath(new URL('../messy/', import.meta.url));
+/** The tracewell folder, for the registry's reference ESRI WKT. */
+const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 /**
  * @typedef {{ name: string; bytes: Uint8Array }} FixtureFile
@@ -1910,6 +1912,212 @@ function kmzPipelinesLatin1() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Shapefiles
+
+/**
+ * The files of a Shapefile, written here as the ESRI Shapefile Technical Description (1998) and
+ * dBASE III lay them out, independently of the product's own writer.
+ * @param {number} type the shape type of every non-null record
+ * @param {Uint8Array[]} records each record's content
+ */
+function shpAndShx(type, records) {
+  const length = 100 + records.reduce((n, r) => n + 8 + r.length, 0);
+  const shp = new Uint8Array(length);
+  const shx = new Uint8Array(100 + 8 * records.length);
+  const header = (/** @type {DataView} */ v, /** @type {number} */ bytes) => {
+    v.setInt32(0, 9994, false);
+    v.setInt32(24, bytes / 2, false);
+    v.setInt32(28, 1000, true);
+    v.setInt32(32, type, true);
+  };
+  const sv = new DataView(shp.buffer);
+  const xv = new DataView(shx.buffer);
+  header(sv, length);
+  header(xv, shx.length);
+  let at = 100;
+  records.forEach((r, i) => {
+    sv.setInt32(at, i + 1, false);
+    sv.setInt32(at + 4, r.length / 2, false);
+    shp.set(r, at + 8);
+    xv.setInt32(100 + 8 * i, at / 2, false);
+    xv.setInt32(104 + 8 * i, r.length / 2, false);
+    at += 8 + r.length;
+  });
+  return { shp, shx };
+}
+
+/** A polygon record (type 5): rings as written, which give their own orientation. @param {number[][][]} rings */
+function polygonRecord(rings) {
+  const points = rings.flat();
+  const out = new Uint8Array(44 + 4 * rings.length + 16 * points.length);
+  const v = new DataView(out.buffer);
+  v.setInt32(0, 5, true);
+  const xs = points.map((p) => /** @type {number} */ (p[0]));
+  const ys = points.map((p) => /** @type {number} */ (p[1]));
+  [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].forEach((b, i) =>
+    v.setFloat64(4 + 8 * i, b, true),
+  );
+  v.setInt32(36, rings.length, true);
+  v.setInt32(40, points.length, true);
+  let start = 0;
+  rings.forEach((r, i) => {
+    v.setInt32(44 + 4 * i, start, true);
+    start += r.length;
+  });
+  points.forEach((p, i) => {
+    v.setFloat64(44 + 4 * rings.length + 16 * i, /** @type {number} */ (p[0]), true);
+    v.setFloat64(52 + 4 * rings.length + 16 * i, /** @type {number} */ (p[1]), true);
+  });
+  return out;
+}
+
+/** A PointZ record (type 11): x, y, z and a measure of "no data". @param {number[]} p */
+function pointZRecord(p) {
+  const out = new Uint8Array(36);
+  const v = new DataView(out.buffer);
+  v.setInt32(0, 11, true);
+  [...p, -1e39].forEach((x, i) => v.setFloat64(4 + 8 * i, x, true));
+  return out;
+}
+
+/**
+ * A dBASE III table; each value is its field's bytes, padded with spaces (numbers to the left).
+ * @param {[string, string, number, number][]} fields name, type, width, decimals
+ * @param {(Uint8Array | null)[][]} rows
+ * @param {number} driver the language driver byte
+ */
+function dbfFile(fields, rows, driver) {
+  const recordLength = 1 + fields.reduce((n, f) => n + f[2], 0);
+  const headerLength = 32 + 32 * fields.length + 1;
+  const out = new Uint8Array(headerLength + rows.length * recordLength + 1);
+  const v = new DataView(out.buffer);
+  out[0] = 3;
+  out.set([126, 1, 1], 1);
+  v.setUint32(4, rows.length, true);
+  v.setUint16(8, headerLength, true);
+  v.setUint16(10, recordLength, true);
+  out[29] = driver;
+  fields.forEach(([name, type, width, decimals], i) => {
+    out.set(new TextEncoder().encode(name), 32 + 32 * i);
+    out[43 + 32 * i] = type.charCodeAt(0);
+    out[48 + 32 * i] = width;
+    out[49 + 32 * i] = decimals;
+  });
+  out[headerLength - 1] = 0x0d;
+  rows.forEach((row, r) => {
+    let at = headerLength + r * recordLength;
+    out[at++] = 0x20;
+    row.forEach((value, i) => {
+      const [, type, width] = /** @type {[string, string, number, number]} */ (fields[i]);
+      const bytes = value ?? new Uint8Array(0);
+      out.fill(0x20, at, at + width);
+      out.set(bytes, type === 'N' ? at + width - bytes.length : at);
+      at += width;
+    });
+  });
+  out[out.length - 1] = 0x1a;
+  return out;
+}
+
+/** Text as windows-1252 bytes; every character here is below U+0100. @param {string} t */
+const ansi = (t) => Uint8Array.from(t, (c) => c.charCodeAt(0));
+
+/** The ESRI WKT the epsg.io service publishes for a CRS, as the registry tests keep it. @param {string} code */
+function esriWktOf(code) {
+  const fixture = JSON.parse(readFileSync(join(ROOT, 'src', 'geo', 'crs', '__fixtures__', 'esri-wkt.json'), 'utf8'));
+  return /** @type {string} */ (fixture.wkt[code]);
+}
+
+/**
+ * Licence blocks on British National Grid as ArcGIS zips a Shapefile: .cpg-less windows-1252
+ * attributes (the .dbf's language driver says so), a block with a hole, a block in two parts, a
+ * relinquished block without a shape, numbers padded to the left, a blank date and an unknown
+ * logical value.
+ */
+function shapefileLicenceBlocks() {
+  const cw = (/** @type {number} */ x, /** @type {number} */ y, /** @type {number} */ s) => [
+    [x, y],
+    [x, y + s],
+    [x + s, y + s],
+    [x + s, y],
+    [x, y],
+  ];
+  const ccw = (/** @type {number} */ x, /** @type {number} */ y, /** @type {number} */ s) => cw(x, y, s).reverse();
+  const { shp, shx } = shpAndShx(5, [
+    polygonRecord([cw(390000, 78000, 10000), ccw(394000, 82000, 2000)]),
+    polygonRecord([cw(400000, 80000, 4000), cw(406000, 80000, 4000)]),
+    polygonRecord([cw(410000, 76000, 6000)]),
+    Uint8Array.of(0, 0, 0, 0),
+    polygonRecord([cw(380000, 90000, 5000)]),
+  ]);
+  const fields = /** @type {[string, string, number, number][]} */ ([
+    ['LICENCE', 'C', 10, 0],
+    ['OPERATOR', 'C', 30, 0],
+    ['AREA', 'N', 12, 3],
+    ['BLOCKS', 'N', 3, 0],
+    ['AWARDED', 'D', 8, 0],
+    ['ACTIVE', 'L', 1, 0],
+  ]);
+  const row = (/** @type {(string | null)[]} */ values) => values.map((v) => (v === null ? null : ansi(v)));
+  const dbf = dbfFile(
+    fields,
+    [
+      row(['P.1234', 'Société Nord Énergie', '96.000', '2', '20150101', 'T']),
+      row(['P.2001', 'Försterling Öl', '32.000', '2', '20170630', 'T']),
+      row(['P.3010', 'Société Nord Énergie', '36.000', '1', '20190315', 'F']),
+      row(['P.4100', 'Ancien Opérateur', null, '1', null, '?']),
+      row(['P.5002', 'Försterling Öl', '25.500', '1', '20211201', 'T']),
+    ],
+    0x57,
+  );
+  const name = 'licence_blocks_bng';
+  return {
+    name: 'shp_licence_blocks_bng.zip',
+    bytes: zipOf([
+      [`${name}.dbf`, dbf],
+      [`${name}.prj`, new TextEncoder().encode(esriWktOf('EPSG:27700'))],
+      [`${name}.shp`, shp],
+      [`${name}.shx`, shx],
+    ]),
+  };
+}
+
+/** Wells as 3D points on WGS 84 with a UTF-8 .cpg, zipped in a folder. */
+function shapefileWellsPointZ() {
+  const wells = [
+    ['NS-A01', '3120.5', '20190304', 'producing', [1.7501, 57.4802, -3120.5]],
+    ['NS-A02', '2875.0', '20200715', 'shut in', [1.8, 57.51, -2875]],
+    ['NS-A03', '4010.2', '20210120', 'producing', [2.1, 57.9, -4010.2]],
+    ['NS-B01', '1980.0', '20220502', 'abandonné', [2.15, 57.95, -1980]],
+  ];
+  const { shp, shx } = shpAndShx(
+    11,
+    wells.map((w) => pointZRecord(/** @type {number[]} */ (w[4]))),
+  );
+  const utf8 = (/** @type {string} */ t) => new TextEncoder().encode(t);
+  const dbf = dbfFile(
+    [
+      ['WELL_ID', 'C', 10, 0],
+      ['TVD', 'N', 10, 1],
+      ['SPUD', 'D', 8, 0],
+      ['STATUS', 'C', 20, 0],
+    ],
+    wells.map((w) => [utf8(String(w[0])), utf8(String(w[1])), utf8(String(w[2])), utf8(String(w[3]))]),
+    0,
+  );
+  return {
+    name: 'shp_wells_pointz_wgs84.zip',
+    bytes: zipOf([
+      ['wells/wells.shp', shp],
+      ['wells/wells.shx', shx],
+      ['wells/wells.dbf', dbf],
+      ['wells/wells.prj', new TextEncoder().encode(esriWktOf('EPSG:4326'))],
+      ['wells/wells.cpg', new TextEncoder().encode('UTF-8')],
+    ]),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Output
 
 /** @returns {FixtureFile[]} */
@@ -1941,6 +2149,8 @@ export function buildTextFixtures() {
     flatgeobufAssets(),
     kmlWellsFolders(),
     kmzPipelinesLatin1(),
+    shapefileLicenceBlocks(),
+    shapefileWellsPointZ(),
   ];
 }
 

@@ -1,0 +1,16 @@
+{
+  "file": "shp_wells_pointz_wgs84.zip",
+  "format": "shapefile",
+  "detections": {"encoding": "utf-8", "crs": "EPSG:4326"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 4,
+  "columns": [
+    {"name": "WELL_ID", "type": "string", "unit": null, "role": "id"},
+    {"name": "TVD", "type": "number", "unit": null, "role": "measure"},
+    {"name": "SPUD", "type": "date", "unit": null, "role": "time"},
+    {"name": "STATUS", "type": "string", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-UNIT-001": 1},
+  "notes": []
+}

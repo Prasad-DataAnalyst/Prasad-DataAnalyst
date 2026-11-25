@@ -67,6 +67,11 @@ export interface KmlOptions {
   entry: string | null;
 }
 
+export interface ShapefileOptions {
+  /** The .shp entry of the ZIP archive; the .dbf, .prj and .cpg beside it share its name. */
+  entry: string;
+}
+
 export type FormatOptions =
   | { format: 'csv' | 'tsv'; csv: CsvOptions }
   | { format: 'xlsx'; xlsx: XlsxOptions }
@@ -74,12 +79,13 @@ export type FormatOptions =
   | { format: 'json'; json: JsonOptions }
   | { format: 'parquet'; parquet: ParquetOptions }
   | { format: 'flatgeobuf'; flatgeobuf: FlatGeobufOptions }
-  | { format: 'kml'; kml: KmlOptions };
+  | { format: 'kml'; kml: KmlOptions }
+  | { format: 'shapefile'; shapefile: ShapefileOptions };
 
 export interface RawRow {
   /**
    * CSV physical line (1-based) | sheet row (1-based) | GeoJSON or FlatGeobuf feature index
-   * (0-based) | KML placemark index (0-based) | JSON record index (0-based) or, for JSON Lines,
+   * (0-based) | KML placemark or Shapefile record index (0-based) | JSON record index (0-based) or, for JSON Lines,
    * line (1-based) | Parquet row index (0-based).
    */
   srcLoc: number;

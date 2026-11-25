@@ -13,12 +13,16 @@ export function detectOptionsFor(options: FormatOptions): DetectOptions {
     case 'geojson':
     case 'flatgeobuf':
     case 'kml':
+    case 'shapefile':
       return { decimalSeparator: '.', thousandsSeparator: '', geometryColumn: true };
     case 'json':
     case 'parquet':
       return { decimalSeparator: '.', thousandsSeparator: '' };
   }
 }
+
+/** Formats whose rows carry their geometry beside their fields. */
+const GEOMETRY_FORMATS: ReadonlySet<FormatOptions['format']> = new Set(['geojson', 'flatgeobuf', 'kml', 'shapefile']);
 
 export type CellParseResult = { ok: true; value: CellValue; nullMarker?: string } | { ok: false; raw: string };
 export type RowParser = (row: RawRow) => CellParseResult[];
@@ -31,10 +35,7 @@ function isGeometryPlan(plan: ColumnPlan): boolean {
 export function rowParser(plans: readonly ColumnPlan[], options: FormatOptions): RowParser {
   const dopts = detectOptionsFor(options);
   const parsers = plans.map((plan) => {
-    if (
-      isGeometryPlan(plan) &&
-      (options.format === 'geojson' || options.format === 'flatgeobuf' || options.format === 'kml')
-    ) {
+    if (isGeometryPlan(plan) && GEOMETRY_FORMATS.has(options.format)) {
       return (row: RawRow): CellParseResult =>
         row.geometry === undefined || row.geometry === null
           ? { ok: true, value: null }

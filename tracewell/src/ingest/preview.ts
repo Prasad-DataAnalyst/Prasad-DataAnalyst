@@ -124,7 +124,7 @@ function estimateRows(src: ByteSource, sniff: SniffResult): number | null {
     }
     return null;
   }
-  if (sniff.format === 'parquet' || sniff.format === 'flatgeobuf') {
+  if (sniff.format === 'parquet' || sniff.format === 'flatgeobuf' || sniff.format === 'shapefile') {
     // The footer, or the header, states the row count exactly.
     const rows = sniff.detections['rowCount']?.value;
     return typeof rows === 'number' ? rows : null;

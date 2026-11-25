@@ -34,7 +34,9 @@ export type FixtureName =
   | 'parquet_well_daily_typed.parquet'
   | 'fgb_assets_bng_indexed.fgb'
   | 'kml_wells_folders_extended.kml'
-  | 'kmz_pipelines_latin1.kmz';
+  | 'kmz_pipelines_latin1.kmz'
+  | 'shp_licence_blocks_bng.zip'
+  | 'shp_wells_pointz_wgs84.zip';
 
 export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'csv_well_daily_golden.csv',
@@ -71,4 +73,6 @@ export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'fgb_assets_bng_indexed.fgb',
   'kml_wells_folders_extended.kml',
   'kmz_pipelines_latin1.kmz',
+  'shp_licence_blocks_bng.zip',
+  'shp_wells_pointz_wgs84.zip',
 ]);

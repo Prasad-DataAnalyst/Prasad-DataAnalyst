@@ -39,7 +39,13 @@ export type TimezoneMode = 'utc' | 'offset' | 'naive-assumed-utc';
 export interface CrsRef {
   code: 'OGC:CRS84' | 'EPSG:4326' | `EPSG:${number}` | 'unknown';
   source:
-    'rfc7946-default' | 'geojson-crs-member' | 'flatgeobuf-header' | 'kml-specification' | 'assumed-latlon' | 'user';
+    | 'rfc7946-default'
+    | 'geojson-crs-member'
+    | 'flatgeobuf-header'
+    | 'kml-specification'
+    | 'shapefile-prj'
+    | 'assumed-latlon'
+    | 'user';
 }
 
 export interface ColumnSchema {
@@ -64,7 +70,7 @@ export interface ColumnSchema {
 /** A column as planned by detection, before any step can derive from it. */
 export type ColumnPlan = Omit<ColumnSchema, 'derivedFrom'>;
 
-export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet' | 'flatgeobuf' | 'kml';
+export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet' | 'flatgeobuf' | 'kml' | 'shapefile';
 
 export interface TableSchema {
   datasetId: DatasetId;
