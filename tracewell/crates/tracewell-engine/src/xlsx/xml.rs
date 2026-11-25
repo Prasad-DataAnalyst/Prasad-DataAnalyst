@@ -146,13 +146,36 @@ fn expand(raw: &str) -> std::result::Result<String, String> {
 /// pass through unchanged.
 pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> {
     let decoded = decode(bytes, part)?;
+    tokenize(&decoded, part, handler, false)
+}
+
+/// Parses text already decoded. With `head`, the text is the start of a longer document: what
+/// is cut off at its end (a tag, a comment, the text after the last tag, the elements still
+/// open) is left unread rather than refused, as a streaming parser waits for more.
+pub fn parse_text(decoded: &str, part: &str, handler: &mut dyn Handler, head: bool) -> Result<()> {
+    tokenize(decoded, part, handler, head)
+}
+
+fn tokenize(decoded: &str, part: &str, handler: &mut dyn Handler, head: bool) -> Result<()> {
     // Line ends are normalised before anything else reads the text.
-    let text = if decoded.contains('\r') {
-        decoded.replace("\r\n", "\n").replace('\r', "\n")
+    let normalised;
+    let text: &str = if decoded.contains('\r') {
+        normalised = decoded.replace("\r\n", "\n").replace('\r', "\n");
+        &normalised
     } else {
         decoded
     };
     let s = text.as_bytes();
+    // In a head, an end of the text met before a construct ends is where reading stops.
+    macro_rules! cut {
+        ($e:expr) => {
+            if head {
+                return Ok(());
+            } else {
+                return Err($e);
+            }
+        };
+    }
     let bad = |why: &str| damaged(format!("the part {part} is not well-formed XML ({why})."));
     let find = |from: usize, what: &str| -> Option<usize> {
         text.get(from..)
@@ -165,6 +188,9 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
     while i < s.len() {
         if s[i] != b'<' {
             let end = memchr::memchr(b'<', &s[i..]).map_or(s.len(), |k| i + k);
+            if head && end == s.len() {
+                return Ok(());
+            }
             let run = &text[i..end];
             if stack.is_empty() {
                 if !run.bytes().all(is_space) {
@@ -178,16 +204,22 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
         }
         let rest = &text[i..];
         if rest.starts_with("<?") {
-            let end = find(i + 2, "?>").ok_or_else(|| bad("an unclosed processing instruction"))?;
+            let Some(end) = find(i + 2, "?>") else {
+                cut!(bad("an unclosed processing instruction"))
+            };
             i = end + 2;
         } else if rest.starts_with("<!--") {
-            let end = find(i + 4, "-->").ok_or_else(|| bad("an unclosed comment"))?;
+            let Some(end) = find(i + 4, "-->") else {
+                cut!(bad("an unclosed comment"))
+            };
             i = end + 3;
         } else if rest.starts_with("<![CDATA[") {
             if stack.is_empty() {
                 return Err(bad("CDATA outside the root element"));
             }
-            let end = find(i + 9, "]]>").ok_or_else(|| bad("an unclosed CDATA section"))?;
+            let Some(end) = find(i + 9, "]]>") else {
+                cut!(bad("an unclosed CDATA section"))
+            };
             handler.text(&text[i + 9..end])?;
             i = end + 3;
         } else if rest.starts_with("<!DOCTYPE") {
@@ -206,7 +238,10 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
             while j < s.len() && is_space(s[j]) {
                 j += 1;
             }
-            if j >= s.len() || s[j] != b'>' {
+            if j >= s.len() {
+                cut!(bad("an unclosed end tag"))
+            }
+            if s[j] != b'>' {
                 return Err(bad("an unclosed end tag"));
             }
             match stack.pop() {
@@ -227,6 +262,9 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
                 j += 1;
             }
             if j == start {
+                if j >= s.len() {
+                    cut!(bad("a tag without a name"))
+                }
                 return Err(bad("a tag without a name"));
             }
             let name = &text[start..j];
@@ -237,13 +275,16 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
                     j += 1;
                 }
                 if j >= s.len() {
-                    return Err(bad(&format!("the tag {name} is not closed")));
+                    cut!(bad(&format!("the tag {name} is not closed")))
                 }
                 if s[j] == b'>' {
                     j += 1;
                     break false;
                 }
                 if s[j] == b'/' {
+                    if j + 1 >= s.len() {
+                        cut!(bad(&format!("the tag {name} is not closed")))
+                    }
                     if s.get(j + 1) != Some(&b'>') {
                         return Err(bad(&format!("the tag {name} is not closed")));
                     }
@@ -261,6 +302,9 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
                 while j < s.len() && is_space(s[j]) {
                     j += 1;
                 }
+                if j >= s.len() {
+                    cut!(bad(&format!("an attribute of {name} has no value")))
+                }
                 if attr.is_empty() || s.get(j) != Some(&b'=') {
                     return Err(bad(&format!("an attribute of {name} has no value")));
                 }
@@ -268,13 +312,16 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
                 while j < s.len() && is_space(s[j]) {
                     j += 1;
                 }
+                if j >= s.len() {
+                    cut!(bad(&format!("the attribute {attr} is not quoted")))
+                }
                 let quote = match s.get(j) {
                     Some(&q @ (b'"' | b'\'')) => q,
                     _ => return Err(bad(&format!("the attribute {attr} is not quoted"))),
                 };
-                let close = memchr::memchr(quote, &s[j + 1..])
-                    .map(|k| j + 1 + k)
-                    .ok_or_else(|| bad(&format!("the attribute {attr} is not closed")))?;
+                let Some(close) = memchr::memchr(quote, &s[j + 1..]).map(|k| j + 1 + k) else {
+                    cut!(bad(&format!("the attribute {attr} is not closed")))
+                };
                 let raw = &text[j + 1..close];
                 if raw.contains('<') {
                     return Err(bad(&format!("the attribute {attr} holds '<'")));
@@ -298,6 +345,9 @@ pub fn parse(bytes: &[u8], part: &str, handler: &mut dyn Handler) -> Result<()> 
             }
             i = j;
         }
+    }
+    if head {
+        return Ok(());
     }
     if let Some(open) = stack.last() {
         return Err(bad(&format!("the element {open} is not closed")));

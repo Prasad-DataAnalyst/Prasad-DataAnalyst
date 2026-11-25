@@ -13,12 +13,12 @@ fixtures/
 ├── expectation.test.ts          the expected-file check on malformed documents
 ├── generators.test.ts           the generators reproduce the library; the large CSV is deterministic
 ├── messy/
-│   ├── <name>                   32 fixtures, byte-exact (.gitattributes marks them binary)
+│   ├── <name>                   34 fixtures, byte-exact (.gitattributes marks them binary)
 │   ├── <name>.expected.json     what importing and checking <name> must give
 │   └── SHA256SUMS               SHA-256 of every fixture, for `sha256sum -c SHA256SUMS`
 └── generators/
     ├── make_xlsx_fixtures.py    the 6 XLSX files (openpyxl, 4 of them saved again by LibreOffice) and 2 XLS copies (LibreOffice)
-    ├── gen-text-fixtures.mjs    the 22 CSV, TSV, GeoJSON and JSON files with exact bytes, the Parquet and FlatGeobuf files, then SHA256SUMS
+    ├── gen-text-fixtures.mjs    the 23 CSV, TSV, GeoJSON, KML and JSON files with exact bytes, the Parquet, FlatGeobuf and KMZ files, then SHA256SUMS
     ├── gen-large-csv.mjs        seeded large CSV for the @slow tests (never committed)
     └── shared.mjs               fixture list, seeded random numbers, the Hampel test used by the generators
 ```
@@ -54,8 +54,8 @@ The loader is for Node (tests and tools). It reads from disk synchronously and t
 
 | Field            | Meaning                                                                                                                                                                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file`, `format` | The fixture and its format: `csv`, `tsv`, `xlsx`, `geojson`, `json`, `parquet` or `flatgeobuf`.                                                                                                                                                                           |
-| `detections`     | Dataset-level detections. CSV/TSV: `encoding`, `delimiter`, `decimalSeparator`, `skipLines`, `headerRows`, and `crs` when the file has latitude/longitude columns. XLSX: `sheet`, `date1904`, `skipLines`, `headerRows`. GeoJSON: `encoding`, `crs`. FlatGeobuf: `crs`.        |
+| `file`, `format` | The fixture and its format: `csv`, `tsv`, `xlsx`, `geojson`, `json`, `parquet`, `flatgeobuf` or `kml` (KML and KMZ).                                                                                                                                                                           |
+| `detections`     | Dataset-level detections. CSV/TSV: `encoding`, `delimiter`, `decimalSeparator`, `skipLines`, `headerRows`, and `crs` when the file has latitude/longitude columns. XLSX: `sheet`, `date1904`, `skipLines`, `headerRows`. GeoJSON: `encoding`, `crs`. FlatGeobuf: `crs`. KML: `encoding`, `crs`.        |
 | `confidence`     | The confidence of each listed detection (`high`, `medium`, `low`). A detection is assumed when it is not `high` or is a default.                                                                                                                            |
 | `rowCount`       | Data rows imported.                                                                                                                                                                                                                                         |
 | `columns`        | Every column in source order: `name` (after the unit is taken out of the header), logical `type`, registry `unit` code or `null`, `role`, and `assumed`: the column's assumed detections, in alphabetical order. `assumed` is left out when there are none. |
@@ -108,6 +108,10 @@ implementations must follow them, or the golden tests fail.
 - **GeoJSON columns**: properties in first-seen order, then the geometry column `geometry`.
 - **FlatGeobuf**: the CRS is the EPSG code the header records (`high`), and `unknown` (`low`) when
   it records none; the columns are the header's, in order, then the geometry column `geometry`.
+- **KML**: the CRS is `OGC:CRS84` (`high`), as the KML specification fixes it; the encoding is
+  the byte-order mark's or the XML declaration's, UTF-8 by default (`high`); the columns are the
+  placemark fields in first-seen order (`folder`, `name`, `description`, then ExtendedData by
+  name), then the geometry column `geometry`.
 - **TW-IMP-005** is raised once (dataset scope) when any dataset or column detection is assumed.
 
 ### Issues
@@ -203,6 +207,8 @@ All are UTF-8 FeatureCollections written with two-space indentation and a final 
 | `jsonl_well_tests_crlf.jsonl`                 | 7    | JSON Lines with CRLF line endings and a blank fourth line; WT-04 has `-999.25` as a number, which occurs once and so is read as data (`TW-DQ-005`: below the physical limit); `notes` first appears in WT-06. Rows are located by line.                                                                                                          |
 | `parquet_well_daily_typed.parquet`            | 8    | Typed Parquet columns: text, DATE, TIMESTAMP_MICROS (UTC), DOUBLE with a unit in its name and one null, INT64 and BOOLEAN; `remark` is null except on the shut-in day.                                                                                                                                                                           |
 | `fgb_assets_bng_indexed.fgb`                  | 6    | FlatGeobuf as a GIS tool writes it, by a FlatBuffers encoder of the generator's own (each table before its vtable): EPSG:27700 with its WKT, a packed R-tree index before the features, points, a line, a polygon with a hole, a multipolygon and one asset without geometry; text, double, 32-bit integer, boolean, date-time text and 32-bit float columns, one feature listing its values backwards. |
+| `kml_wells_folders_extended.kml`              | 7    | KML as Google Earth saves it: styles, nested Folders (the `folder` column), CDATA descriptions, ExtendedData Data values with a unit in a name, SchemaData in another placemark, points with an altitude mode, a pipeline, a licence block with a hole, and a proposed well without geometry. |
+| `kmz_pipelines_latin1.kmz`                    | 3    | A KMZ (deflated ZIP, by a ZIP writer of the generator's own) whose doc.kml declares ISO-8859-1 and has accented names and CRLF line ends; a Schema with SimpleData; line strings and a MultiGeometry of two lines, read as a MultiLineString; an icon beside it in the archive. |
 
 ## Large generated CSV
 

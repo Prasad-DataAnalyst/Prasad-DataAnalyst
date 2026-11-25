@@ -5,3 +5,4 @@ export type { KmlPlacemark } from './writer';
 export { writeKml } from './writer';
 export type { KmlDocument, KmlReadPlacemark } from './reader';
 export { KmlFormatError, multiGeometry, readKml } from './reader';
+export { KML_MAX_BYTES, KmlRows, kmlEncoding, kmlEntry, kmlImporter, kmlPositions } from './importer';

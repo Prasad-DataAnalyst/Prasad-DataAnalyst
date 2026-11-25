@@ -7,6 +7,7 @@ import { detection, type Detection, type Importer, type SourceFormat } from '@tw
 import { csvImporter } from '@tw/formats-csv';
 import { flatgeobufImporter } from '@tw/formats-flatgeobuf';
 import { geojsonImporter } from '@tw/formats-geojson';
+import { kmlImporter } from '@tw/formats-kml';
 import { jsonImporter } from '@tw/formats-json';
 import { parquetImporter } from '@tw/formats-parquet';
 import { xlsxImporter } from '@tw/formats-xlsx';
@@ -33,6 +34,18 @@ const GEOJSON_TYPES: ReadonlySet<string> = new Set([
   'GeometryCollection',
 ]);
 const WORKBOOK_ENTRY = new TextEncoder().encode('xl/workbook');
+
+/** The name of a ZIP archive's first entry, from its local header. */
+function firstZipEntry(head: Uint8Array): string {
+  if (head.length < 30) return '';
+  const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+  const length = view.getUint16(26, true);
+  return new TextDecoder().decode(head.subarray(30, Math.min(head.length, 30 + length)));
+}
+
+/** XML whose root element is kml, after any declaration, processing instructions and comments. */
+const KML_ROOT =
+  /^(?:[ \t\r\n]*(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->))*[ \t\r\n]*<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?kml[ \t\r\n/>]/;
 
 function extensionOf(fileName: string): string {
   const dot = fileName.lastIndexOf('.');
@@ -89,6 +102,9 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
     if (contains(head, WORKBOOK_ENTRY)) {
       return detection('xlsx', 'high', 'zip-workbook', 'The file is a ZIP archive holding an Excel workbook.');
     }
+    if (firstZipEntry(head).toLowerCase().endsWith('.kml') || ext === 'kmz') {
+      return detection('kml', 'high', 'zip-kml', 'The file is a ZIP archive holding a KML document (KMZ).');
+    }
     return detection(
       'xlsx',
       ext === 'xlsx' ? 'medium' : 'low',
@@ -118,6 +134,13 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
   const { bomLength, value: encoding } = sniffEncoding(sample);
   const text = decodeAll(sample, encoding, bomLength).replace(/^\uFEFF/, '');
   const first = text.trimStart().charAt(0);
+
+  if (first === '<') {
+    if (KML_ROOT.test(text)) {
+      return detection('kml', 'high', 'kml-root', 'The file is XML whose root element is kml.');
+    }
+    if (ext === 'kml') return detection('kml', 'medium', 'extension', 'The file is XML with the .kml extension.');
+  }
 
   if (first === '{' || first === '[') {
     if (ext === 'geojson') {
@@ -178,5 +201,7 @@ export function importerFor(format: SourceFormat): Importer {
       return parquetImporter;
     case 'flatgeobuf':
       return flatgeobufImporter;
+    case 'kml':
+      return kmlImporter;
   }
 }

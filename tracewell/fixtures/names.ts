@@ -32,7 +32,9 @@ export type FixtureName =
   | 'json_api_wrapper_nested.json'
   | 'jsonl_well_tests_crlf.jsonl'
   | 'parquet_well_daily_typed.parquet'
-  | 'fgb_assets_bng_indexed.fgb';
+  | 'fgb_assets_bng_indexed.fgb'
+  | 'kml_wells_folders_extended.kml'
+  | 'kmz_pipelines_latin1.kmz';
 
 export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'csv_well_daily_golden.csv',
@@ -67,4 +69,6 @@ export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'jsonl_well_tests_crlf.jsonl',
   'parquet_well_daily_typed.parquet',
   'fgb_assets_bng_indexed.fgb',
+  'kml_wells_folders_extended.kml',
+  'kmz_pipelines_latin1.kmz',
 ]);

@@ -128,7 +128,7 @@ export const ENGINE_NAME = 'tracewell-ts';
 
 const DEFAULT_MEMORY_BUDGET = 1_500_000_000;
 const DEFAULT_PROGRESS_INTERVAL_MS = 100;
-const FORMATS: SourceFormat[] = ['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet', 'flatgeobuf'];
+const FORMATS: SourceFormat[] = ['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet', 'flatgeobuf', 'kml'];
 const OVERRIDE_ORDER = ['name', 'type', 'unit', 'role', 'nullMarkers', 'dateFormat', 'timezone'] as const;
 const CSV_SETTINGS: OverridableProperty[] = ['encoding', 'delimiter', 'decimalSeparator', 'headerRows', 'skipLines'];
 const MEDIA_TYPES: Record<SourceFormat, string> = {
@@ -139,6 +139,7 @@ const MEDIA_TYPES: Record<SourceFormat, string> = {
   json: 'application/json',
   parquet: 'application/vnd.apache.parquet',
   flatgeobuf: 'application/flatgeobuf',
+  kml: 'application/vnd.google-earth.kml+xml',
 };
 
 type Change = Extract<EngineEvent, { type: 'project.changed' }>['what'][number];
@@ -234,6 +235,7 @@ function mediaTypeOf(format: SourceFormat, bytes: Uint8Array): string {
   if (format === 'xlsx' && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
     return 'application/vnd.ms-excel';
   }
+  if (format === 'kml' && bytes[0] === 0x50 && bytes[1] === 0x4b) return 'application/vnd.google-earth.kmz';
   return MEDIA_TYPES[format];
 }
 

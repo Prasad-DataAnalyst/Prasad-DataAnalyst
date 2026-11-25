@@ -38,7 +38,8 @@ export type TimezoneMode = 'utc' | 'offset' | 'naive-assumed-utc';
 /** Coordinate reference system, held at dataset level (SAD section 7.6). Slice 1 records it but never transforms. */
 export interface CrsRef {
   code: 'OGC:CRS84' | 'EPSG:4326' | `EPSG:${number}` | 'unknown';
-  source: 'rfc7946-default' | 'geojson-crs-member' | 'flatgeobuf-header' | 'assumed-latlon' | 'user';
+  source:
+    'rfc7946-default' | 'geojson-crs-member' | 'flatgeobuf-header' | 'kml-specification' | 'assumed-latlon' | 'user';
 }
 
 export interface ColumnSchema {
@@ -63,7 +64,7 @@ export interface ColumnSchema {
 /** A column as planned by detection, before any step can derive from it. */
 export type ColumnPlan = Omit<ColumnSchema, 'derivedFrom'>;
 
-export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet' | 'flatgeobuf';
+export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet' | 'flatgeobuf' | 'kml';
 
 export interface TableSchema {
   datasetId: DatasetId;

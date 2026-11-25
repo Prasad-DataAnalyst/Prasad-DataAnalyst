@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Document>
+	<name>North Sea assets.kml</name>
+	<Style id="well"><IconStyle><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>
+	<Folder>
+		<name>Wells</name>
+		<open>1</open>
+		<Folder>
+			<name>Block 21</name>
+			<Placemark>
+				<name>NS-21-01</name>
+				<description><![CDATA[<table><tr><td>Producer</td><td>2 slots</td></tr></table>]]></description>
+				<styleUrl>#well</styleUrl>
+				<ExtendedData>
+					<Data name="well_id"><value>NS-21-01</value></Data>
+					<Data name="Depth (m)"><value>3120.5</value></Data>
+					<Data name="spud"><value>2019-03-04</value></Data>
+					<Data name="active"><value>true</value></Data>
+				</ExtendedData>
+				<Point><altitudeMode>clampToGround</altitudeMode><coordinates>1.7501,57.4802,0</coordinates></Point>
+			</Placemark>
+			<Placemark>
+				<name>NS-21-02</name>
+				<description><![CDATA[<b>Injector</b> &amp; observation]]></description>
+				<styleUrl>#well</styleUrl>
+				<ExtendedData>
+					<Data name="well_id"><value>NS-21-02</value></Data>
+					<Data name="Depth (m)"><value>2875</value></Data>
+					<Data name="spud"><value>2020-07-15</value></Data>
+					<Data name="active"><value>false</value></Data>
+				</ExtendedData>
+				<Point><altitudeMode>clampToGround</altitudeMode><coordinates>1.8,57.51,0</coordinates></Point>
+			</Placemark>
+		</Folder>
+		<Folder>
+			<name>Block 22</name>
+			<Placemark>
+				<name>NS-22-01</name>
+				<description><![CDATA[Producer]]></description>
+				<styleUrl>#well</styleUrl>
+				<ExtendedData>
+					<Data name="well_id"><value>NS-22-01</value></Data>
+					<Data name="Depth (m)"><value>4010.25</value></Data>
+					<Data name="spud"><value>2021-01-20</value></Data>
+					<Data name="active"><value>true</value></Data>
+				</ExtendedData>
+				<Point><altitudeMode>clampToGround</altitudeMode><coordinates>2.1,57.9,0</coordinates></Point>
+			</Placemark>
+			<Placemark>
+				<name>NS-22-02</name>
+				<styleUrl>#well</styleUrl>
+				<ExtendedData>
+					<Data name="well_id"><value>NS-22-02</value></Data>
+					<Data name="spud"><value>2022-05-02</value></Data>
+					<Data name="active"><value>true</value></Data>
+				</ExtendedData>
+				<Point><altitudeMode>clampToGround</altitudeMode><coordinates>2.15,57.95,0</coordinates></Point>
+			</Placemark>
+		</Folder>
+	</Folder>
+	<Folder>
+		<name>Infrastructure</name>
+		<Placemark>
+			<name>Export pipeline</name>
+			<ExtendedData><SchemaData schemaUrl="#pipes"><SimpleData name="Diameter (in)">24</SimpleData><SimpleData name="commissioned">2018-11-30</SimpleData></SchemaData></ExtendedData>
+			<LineString><tessellate>1</tessellate><coordinates>1.7501,57.4802,0 1.8,57.51,0 2.1,57.9,0</coordinates></LineString>
+		</Placemark>
+		<Placemark>
+			<name>Licence P.1234</name>
+			<Polygon>
+				<outerBoundaryIs><LinearRing><coordinates>1.5,57.3,0 2.5,57.3,0 2.5,58.1,0 1.5,58.1,0 1.5,57.3,0</coordinates></LinearRing></outerBoundaryIs>
+				<innerBoundaryIs><LinearRing><coordinates>1.9,57.6,0 2,57.6,0 2,57.7,0 1.9,57.7,0 1.9,57.6,0</coordinates></LinearRing></innerBoundaryIs>
+			</Polygon>
+		</Placemark>
+	</Folder>
+	<Placemark>
+		<name>Proposed NS-23-01</name>
+		<description>Location to be confirmed</description>
+		<ExtendedData><Data name="well_id"><value>NS-23-01</value></Data></ExtendedData>
+	</Placemark>
+</Document>
+</kml>

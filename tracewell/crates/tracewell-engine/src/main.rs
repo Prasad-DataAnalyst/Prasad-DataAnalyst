@@ -33,6 +33,7 @@ mod import;
 mod issues;
 mod json;
 mod kml;
+mod kml_import;
 mod memory;
 mod overrides;
 mod parquet;

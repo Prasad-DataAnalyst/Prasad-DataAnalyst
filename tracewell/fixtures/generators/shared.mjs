@@ -39,6 +39,8 @@ export const ALL_FIXTURES = Object.freeze([
   'jsonl_well_tests_crlf.jsonl',
   'parquet_well_daily_typed.parquet',
   'fgb_assets_bng_indexed.fgb',
+  'kml_wells_folders_extended.kml',
+  'kmz_pipelines_latin1.kmz',
 ]);
 
 /**

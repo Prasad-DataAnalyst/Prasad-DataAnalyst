@@ -1,0 +1,15 @@
+{
+  "file": "kmz_pipelines_latin1.kmz",
+  "format": "kml",
+  "detections": {"encoding": "windows-1252", "crs": "OGC:CRS84"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 3,
+  "columns": [
+    {"name": "name", "type": "string", "unit": null, "role": "text"},
+    {"name": "Diameter", "type": "integer", "unit": "in", "role": "measure"},
+    {"name": "operator", "type": "string", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {},
+  "notes": []
+}

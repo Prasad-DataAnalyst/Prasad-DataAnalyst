@@ -52,6 +52,7 @@ const FORMATS: ReadonlySet<string> = new Set<SourceFormat>([
   'json',
   'parquet',
   'flatgeobuf',
+  'kml',
 ]);
 const TYPES: ReadonlySet<string> = new Set<LogicalType>([
   'string',

@@ -384,9 +384,22 @@ fn top_level_type(text: &str) -> Option<String> {
 fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     // A ZIP archive is read as an .xlsx workbook, no other ZIP-based format being supported, and
     // an OLE compound file as a legacy .xls; the reader refuses what is not a workbook.
-    if head.starts_with(&[0x50, 0x4B, 0x03, 0x04])
-        || head.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
-    {
+    let ext = extension_of(file_name);
+    if head.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+        // A KMZ: a ZIP whose first entry is a KML document, or a .kmz file that is no workbook.
+        let first = if head.len() >= 30 {
+            let length = u16::from_le_bytes([head[26], head[27]]) as usize;
+            String::from_utf8_lossy(&head[30..head.len().min(30 + length)]).to_lowercase()
+        } else {
+            String::new()
+        };
+        let workbook = head.windows(11).any(|w| w == b"xl/workbook");
+        if !workbook && (first.ends_with(".kml") || ext == "kmz") {
+            return Ok("kml");
+        }
+        return Ok("xlsx");
+    }
+    if head.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         return Ok("xlsx");
     }
     if head.starts_with(b"PAR1") {
@@ -401,7 +414,9 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     let text = decoded.strip_prefix('\u{FEFF}').unwrap_or(&decoded);
     let body = text.trim_start_matches(crate::units::is_js_space);
     let first = body.chars().next();
-    let ext = extension_of(file_name);
+    if first == Some('<') && (crate::kml_import::has_kml_root(text) || ext == "kml") {
+        return Ok("kml");
+    }
     if matches!(first, Some('{' | '[')) {
         let geojson = ext == "geojson"
             || (first == Some('{')
@@ -1818,9 +1833,10 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         detect_format(&head, src.name)?.to_string()
     } else {
         match options["format"].as_str() {
-            Some(f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson" | "flatgeobuf")) => {
-                f.to_string()
-            }
+            Some(
+                f
+                @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson" | "flatgeobuf" | "kml"),
+            ) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
                     "the import preview of {} files",
@@ -1837,6 +1853,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     }
     if format == "flatgeobuf" {
         return sniff_flatgeobuf(src, options);
+    }
+    if format == "kml" {
+        return sniff_kml(src, options);
     }
     if format == "xlsx" {
         return sniff_xlsx(src, options);
@@ -2076,6 +2095,33 @@ fn sniff_flatgeobuf(src: &Source, options: &Value) -> Result<Sniffed> {
     Ok(s)
 }
 
+/// A KML or KMZ file's sniff (kml/importer.ts sniff): the placemark fields, the geometry types
+/// and the encoding from the document's first MiB, its placemarks there as the sample.
+fn sniff_kml(src: &Source, options: &Value) -> Result<Sniffed> {
+    let found = crate::kml_import::sniff(src.path, SAMPLE_MAX_ROWS)?;
+    let (rows, geometries) = found
+        .rows
+        .into_iter()
+        .map(|(loc, fields, geometry)| ((loc, fields), geometry))
+        .unzip();
+    let mut s = Sniffed {
+        format: "kml".into(),
+        options: json!({ "format": "kml", "kml": { "entry": found.entry } }),
+        detections: found.detections,
+        header: vec![found.header],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+        sheets: None,
+        geometries: Some(geometries),
+    };
+    if !options.is_null() && stringify(&s.options) != stringify(options) {
+        s.options = options.clone();
+    }
+    Ok(s)
+}
+
 /// A workbook's sniff (xlsx/importer.ts sniff): its sheets and their tables, the chosen table's
 /// flattened header and first rows. Settings chosen for the file read it again with them
 /// (sniffXlsxWith).
@@ -2301,7 +2347,7 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
         // The footer, or the header, states the row count exactly.
         return s.detection("rowCount").and_then(|d| d["value"].as_u64());
     }
-    if s.format == "json" || s.format == "geojson" {
+    if s.format == "json" || s.format == "geojson" || s.format == "kml" {
         return None;
     }
     if s.format == "xlsx" {
@@ -2349,7 +2395,7 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
     let o = DetectOptions {
         decimal: s.decimal,
         thousands: s.thousands.clone(),
-        geometry_column: s.format == "geojson" || s.format == "flatgeobuf",
+        geometry_column: matches!(s.format.as_str(), "geojson" | "flatgeobuf" | "kml"),
     };
     let fields: Vec<Vec<Raw>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
     let planned = detect_columns(&s.header, &fields, &o);

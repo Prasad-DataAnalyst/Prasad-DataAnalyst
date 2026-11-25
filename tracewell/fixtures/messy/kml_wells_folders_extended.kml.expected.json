@@ -1,0 +1,21 @@
+{
+  "file": "kml_wells_folders_extended.kml",
+  "format": "kml",
+  "detections": {"encoding": "utf-8", "crs": "OGC:CRS84"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 7,
+  "columns": [
+    {"name": "folder", "type": "string", "unit": null, "role": "text"},
+    {"name": "name", "type": "string", "unit": null, "role": "text"},
+    {"name": "description", "type": "string", "unit": null, "role": "text"},
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "Depth", "type": "number", "unit": "m", "role": "measure"},
+    {"name": "spud", "type": "date", "unit": null, "role": "time"},
+    {"name": "active", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "Diameter", "type": "integer", "unit": "in", "role": "measure"},
+    {"name": "commissioned", "type": "date", "unit": null, "role": "time"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-DQ-001": 28, "TW-GEO-006": 1},
+  "notes": []
+}

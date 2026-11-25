@@ -1,0 +1,52 @@
+{
+  "fixture": "kmz_pipelines_latin1.kmz",
+  "format": "kml",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": "",
+    "geometryColumn": true
+  },
+  "header": [["name", "Diameter (in)", "operator"]],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": ["Förde export line", "24", "Nordsee Energie"],
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [8.1, 54.3],
+          [8.4, 54.6],
+          [8.9, 54.8]
+        ]
+      }
+    },
+    {
+      "srcLoc": 1,
+      "fields": ["Cañon gathering", "12", "Petróleos del Sur"],
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [-3.7, 43.4],
+            [-3.6, 43.45]
+          ],
+          [
+            [-3.6, 43.45],
+            [-3.5, 43.5]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["Spur 3", "8", "Nordsee Energie"],
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [8.4, 54.6],
+          [8.45, 54.7]
+        ]
+      }
+    }
+  ]
+}

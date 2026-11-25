@@ -1,0 +1,102 @@
+{
+  "fixture": "kml_wells_folders_extended.kml",
+  "format": "kml",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": "",
+    "geometryColumn": true
+  },
+  "header": [
+    ["folder", "name", "description", "well_id", "Depth (m)", "spud", "active", "Diameter (in)", "commissioned"]
+  ],
+  "sampleRows": [
+    {
+      "srcLoc": 0,
+      "fields": [
+        "Wells / Block 21",
+        "NS-21-01",
+        "<table><tr><td>Producer</td><td>2 slots</td></tr></table>",
+        "NS-21-01",
+        "3120.5",
+        "2019-03-04",
+        "true"
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.7501, 57.4802, 0]
+      }
+    },
+    {
+      "srcLoc": 1,
+      "fields": [
+        "Wells / Block 21",
+        "NS-21-02",
+        "<b>Injector</b> &amp; observation",
+        "NS-21-02",
+        "2875",
+        "2020-07-15",
+        "false"
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.8, 57.51, 0]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["Wells / Block 22", "NS-22-01", "Producer", "NS-22-01", "4010.25", "2021-01-20", "true"],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.1, 57.9, 0]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["Wells / Block 22", "NS-22-02", null, "NS-22-02", null, "2022-05-02", "true"],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.15, 57.95, 0]
+      }
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["Infrastructure", "Export pipeline", null, null, null, null, null, "24", "2018-11-30"],
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [1.7501, 57.4802, 0],
+          [1.8, 57.51, 0],
+          [2.1, 57.9, 0]
+        ]
+      }
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["Infrastructure", "Licence P.1234", null, null, null, null, null, null, null],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [1.5, 57.3, 0],
+            [2.5, 57.3, 0],
+            [2.5, 58.1, 0],
+            [1.5, 58.1, 0],
+            [1.5, 57.3, 0]
+          ],
+          [
+            [1.9, 57.6, 0],
+            [2, 57.6, 0],
+            [2, 57.7, 0],
+            [1.9, 57.7, 0],
+            [1.9, 57.6, 0]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 6,
+      "fields": [null, "Proposed NS-23-01", "Location to be confirmed", "NS-23-01", null, null, null, null, null],
+      "geometry": null
+    }
+  ]
+}

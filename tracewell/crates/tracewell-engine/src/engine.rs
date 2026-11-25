@@ -248,6 +248,17 @@ fn locator(spec: &Value, loc: i64, column: Option<&Value>) -> String {
             "row {loc}, column {}",
             serde_json::to_string(&source_name(c)).unwrap_or_default()
         ),
+        (Some("kml"), None) => format!("placemark {loc}"),
+        (Some("kml"), Some(c)) => {
+            if c["id"].as_str().is_some() && c["id"].as_str() == geometry_column_of(spec) {
+                format!("placemark {loc}, geometry")
+            } else {
+                format!(
+                    "placemark {loc}, field {}",
+                    serde_json::to_string(&source_name(c)).unwrap_or_default()
+                )
+            }
+        }
         (Some("geojson" | "flatgeobuf"), None) => format!("feature {loc}"),
         (Some("geojson" | "flatgeobuf"), Some(c)) => {
             if c["id"].as_str().is_some() && c["id"].as_str() == geometry_column_of(spec) {
@@ -571,7 +582,7 @@ impl Engine {
             "version": self.version,
             "protocol": PROTOCOL_VERSION,
             "capabilities": {
-                "formats": ["csv", "tsv", "xlsx", "geojson", "json", "parquet", "flatgeobuf"],
+                "formats": ["csv", "tsv", "xlsx", "geojson", "json", "parquet", "flatgeobuf", "kml"],
                 "exportProfiles": crate::export::NATIVE_PROFILES,
                 "memoryBudgetBytes": self.memory_limit,
                 "spillToDisk": true,
@@ -3472,6 +3483,34 @@ impl Engine {
                                 _ => found.flatten(),
                             }
                         }
+                        // The same for KML placemarks.
+                        crate::import::Reading::Kml => {
+                            let path =
+                                crate::overrides::original_file(source, &self.workdir, file_id)?;
+                            let of_geometry = geometry_column_of(&d.spec) == Some(root.as_str());
+                            let mut found = None;
+                            let stop = EngineError::new("FOUND", "", "");
+                            let read = crate::kml_import::read_rows(
+                                &path,
+                                &mut |(at, fields, geometry)| {
+                                    if at as i64 == loc {
+                                        found = Some(if of_geometry {
+                                            geometry
+                                        } else {
+                                            fields.get(index).map(Raw::text)
+                                        });
+                                        return Err(stop.clone());
+                                    }
+                                    Ok(())
+                                },
+                                &AtomicBool::new(false),
+                                &std::sync::atomic::AtomicU64::new(0),
+                            );
+                            match read {
+                                Err(e) if e.code != "FOUND" => return Err(e),
+                                _ => found.flatten(),
+                            }
+                        }
                         // The same for FlatGeobuf features.
                         crate::import::Reading::FlatGeobuf => {
                             let path =
@@ -5206,6 +5245,8 @@ fn commit_import(
         Some("json") => "application/json",
         Some("geojson") => "application/geo+json",
         Some("flatgeobuf") => "application/flatgeobuf",
+        Some("kml") if file_head(original).starts_with(b"PK") => "application/vnd.google-earth.kmz",
+        Some("kml") => "application/vnd.google-earth.kml+xml",
         // A workbook in an OLE compound file is a legacy .xls (mediaTypeOf).
         Some("xlsx") if crate::xlsx::is_legacy(&file_head(original)) => "application/vnd.ms-excel",
         Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

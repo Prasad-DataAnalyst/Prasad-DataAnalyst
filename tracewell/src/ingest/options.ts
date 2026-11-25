@@ -12,6 +12,7 @@ export function detectOptionsFor(options: FormatOptions): DetectOptions {
       return { decimalSeparator: '.', thousandsSeparator: '' };
     case 'geojson':
     case 'flatgeobuf':
+    case 'kml':
       return { decimalSeparator: '.', thousandsSeparator: '', geometryColumn: true };
     case 'json':
     case 'parquet':
@@ -30,7 +31,10 @@ function isGeometryPlan(plan: ColumnPlan): boolean {
 export function rowParser(plans: readonly ColumnPlan[], options: FormatOptions): RowParser {
   const dopts = detectOptionsFor(options);
   const parsers = plans.map((plan) => {
-    if (isGeometryPlan(plan) && (options.format === 'geojson' || options.format === 'flatgeobuf')) {
+    if (
+      isGeometryPlan(plan) &&
+      (options.format === 'geojson' || options.format === 'flatgeobuf' || options.format === 'kml')
+    ) {
       return (row: RawRow): CellParseResult =>
         row.geometry === undefined || row.geometry === null
           ? { ok: true, value: null }

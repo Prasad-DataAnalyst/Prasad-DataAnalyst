@@ -3,7 +3,8 @@
  * Writes the text fixtures of the messy-file library (CSV, TSV, GeoJSON and JSON) with exact bytes:
  * encodings, byte-order marks and line endings are chosen per file, never left to the platform.
  * The Parquet fixture is written here too, by hyparquet-writer, whose output depends only on the
- * values given, and the FlatGeobuf fixture by a FlatBuffers encoder of this file's own. Then writes SHA256SUMS over every fixture, the XLSX files included.
+ * values given, the FlatGeobuf fixture by a FlatBuffers encoder of this file's own, and the KMZ
+ * fixture by a ZIP writer of this file's own over fflate's deflate. Then writes SHA256SUMS over every fixture, the XLSX files included.
  *
  * Usage: node fixtures/generators/gen-text-fixtures.mjs [--out <dir>] [--no-sums]
  *   --out <dir>  write into <dir> instead of fixtures/messy
@@ -17,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deflateSync } from 'fflate';
 import { parquetWriteBuffer } from 'hyparquet-writer';
 import { ALL_FIXTURES, hampelFlags, isEntryScript, longestRun, mulberry32, noise } from './shared.mjs';
 
@@ -1708,6 +1710,206 @@ function flatgeobufAssets() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// KML and KMZ
+
+/**
+ * North Sea assets as Google Earth saves them: styles, nested Folders, CDATA descriptions,
+ * ExtendedData Data values, SchemaData in another placemark, points with an altitude mode, a
+ * pipeline, a licence block with a hole, and a proposed well without geometry. UTF-8, tabs, LF.
+ */
+function kmlWellsFolders() {
+  const well = (
+    /** @type {string} */ id,
+    /** @type {string | null} */ depth,
+    /** @type {string} */ spud,
+    /** @type {string} */ active,
+    /** @type {string} */ at,
+    /** @type {string | null} */ description,
+  ) =>
+    [
+      '\t\t\t<Placemark>',
+      `\t\t\t\t<name>${id}</name>`,
+      ...(description === null ? [] : [`\t\t\t\t<description><![CDATA[${description}]]></description>`]),
+      '\t\t\t\t<styleUrl>#well</styleUrl>',
+      '\t\t\t\t<ExtendedData>',
+      `\t\t\t\t\t<Data name="well_id"><value>${id}</value></Data>`,
+      ...(depth === null ? [] : [`\t\t\t\t\t<Data name="Depth (m)"><value>${depth}</value></Data>`]),
+      `\t\t\t\t\t<Data name="spud"><value>${spud}</value></Data>`,
+      `\t\t\t\t\t<Data name="active"><value>${active}</value></Data>`,
+      '\t\t\t\t</ExtendedData>',
+      `\t\t\t\t<Point><altitudeMode>clampToGround</altitudeMode><coordinates>${at}</coordinates></Point>`,
+      '\t\t\t</Placemark>',
+    ].join('\n');
+  const text = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:atom="http://www.w3.org/2005/Atom">',
+    '<Document>',
+    '\t<name>North Sea assets.kml</name>',
+    '\t<Style id="well"><IconStyle><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>',
+    '\t<Folder>',
+    '\t\t<name>Wells</name>',
+    '\t\t<open>1</open>',
+    '\t\t<Folder>',
+    '\t\t\t<name>Block 21</name>',
+    well(
+      'NS-21-01',
+      '3120.5',
+      '2019-03-04',
+      'true',
+      '1.7501,57.4802,0',
+      '<table><tr><td>Producer</td><td>2 slots</td></tr></table>',
+    ),
+    well('NS-21-02', '2875', '2020-07-15', 'false', '1.8,57.51,0', '<b>Injector</b> &amp; observation'),
+    '\t\t</Folder>',
+    '\t\t<Folder>',
+    '\t\t\t<name>Block 22</name>',
+    well('NS-22-01', '4010.25', '2021-01-20', 'true', '2.1,57.9,0', 'Producer'),
+    well('NS-22-02', null, '2022-05-02', 'true', '2.15,57.95,0', null),
+    '\t\t</Folder>',
+    '\t</Folder>',
+    '\t<Folder>',
+    '\t\t<name>Infrastructure</name>',
+    '\t\t<Placemark>',
+    '\t\t\t<name>Export pipeline</name>',
+    '\t\t\t<ExtendedData><SchemaData schemaUrl="#pipes"><SimpleData name="Diameter (in)">24</SimpleData><SimpleData name="commissioned">2018-11-30</SimpleData></SchemaData></ExtendedData>',
+    '\t\t\t<LineString><tessellate>1</tessellate><coordinates>1.7501,57.4802,0 1.8,57.51,0 2.1,57.9,0</coordinates></LineString>',
+    '\t\t</Placemark>',
+    '\t\t<Placemark>',
+    '\t\t\t<name>Licence P.1234</name>',
+    '\t\t\t<Polygon>',
+    '\t\t\t\t<outerBoundaryIs><LinearRing><coordinates>1.5,57.3,0 2.5,57.3,0 2.5,58.1,0 1.5,58.1,0 1.5,57.3,0</coordinates></LinearRing></outerBoundaryIs>',
+    '\t\t\t\t<innerBoundaryIs><LinearRing><coordinates>1.9,57.6,0 2,57.6,0 2,57.7,0 1.9,57.7,0 1.9,57.6,0</coordinates></LinearRing></innerBoundaryIs>',
+    '\t\t\t</Polygon>',
+    '\t\t</Placemark>',
+    '\t</Folder>',
+    '\t<Placemark>',
+    '\t\t<name>Proposed NS-23-01</name>',
+    '\t\t<description>Location to be confirmed</description>',
+    '\t\t<ExtendedData><Data name="well_id"><value>NS-23-01</value></Data></ExtendedData>',
+    '\t</Placemark>',
+    '</Document>',
+    '</kml>',
+    '',
+  ].join('\n');
+  return { name: 'kml_wells_folders_extended.kml', bytes: new TextEncoder().encode(text) };
+}
+
+/** CRC-32 (IEEE 802.3), for the ZIP writer below. @param {Uint8Array} bytes */
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const b of bytes) {
+    crc ^= b;
+    for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * A ZIP archive of deflated entries (fflate, deterministic), every entry dated 2026-01-01 00:00,
+ * so the bytes do not depend on the clock or the time zone.
+ * @param {[string, Uint8Array][]} entries
+ */
+function zipOf(entries) {
+  /** @type {number[]} */
+  const out = [];
+  /** @type {number[]} */
+  const directory = [];
+  const u16 = (/** @type {number[]} */ a, /** @type {number} */ v) => a.push(v & 0xff, (v >>> 8) & 0xff);
+  const u32 = (/** @type {number[]} */ a, /** @type {number} */ v) =>
+    a.push(v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff);
+  const date = ((2026 - 1980) << 9) | (1 << 5) | 1;
+  for (const [name, data] of entries) {
+    const deflated = deflateSync(data, { level: 6 });
+    const path = new TextEncoder().encode(name);
+    const crc = crc32(data);
+    const at = out.length;
+    /** @param {number[]} a */
+    const common = (a) => {
+      u16(a, 20);
+      u16(a, 0);
+      u16(a, 8);
+      u16(a, 0);
+      u16(a, date);
+      u32(a, crc);
+      u32(a, deflated.length);
+      u32(a, data.length);
+      u16(a, path.length);
+      u16(a, 0);
+    };
+    u32(out, 0x04034b50);
+    common(out);
+    out.push(...path, ...deflated);
+    u32(directory, 0x02014b50);
+    u16(directory, 20);
+    common(directory);
+    u16(directory, 0);
+    u16(directory, 0);
+    u16(directory, 0);
+    u32(directory, 0);
+    u32(directory, at);
+    directory.push(...path);
+  }
+  const start = out.length;
+  out.push(...directory);
+  u32(out, 0x06054b50);
+  u16(out, 0);
+  u16(out, 0);
+  u16(out, entries.length);
+  u16(out, entries.length);
+  u32(out, directory.length);
+  u32(out, start);
+  u16(out, 0);
+  return new Uint8Array(out);
+}
+
+/**
+ * Pipelines as a KMZ: doc.kml declared ISO-8859-1 with accented names, a Schema with SimpleData,
+ * line strings and a MultiGeometry of two lines; an icon beside it in the archive.
+ */
+function kmzPipelinesLatin1() {
+  const pipe = (
+    /** @type {string} */ name,
+    /** @type {string} */ diameter,
+    /** @type {string} */ operator,
+    /** @type {string} */ geometry,
+  ) =>
+    `<Placemark><name>${name}</name><ExtendedData><SchemaData schemaUrl="#pipes"><SimpleData name="Diameter (in)">${diameter}</SimpleData><SimpleData name="operator">${operator}</SimpleData></SchemaData></ExtendedData>${geometry}</Placemark>`;
+  const text = [
+    '<?xml version="1.0" encoding="ISO-8859-1"?>',
+    '<kml xmlns="http://www.opengis.net/kml/2.2">',
+    '<Document>',
+    '<name>Pipelines</name>',
+    '<Schema name="pipes" id="pipes"><SimpleField name="Diameter (in)" type="int"/><SimpleField name="operator" type="string"/></Schema>',
+    pipe(
+      'Förde export line',
+      '24',
+      'Nordsee Energie',
+      '<LineString><coordinates>8.1,54.3 8.4,54.6 8.9,54.8</coordinates></LineString>',
+    ),
+    pipe(
+      'Cañon gathering',
+      '12',
+      'Petróleos del Sur',
+      '<MultiGeometry><LineString><coordinates>-3.7,43.4 -3.6,43.45</coordinates></LineString><LineString><coordinates>-3.6,43.45 -3.5,43.5</coordinates></LineString></MultiGeometry>',
+    ),
+    pipe('Spur 3', '8', 'Nordsee Energie', '<LineString><coordinates>8.4,54.6 8.45,54.7</coordinates></LineString>'),
+    '</Document>',
+    '</kml>',
+    '',
+  ].join('\r\n');
+  // ISO-8859-1: every character here is below U+0100, one byte each.
+  const latin1 = Uint8Array.from(text, (c) => c.charCodeAt(0));
+  const icon = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  return {
+    name: 'kmz_pipelines_latin1.kmz',
+    bytes: zipOf([
+      ['doc.kml', latin1],
+      ['files/pipe.png', icon],
+    ]),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Output
 
 /** @returns {FixtureFile[]} */
@@ -1737,6 +1939,8 @@ export function buildTextFixtures() {
     jsonLinesWellTests(),
     parquetWellDaily(),
     flatgeobufAssets(),
+    kmlWellsFolders(),
+    kmzPipelinesLatin1(),
   ];
 }
 

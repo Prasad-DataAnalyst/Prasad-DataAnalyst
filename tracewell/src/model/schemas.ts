@@ -48,7 +48,16 @@ const COLUMN_ROLES = members<ColumnRole>()([
 ]);
 const DATE_FORMATS = members<DateFormat>()(['iso', 'dmy', 'mdy', 'ymd-slash', 'excel-serial']);
 const TIMEZONE_MODES = members<TimezoneMode>()(['utc', 'offset', 'naive-assumed-utc']);
-const SOURCE_FORMATS = members<SourceFormat>()(['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet', 'flatgeobuf']);
+const SOURCE_FORMATS = members<SourceFormat>()([
+  'csv',
+  'tsv',
+  'xlsx',
+  'geojson',
+  'json',
+  'parquet',
+  'flatgeobuf',
+  'kml',
+]);
 const QUANTITY_KINDS = members<QuantityKind>()([
   'length',
   'area',

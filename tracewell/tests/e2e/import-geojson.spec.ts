@@ -35,3 +35,16 @@ test('fgb_assets_bng_indexed.fgb imports with its columns, its CRS and every che
   await expect(page.getByTestId('tw-export-flatgeobuf')).toBeEnabled();
   await expect(page.getByTestId('tw-export-geojson')).toBeDisabled();
 });
+
+test('kml_wells_folders_extended.kml and kmz_pipelines_latin1.kmz import with every check the library expects', async ({
+  app,
+  page,
+}) => {
+  await app.open();
+  await app.importFixture('kml_wells_folders_extended.kml');
+  await app.runChecks();
+  expect(await app.issueCounts()).toEqual(fixtureExpectation('kml_wells_folders_extended.kml').issues);
+  await expect(page.getByRole('columnheader', { name: /folder/ })).toBeVisible();
+  await app.importFixture('kmz_pipelines_latin1.kmz');
+  await expect(page.getByText('Cañon gathering')).toBeVisible();
+});

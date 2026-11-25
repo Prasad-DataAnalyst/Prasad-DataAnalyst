@@ -2748,9 +2748,9 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     await pair('profiles', (e) => e.listExportProfiles(id));
   };
 
-  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => n.endsWith('.geojson') || n.endsWith('.fgb'));
+  const GEOJSON_FIXTURES = FIXTURE_NAMES.filter((n) => /\.(geojson|fgb|kml|kmz)$/.test(n));
 
-  it('reads GeoJSON and FlatGeobuf files as the TypeScript engine does: preview, rows, lineage, statistics and checks', async () => {
+  it('reads GeoJSON, FlatGeobuf and KML files as the TypeScript engine does: preview, rows, lineage, statistics and checks', async () => {
     const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
     const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
     const found = new Map<string, string>();
@@ -3010,6 +3010,98 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         });
         expect(await checked(nat.client), `${name}: checks`).toEqual(await checked(lite));
         // Explaining every cell of the large files would read them again per cell: their rows do.
+        if (bytes.length > 1 << 20)
+          expect(await allRows(nat.client, id), `${name}: rows`).toEqual(await allRows(lite, id));
+        else await sameDataset(nat.client, lite, id, name, found);
+      }
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('reads unusual KML and KMZ as the TypeScript engine does, and refuses what is not KML alike', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-kml-'));
+    const enc = (t: string) => new TextEncoder().encode(t);
+    const doc = (body: string) =>
+      `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">${body}</kml>\n`;
+    const utf16 = (t: string) => {
+      const out = new Uint8Array(2 + 2 * t.length);
+      out.set([0xff, 0xfe]);
+      for (let i = 0; i < t.length; i++) new DataView(out.buffer).setUint16(2 + 2 * i, t.charCodeAt(i), true);
+      return out;
+    };
+    const many = doc(
+      `<Document>${Array.from({ length: 20_000 }, (_, i) => `<Placemark><name>P-${i}</name><ExtendedData><Data name="n"><value>${i % 97}</value></Data></ExtendedData><Point><coordinates>${(i % 360) - 180},${(i % 170) - 85}</coordinates></Point></Placemark>`).join('\n')}</Document>`,
+    );
+    const files: [string, Uint8Array][] = [
+      [
+        'shapes.kml',
+        enc(
+          doc(
+            '<Document><Folder><name>A</name><Folder><name></name><Placemark><name>p</name><description><![CDATA[<b>x</b> & y]]></description>' +
+              '<TimeSpan><begin>2020-01-01</begin></TimeSpan><ExtendedData><Data name="d"><value>  padded  </value></Data><Data name="d"><value>again</value></Data>' +
+              '<SchemaData><SimpleData name="e">1e3</SimpleData></SchemaData></ExtendedData>' +
+              '<MultiGeometry><Point><coordinates>1,2,3</coordinates></Point><MultiGeometry><LineString><coordinates>1,2 3,4</coordinates></LineString></MultiGeometry></MultiGeometry></Placemark>' +
+              '</Folder></Folder><Placemark/><Placemark><Polygon><outerBoundaryIs><LinearRing><coordinates>\n 0,0 1,0\r\n1,1 0,0 </coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>' +
+              '<Placemark><LinearRing><coordinates>x,1e999 -0,.5 +1.,2e-1</coordinates></LinearRing></Placemark><Placemark><Point><coordinates></coordinates></Point></Placemark></Document>',
+          ),
+        ),
+      ],
+      [
+        'utf16.kml',
+        utf16(doc('<Placemark><name>Ünïcode ☃</name><Point><coordinates>1,2</coordinates></Point></Placemark>')),
+      ],
+      [
+        'latin.kml',
+        Uint8Array.from(
+          '<?xml version="1.0" encoding="windows-1252"?><kml><Placemark><name>Grüße é</name></Placemark></kml>',
+          (c) => c.charCodeAt(0),
+        ),
+      ],
+      ['many.kml', enc(many)],
+      [
+        'pack.kmz',
+        writeZip([
+          { path: 'files/a.png', data: new Uint8Array([1, 2, 3]) },
+          { path: 'sub/inner.kml', data: enc(doc('<Placemark><name>inner</name></Placemark>')) },
+          {
+            path: 'doc.kml',
+            data: enc(doc('<Placemark><name>root</name><Point><coordinates>5,6</coordinates></Point></Placemark>')),
+          },
+        ]),
+      ],
+      ['empty.kml', enc('<kml/>')],
+      ['gpx.kml', enc('<gpx><wpt lat="1" lon="2"/></gpx>')],
+      ['doctype.kml', enc('<!DOCTYPE kml SYSTEM "x"><kml/>')],
+      ['broken.kml', enc(doc('<Placemark><name>a</Placemark>'))],
+      ['japanese.kml', enc('<?xml version="1.0" encoding="Shift_JIS"?><kml/>')],
+      ['nothing.kmz', writeZip([{ path: 'readme.txt', data: enc('no KML') }])],
+      ['damaged.kmz', new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3])],
+    ];
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Unusual', profile: { ...PROFILE } });
+      for (const [name, bytes] of files) {
+        writeFileSync(join(folder, name), bytes);
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        const [pa, pb] = [await settled(() => nat.client.sniff(file)), await settled(() => lite.sniff(file))];
+        expect(pa, `${name}: preview`).toEqual(pb);
+        orderDifferences(pa, pb, `${name}: preview`, found);
+        const imported = async (e: EngineClient) => e.awaitJob<DatasetSummary>(await e.importFile(file));
+        const [da, db] = [await settled(() => imported(nat.client)), await settled(() => imported(lite))];
+        expect(da, `${name}: import`).toEqual(db);
+        if ('code' in (db as object)) continue;
+        const id = (da as DatasetSummary).id;
+        const checked = async (e: EngineClient) => ({
+          ...(await e.awaitJob<CheckSummary>(await e.runChecks(id))),
+          durationMs: 0,
+        });
+        expect(await checked(nat.client), `${name}: checks`).toEqual(await checked(lite));
         if (bytes.length > 1 << 20)
           expect(await allRows(nat.client, id), `${name}: rows`).toEqual(await allRows(lite, id));
         else await sameDataset(nat.client, lite, id, name, found);

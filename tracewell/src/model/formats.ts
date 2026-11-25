@@ -62,19 +62,25 @@ export interface FlatGeobufOptions {
   nested: 'json-text';
 }
 
+export interface KmlOptions {
+  /** The KML document's entry in a KMZ archive, or null for a KML file. */
+  entry: string | null;
+}
+
 export type FormatOptions =
   | { format: 'csv' | 'tsv'; csv: CsvOptions }
   | { format: 'xlsx'; xlsx: XlsxOptions }
   | { format: 'geojson'; geojson: GeoJsonOptions }
   | { format: 'json'; json: JsonOptions }
   | { format: 'parquet'; parquet: ParquetOptions }
-  | { format: 'flatgeobuf'; flatgeobuf: FlatGeobufOptions };
+  | { format: 'flatgeobuf'; flatgeobuf: FlatGeobufOptions }
+  | { format: 'kml'; kml: KmlOptions };
 
 export interface RawRow {
   /**
    * CSV physical line (1-based) | sheet row (1-based) | GeoJSON or FlatGeobuf feature index
-   * (0-based) | JSON record index (0-based) or, for JSON Lines, line (1-based) | Parquet row index
-   * (0-based).
+   * (0-based) | KML placemark index (0-based) | JSON record index (0-based) or, for JSON Lines,
+   * line (1-based) | Parquet row index (0-based).
    */
   srcLoc: number;
   fields: RawField[];
