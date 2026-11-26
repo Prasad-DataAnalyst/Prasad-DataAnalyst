@@ -299,6 +299,7 @@ describe('model public API', () => {
         'APP_NAME',
         'AUDIT_GENESIS_PREFIX',
         'BATCH_ROWS',
+        'DENSITY_LEVEL_MAX',
         'EXCEL_MAX_CELL_CHARS',
         'EXCEL_MAX_DATA_ROWS',
         'EngineError',
@@ -332,6 +333,7 @@ describe('model public API', () => {
     expect(model.BATCH_ROWS).toBe(65_536);
     expect(model.MIN_REASON_LENGTH).toBe(3);
     expect(model.AUDIT_GENESIS_PREFIX).toBe('tracewell-audit-v1:');
+    expect(model.DENSITY_LEVEL_MAX).toBe(22);
   });
 
   it('exposes the planned signatures', () => {
