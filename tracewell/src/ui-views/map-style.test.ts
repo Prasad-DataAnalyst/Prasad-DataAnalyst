@@ -7,8 +7,12 @@ import {
   boundsOf,
   boxBetween,
   boxFeature,
+  cellBox,
+  densityCollection,
+  densityLevel,
   graticule,
   placesCollection,
+  viewBox,
   themeColours,
   tileKind,
 } from './map-style';
@@ -22,6 +26,7 @@ const base: PlacesWindow = {
   unplaced: null,
   rows: 3,
   placed: 2,
+  matched: 2,
   features: [
     { rowId: 0, geometry: { type: 'Point', coordinates: [2.5, 56] } },
     {
@@ -127,5 +132,39 @@ describe('map style', () => {
       places: '#5fa3e0',
       background: LIGHT_COLOURS.background,
     });
+  });
+});
+
+describe('density view', () => {
+  it('asks for a grid three levels finer than the zoom, over the view held to the world', () => {
+    expect([densityLevel(0), densityLevel(4.7), densityLevel(30)]).toEqual([3, 7, 22]);
+    expect(viewBox(-200, -95, 30, 89)).toEqual([-180, -90, 30, 89]);
+  });
+
+  it('draws each cell as its tile, weighted by the logarithm of its count', () => {
+    const [w, s, e, n] = cellBox(1, 0, 1);
+    expect([w, e]).toEqual([0, 180]);
+    expect(s).toBeCloseTo(0, 9);
+    expect(n).toBeCloseTo(85.0511287798, 9);
+    const fc = densityCollection({
+      datasetId: 'd1',
+      stage: 'working',
+      level: 1,
+      crs: 'OGC:CRS84',
+      transformed: false,
+      unplaced: null,
+      rows: 101,
+      placed: 101,
+      counted: 101,
+      bounds: [0, 0, 1, 1],
+      cells: [
+        { x: 0, y: 0, count: 1 },
+        { x: 1, y: 1, count: 100 },
+      ],
+    });
+    expect(fc.features.map((f) => f.properties.count)).toEqual([1, 100]);
+    expect(fc.features[1]?.properties.weight).toBe(1);
+    expect(fc.features[0]?.properties.weight).toBeCloseTo(Math.log(2) / Math.log(101), 12);
+    expect(densityCollection(null).features).toEqual([]);
   });
 });

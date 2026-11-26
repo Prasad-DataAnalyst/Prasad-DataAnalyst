@@ -21,12 +21,13 @@ import {
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { FileSource, PMTiles, Protocol } from 'pmtiles';
-import type { PlacesWindow, RowId } from '@tw/model';
+import type { DensityGrid, PlacesWindow, RowId } from '@tw/model';
 import {
   basemapLayers,
   boundsOf,
   boxBetween,
   boxFeature,
+  densityCollection,
   graticule,
   placesCollection,
   tileKind,
@@ -96,6 +97,7 @@ function styleOf(colours: MapColours): StyleSpecification {
   const sources: StyleSpecification['sources'] = {
     graticule: { type: 'geojson', data: graticule() },
     places: { type: 'geojson', data: EMPTY },
+    density: { type: 'geojson', data: EMPTY },
     area: { type: 'geojson', data: EMPTY },
   };
   const layers: LayerSpecification[] = [
@@ -111,6 +113,21 @@ function styleOf(colours: MapColours): StyleSpecification {
       type: 'line',
       source: 'graticule',
       paint: { 'line-color': colours.lines, 'line-width': 0.5, 'line-opacity': current === null ? 0.9 : 0.4 },
+    },
+    {
+      id: 'density-fill',
+      type: 'fill',
+      source: 'density',
+      paint: {
+        'fill-color': colours.places,
+        'fill-opacity': ['interpolate', ['linear'], ['get', 'weight'], 0, 0.12, 1, 0.8],
+      },
+    },
+    {
+      id: 'density-line',
+      type: 'line',
+      source: 'density',
+      paint: { 'line-color': colours.places, 'line-width': 0.5, 'line-opacity': 0.35 },
     },
     {
       id: 'places-fill',
@@ -182,10 +199,16 @@ export interface MapEvents {
   rendered(count: number): void;
   /** The basemap's first tiles were read and drawn. */
   basemapLoaded(): void;
+  /** The view settled at these bounds and zoom (after it loads and after each move). */
+  view(bounds: LonLatBox, zoom: number): void;
 }
 
 export interface MapController {
   setPlaces(p: PlacesWindow | null, fit: boolean): void;
+  /** Draws density cells, or none. */
+  setDensity(d: DensityGrid | null): void;
+  /** Moves the view to show a box. */
+  fitBox(box: LonLatBox): void;
   setSelected(rowId: RowId | null): void;
   setDrawing(on: boolean): void;
   clearArea(): void;
@@ -225,20 +248,25 @@ export function createMap(container: HTMLElement, colours: MapColours, events: M
   let start: [number, number] | null = null;
 
   const placesSource = () => map.getSource('places') as GeoJSONSource | undefined;
+  const densitySource = () => map.getSource('density') as GeoJSONSource | undefined;
+  const fitTo = (box: LonLatBox) =>
+    map.fitBounds(
+      [
+        [box[0], box[1]],
+        [box[2], box[3]],
+      ],
+      { padding: 40, maxZoom: 12, duration: 0 },
+    );
+  const reportView = () => {
+    const b = map.getBounds();
+    events.view([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], map.getZoom());
+  };
   const areaSource = () => map.getSource('area') as GeoJSONSource | undefined;
 
   const show = (p: PlacesWindow | null, fit: boolean) => {
     void placesSource()?.setData(placesCollection(p) as never);
     const box = fit ? boundsOf(p) : null;
-    if (box !== null) {
-      map.fitBounds(
-        [
-          [box[0], box[1]],
-          [box[2], box[3]],
-        ],
-        { padding: 40, maxZoom: 12, duration: 0 },
-      );
-    }
+    if (box !== null) fitTo(box);
     void map.once('idle', () => {
       const shown = new Set(map.queryRenderedFeatures({ layers: PLACE_LAYERS }).map((f) => f.properties['rowId']));
       events.rendered(shown.size);
@@ -249,7 +277,9 @@ export function createMap(container: HTMLElement, colours: MapColours, events: M
     loaded = true;
     if (pending !== null) show(pending.places, pending.fit);
     pending = null;
+    reportView();
   });
+  map.on('moveend', reportView);
   map.on('sourcedata', (e) => {
     if (e.sourceId === 'basemap' && e.isSourceLoaded && e.tile !== undefined) events.basemapLoaded();
   });
@@ -265,14 +295,21 @@ export function createMap(container: HTMLElement, colours: MapColours, events: M
   map.on('click', (e) => {
     if (drawing) return;
     const rowId = hits(e)[0]?.properties['rowId'];
-    if (typeof rowId === 'number') events.select(rowId);
+    if (typeof rowId === 'number') {
+      events.select(rowId);
+      return;
+    }
+    // A density cell zooms the view to it, where its rows can be told apart.
+    const cell = map.queryRenderedFeatures(e.point, { layers: ['density-fill'] })[0]?.properties;
+    if (cell !== undefined) fitTo([cell['west'], cell['south'], cell['east'], cell['north']] as LonLatBox);
   });
   map.on('mousemove', (e) => {
     if (drawing && start !== null) {
       void areaSource()?.setData(boxFeature(boxBetween(start, [e.lngLat.lng, e.lngLat.lat])) as never);
       return;
     }
-    map.getCanvas().style.cursor = drawing ? 'crosshair' : hits(e).length > 0 ? 'pointer' : '';
+    const cell = !drawing && map.queryRenderedFeatures(e.point, { layers: ['density-fill'] }).length > 0;
+    map.getCanvas().style.cursor = drawing ? 'crosshair' : hits(e).length > 0 || cell ? 'pointer' : '';
   });
   map.on('mousedown', (e) => {
     if (!drawing) return;
@@ -291,6 +328,15 @@ export function createMap(container: HTMLElement, colours: MapColours, events: M
     setPlaces(p, fit) {
       if (loaded) show(p, fit);
       else pending = { places: p, fit };
+    },
+    setDensity(d) {
+      const apply = () => void densitySource()?.setData(densityCollection(d) as never);
+      if (loaded) apply();
+      else void map.once('load', apply);
+    },
+    fitBox(box) {
+      if (loaded) fitTo(box);
+      else void map.once('load', () => fitTo(box));
     },
     setSelected(rowId) {
       const id = rowId ?? NONE;

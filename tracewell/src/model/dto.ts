@@ -40,6 +40,11 @@ export interface PlacesRequest {
   stage: 'working' | 'output';
   /** At most this many features, the first in row order; at most PLACES_MAX, PLACES_DEFAULT if left out. */
   limit?: number;
+  /**
+   * Only rows whose WGS 84 bounding box meets this box, [west, south, east, north] in degrees
+   * with west ≤ east and south ≤ north, edges included (protocol 0.9).
+   */
+  bbox?: [number, number, number, number];
 }
 
 /**
@@ -61,10 +66,46 @@ export interface PlacesWindow {
   rows: number;
   /** Rows with a position: a geometry of a valid shape, or two numbers, inside what the CRS holds. */
   placed: number;
-  /** The first placed rows, in row order. */
+  /** Placed rows that meet the box asked for; all placed rows when no box was asked for. */
+  matched: number;
+  /** The first matching rows, in row order. */
   features: { rowId: RowId; geometry: Geometry }[];
-  /** True when more rows are placed than features given. */
+  /** True when more rows match than features given. */
   truncated: boolean;
+}
+
+/**
+ * A request for how many of a stage's placed rows fall in each cell of the Web Mercator tile grid
+ * of a level, for the map's density view (getDensity, FR-MAP-03).
+ */
+export interface DensityRequest {
+  datasetId: DatasetId;
+  stage: 'working' | 'output';
+  /** The grid: 2^level by 2^level cells over the Web Mercator square; 0 to DENSITY_LEVEL_MAX. */
+  level: number;
+  /** Only rows whose point is in this box, [west, south, east, north], edges included. */
+  bbox?: [number, number, number, number];
+}
+
+/**
+ * How many placed rows each cell holds. A row is counted at its point: a point's position, or the
+ * centre of the bounding box of another geometry, in WGS 84 longitude and latitude.
+ */
+export interface DensityGrid {
+  datasetId: DatasetId;
+  stage: 'working' | 'output';
+  level: number;
+  crs: string | null;
+  transformed: boolean;
+  unplaced: { reason: string; fix: string } | null;
+  rows: number;
+  placed: number;
+  /** Placed rows whose point is in the box; all placed rows when no box was asked for. */
+  counted: number;
+  /** [west, south, east, north] of the counted points, or null when there are none. */
+  bounds: [number, number, number, number] | null;
+  /** The cells holding at least one counted row, by grid row (y) and then column (x). */
+  cells: { x: number; y: number; count: number }[];
 }
 
 export interface RowWindowColumn {

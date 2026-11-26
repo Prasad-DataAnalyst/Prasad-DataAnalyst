@@ -136,6 +136,10 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
     expect(places).toMatchObject({ placed: 0, features: [], source: null });
     expect(places.unplaced?.reason).toMatch(/no coordinates/);
   },
+  getDensity: async (c) => {
+    const density = await c.getDensity({ datasetId: 'd1', stage: 'working', level: 3 });
+    expect(density).toMatchObject({ placed: 0, cells: [], bounds: null });
+  },
   getColumnStats: async (c) => {
     expect(await c.getColumnStats('d1', 'c3')).toMatchObject({
       count: 10,

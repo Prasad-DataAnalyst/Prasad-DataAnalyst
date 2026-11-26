@@ -3775,6 +3775,21 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
           ...(extra.limit === undefined ? {} : { limit: extra.limit }),
         }),
       );
+      // The density view and the places of a box, over the whole world and around the data.
+      const stage = extra.stage ?? 'working';
+      for (const level of [0, 5, 12, 22]) {
+        const [d] = await both(`${what}: density at ${level}`, (e) => e.getDensity({ datasetId, stage, level }));
+        if (d.bounds !== null) {
+          const [w, s, e2, n] = d.bounds;
+          const box: [number, number, number, number] = [w, s, (w + e2) / 2, (s + n) / 2];
+          await both(`${what}: density at ${level} in ${box.join(' ')}`, (e) =>
+            e.getDensity({ datasetId, stage, level, bbox: box }),
+          );
+          await both(`${what}: places in ${box.join(' ')}`, (e) =>
+            e.getPlaces({ datasetId, stage, bbox: box, limit: 3 }),
+          );
+        }
+      }
       return p;
     };
     const applied = async (e: EngineClient, job: Awaited<ReturnType<EngineClient['applyStep']>>) => {
@@ -3839,6 +3854,21 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
       for (const limit of [-1, 1.5, 100_001]) await places(`bad limit ${limit}`, points, { limit });
       await both('bad stage', (e) => e.getPlaces({ datasetId: points, stage: 'final' as 'working' }));
       await both('no dataset', (e) => e.getPlaces({ datasetId: 'd999', stage: 'working' }));
+      for (const bbox of [[1, 2, 0, 3], [0, 0, 1], [0, 0, 1, null], 'world'] as unknown as [
+        number,
+        number,
+        number,
+        number,
+      ][]) {
+        await both(`bad box ${JSON.stringify(bbox)}`, (e) =>
+          e.getPlaces({ datasetId: points, stage: 'working', bbox }),
+        );
+      }
+      for (const level of [-1, 1.5, 23, undefined, null]) {
+        await both(`bad level ${String(level)}`, (e) =>
+          e.getDensity({ datasetId: points, stage: 'working', level: level as number }),
+        );
+      }
       const schema = await lite.getSchema(points);
       const geometry = schema.geometryColumn as string;
       await both('filter', async (e) =>

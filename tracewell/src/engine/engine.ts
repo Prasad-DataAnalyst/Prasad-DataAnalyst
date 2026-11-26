@@ -19,8 +19,11 @@ import {
   type ByteSource,
   type CellLineage,
   PLACES_DEFAULT,
+  DENSITY_LEVEL_MAX,
   PLACES_MAX,
   type PlacesRequest,
+  type DensityGrid,
+  type DensityRequest,
   type PlacesWindow,
   type CrsInfo,
   type ChainReport,
@@ -94,6 +97,7 @@ import {
   crsTransformationOf,
   describeStep,
   isWorkingStep,
+  densityOf,
   placesOf,
   previewStep,
   requireNextStepBuilds,
@@ -122,7 +126,7 @@ import { datasetHealth, listIssues, listOccurrences, listUnits } from './queries
 import { applyEntry, checkDrafts, overrideOutcome, type Prepared } from './reducer';
 import { emptyProject, type DatasetState, type ProjectState } from './state';
 import { outputView, viewFor, workingView } from './views';
-import { columnStats, invalid, requireCount, requireStage, rowWindow } from './windows';
+import { columnStats, invalid, requireBox, requireCount, requireStage, rowWindow } from './windows';
 
 export const ENGINE_NAME = 'tracewell-ts';
 
@@ -825,7 +829,16 @@ export class LocalEngine implements EngineImpl {
     const ds = this.dataset(q?.datasetId);
     const stage = requireStage(q.stage);
     const limit = q.limit === undefined ? PLACES_DEFAULT : requireCount(q.limit, 'limit', PLACES_MAX);
-    return { datasetId: ds.id, stage, ...placesOf(viewFor(ds, stage), limit) };
+    const bbox = q.bbox === undefined ? undefined : requireBox(q.bbox);
+    return { datasetId: ds.id, stage, ...placesOf(viewFor(ds, stage), limit, bbox) };
+  }
+
+  async getDensity(q: DensityRequest): Promise<DensityGrid> {
+    const ds = this.dataset(q?.datasetId);
+    const stage = requireStage(q.stage);
+    const level = requireCount(q.level, 'level', DENSITY_LEVEL_MAX);
+    const bbox = q.bbox === undefined ? undefined : requireBox(q.bbox);
+    return { datasetId: ds.id, stage, level, ...densityOf(viewFor(ds, stage), level, bbox) };
   }
 
   async explainCell(datasetId: DatasetId, rowId: RowId, columnId: ColumnId): Promise<CellLineage> {

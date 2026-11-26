@@ -1,9 +1,10 @@
 /**
  * The map view's data and style, as plain functions so they can be tested without a browser: the
- * places as GeoJSON, their bounds, a graticule for a map without a basemap, the box a drag draws,
- * the filter a drawn box makes, and the layers of a basemap read from a PMTiles file.
+ * places as GeoJSON, their bounds, the cells of the density view, the grid level and box a view
+ * asks for, a graticule for a map without a basemap, the box a drag draws, the filter a drawn box
+ * makes, and the layers of a basemap read from a PMTiles file.
  */
-import type { Geometry, PlacesWindow, Predicate, RowId } from '@tw/model';
+import type { DensityGrid, Geometry, PlacesWindow, Predicate, RowId } from '@tw/model';
 
 /** [west, south, east, north] in degrees. */
 export type LonLatBox = [number, number, number, number];
@@ -62,6 +63,86 @@ export function boundsOf(p: PlacesWindow | null): LonLatBox | null {
     });
   }
   return box;
+}
+
+/**
+ * The most rows the map draws as places. A stage with more is drawn as density cells, and the
+ * places of a view are drawn once it holds at most this many (FR-MAP-03).
+ */
+export const DETAIL_LIMIT = 20_000;
+
+/** The grid is this many levels finer than the map's zoom: 8 by 8 cells to a 256-pixel tile. */
+const CELL_LEVELS = 3;
+
+/** The grid level a view at `zoom` asks for. */
+export function densityLevel(zoom: number): number {
+  return Math.min(Math.max(Math.floor(zoom) + CELL_LEVELS, 0), 22);
+}
+
+/** The box a view asks about: its bounds held to the world's, as the engine takes a box. */
+export function viewBox(west: number, south: number, east: number, north: number): LonLatBox {
+  const lon = (x: number) => Math.min(Math.max(x, -180), 180);
+  const lat = (y: number) => Math.min(Math.max(y, -90), 90);
+  return [
+    lon(Math.min(west, east)),
+    lat(Math.min(south, north)),
+    lon(Math.max(west, east)),
+    lat(Math.max(south, north)),
+  ];
+}
+
+function tileLat(y: number, n: number): number {
+  return (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+}
+
+/** [west, south, east, north] of a cell of the Web Mercator grid of `level`. */
+export function cellBox(x: number, y: number, level: number): LonLatBox {
+  const n = 2 ** level;
+  return [(x / n) * 360 - 180, tileLat(y + 1, n), ((x + 1) / n) * 360 - 180, tileLat(y, n)];
+}
+
+export interface DensityFeature {
+  type: 'Feature';
+  properties: { count: number; weight: number; west: number; south: number; east: number; north: number };
+  geometry: Geometry;
+}
+
+/**
+ * The cells of a density answer as polygons, each with its count and a weight from 0 to 1 that
+ * grows with the logarithm of the count, so a few busy cells do not wash out the rest.
+ */
+export function densityCollection(d: DensityGrid | null): { type: 'FeatureCollection'; features: DensityFeature[] } {
+  const cells = d?.cells ?? [];
+  const max = cells.reduce((m, c) => Math.max(m, c.count), 0);
+  return {
+    type: 'FeatureCollection',
+    features: cells.map((c) => {
+      const [w, s, e, n] = cellBox(c.x, c.y, d?.level ?? 0);
+      return {
+        type: 'Feature',
+        properties: {
+          count: c.count,
+          weight: max <= 1 ? 1 : Math.log1p(c.count) / Math.log1p(max),
+          west: w,
+          south: s,
+          east: e,
+          north: n,
+        },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [w, s],
+              [e, s],
+              [e, n],
+              [w, n],
+              [w, s],
+            ],
+          ],
+        },
+      };
+    }),
+  };
 }
 
 /** Web Mercator stops short of the poles; lines beyond this latitude would not be drawn. */

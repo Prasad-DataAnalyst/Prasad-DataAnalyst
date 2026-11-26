@@ -37,6 +37,23 @@ export function requireCount(v: unknown, name: string, max = Number.MAX_SAFE_INT
   return v;
 }
 
+/** A box [west, south, east, north] of finite degrees with west ≤ east and south ≤ north. */
+export function requireBox(v: unknown): [number, number, number, number] {
+  const ok =
+    Array.isArray(v) &&
+    v.length === 4 &&
+    v.every((x) => typeof x === 'number' && Number.isFinite(x)) &&
+    (v[0] as number) <= (v[2] as number) &&
+    (v[1] as number) <= (v[3] as number);
+  if (!ok) {
+    throw invalid(
+      `The box must be four finite numbers [west, south, east, north] with west ≤ east and south ≤ north; it was ${JSON.stringify(v) ?? String(v)}.`,
+      'Pass the box as WGS 84 longitude and latitude, from west to east and south to north.',
+    );
+  }
+  return v as [number, number, number, number];
+}
+
 export function requireStage(stage: unknown): 'working' | 'output' {
   if (stage === 'working' || stage === 'output') return stage;
   throw invalid(`The stage ${String(stage)} does not exist.`, "Ask for the 'working' or the 'output' stage.");

@@ -11,6 +11,8 @@ import {
   type CellLineage,
   type PlacesRequest,
   type PlacesWindow,
+  type DensityGrid,
+  type DensityRequest,
   type CrsInfo,
   type ChainReport,
   type ColumnId,
@@ -328,8 +330,30 @@ class StubEngine implements EngineImpl {
       },
       rows: view.rows.length,
       placed: 0,
+      matched: 0,
       features: [],
       truncated: false,
+    };
+  }
+
+  async getDensity(q: DensityRequest): Promise<DensityGrid> {
+    const stage = requireStage(q.stage);
+    const view = (stage === 'working' ? workingView : outputView)(this.project.dataset(q.datasetId));
+    return {
+      datasetId: q.datasetId,
+      stage,
+      level: q.level,
+      crs: null,
+      transformed: false,
+      unplaced: {
+        reason: 'The sample data has no coordinates, so its rows cannot be placed on the map.',
+        fix: 'Import a file with coordinates.',
+      },
+      rows: view.rows.length,
+      placed: 0,
+      counted: 0,
+      bounds: null,
+      cells: [],
     };
   }
 

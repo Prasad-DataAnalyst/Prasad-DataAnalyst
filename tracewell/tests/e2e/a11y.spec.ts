@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { fixturePath } from './files';
 import type { Page } from '@playwright/test';
-import { expect, test } from './fixtures';
+import { chooseFile, expect, test } from './fixtures';
 
 async function expectNoSeriousViolations(page: Page, where: string): Promise<void> {
   // The axe package is typed against a newer Playwright; the page object is the same at run time.
@@ -43,9 +43,7 @@ test('the start screen, data grid, issues register, export centre and map have n
 
 test('keyboard only: import, check and export', async ({ app, page }) => {
   await app.open();
-  const chooser = page.waitForEvent('filechooser');
-  await page.keyboard.press('Control+i');
-  await (await chooser).setFiles(fixturePath('csv_null_markers.csv'));
+  await chooseFile(page, 'Control+i', fixturePath('csv_null_markers.csv'));
   await page.getByTestId('tw-import-button').focus();
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('tw-grid')).toBeVisible();

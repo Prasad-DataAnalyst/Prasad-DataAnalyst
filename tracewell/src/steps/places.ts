@@ -6,17 +6,18 @@
  * transformed; a third ordinate, such as a height, is kept as it is. A bounding box is left out,
  * since it no longer bounds the geometry. A geometry with a position the transformation cannot
  * place becomes no geometry. geodesy.rs in the native engine walks a geometry the same way, and
- * its getPlaces gives the same answer as placesOf.
+ * its getPlaces and getDensity give the same answers as placesOf and densityOf.
  */
 import {
   EngineError,
   isGeometryCell,
   type CellValue,
+  type DensityGrid,
   type Geometry,
   type GeometryCell,
   type PlacesWindow,
 } from '@tw/model';
-import { crsTransformer, isGeometry, type CrsTransformer } from '@tw/geo';
+import { crsTransformer, isGeometry, mercatorCell, positionsOf, type CrsTransformer } from '@tw/geo';
 import type { View } from '@tw/table';
 import { coordinateSource, pairName } from './views';
 
@@ -68,24 +69,30 @@ export function transformGeometry(v: CellValue, t: CrsTransformer): CellValue {
 }
 
 type Places = Omit<PlacesWindow, 'datasetId' | 'stage'>;
+type Density = Omit<DensityGrid, 'datasetId' | 'stage' | 'level'>;
+type Box = [number, number, number, number];
+
+/** What the walk over a view's places found before any row: the CRS, the source, or why not. */
+interface Placing {
+  crs: string | null;
+  source: PlacesWindow['source'];
+  transformed: boolean;
+  unplaced: { reason: string; fix: string } | null;
+}
 
 /**
- * Where the rows of a view are, in WGS 84 longitude and latitude, for the map: each row's geometry
- * of a valid shape, or the point of its coordinate columns, transformed from the view's CRS when it
- * is another. The first `limit` placed rows are given, in row order.
+ * Walks the rows of a view that have a place, in row order, handing each one's WGS 84 geometry
+ * on: its geometry of a valid shape, or the point of its coordinate columns, transformed from the
+ * view's CRS when it is another.
  */
-export function placesOf(view: View, limit: number): Places {
+function walkPlaces(view: View, visit: (rowId: number, g: Geometry) => void): Placing {
   const code = view.schema.crs?.value.code;
   const crs = code === undefined || code === 'unknown' ? null : code;
-  const nothing = (reason: string, fix: string): Places => ({
+  const nothing = (reason: string, fix: string): Placing => ({
     crs,
     source: null,
     transformed: false,
     unplaced: { reason, fix },
-    rows: view.rowCount,
-    placed: 0,
-    features: [],
-    truncated: false,
   });
   if (crs === null) {
     return nothing(
@@ -109,8 +116,6 @@ export function placesOf(view: View, limit: number): Places {
       `Set the ${pair} roles on the coordinate columns first.`,
     );
   }
-  const features: Places['features'] = [];
-  let placed = 0;
   for (const r of view.rows()) {
     let g: Geometry | null = null;
     if ('geometry' in src) {
@@ -125,18 +130,96 @@ export function placesOf(view: View, limit: number): Places {
       const p = typeof x === 'number' && typeof y === 'number' ? t.forward(x, y) : null;
       if (p !== null) g = { type: 'Point', coordinates: [p[0], p[1]] };
     }
-    if (g === null) continue;
-    placed++;
-    if (features.length < limit) features.push({ rowId: r, geometry: g });
+    if (g !== null) visit(r, g);
   }
   return {
     crs,
     source: 'geometry' in src ? { geometry: src.geometry.id } : { x: src.x.id, y: src.y.id },
     transformed: t.operations.length > 0,
     unplaced: null,
+  };
+}
+
+/** [west, south, east, north] of a geometry's positions, folded as Math.min and Math.max fold. */
+function boxOf(g: Geometry): Box | null {
+  let box: Box | null = null;
+  for (const p of positionsOf(g)) {
+    const x = p[0];
+    const y = p[1];
+    if (typeof x !== 'number' || typeof y !== 'number') continue;
+    box =
+      box === null
+        ? [x, y, x, y]
+        : [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)];
+  }
+  return box;
+}
+
+/** A row's point for the density view: a point's position, or the centre of the geometry's box. */
+function pointOf(g: Geometry): [number, number] | null {
+  if (g.type === 'Point') {
+    const [x, y] = g.coordinates;
+    return typeof x === 'number' && typeof y === 'number' ? [x, y] : null;
+  }
+  const b = boxOf(g);
+  return b === null ? null : [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+}
+
+/**
+ * Where the rows of a view are, in WGS 84 longitude and latitude, for the map: the first `limit`
+ * placed rows in row order, or with `bbox` the first of those whose box meets it.
+ */
+export function placesOf(view: View, limit: number, bbox?: Box): Places {
+  const features: Places['features'] = [];
+  let placed = 0;
+  let matched = 0;
+  const placing = walkPlaces(view, (r, g) => {
+    placed++;
+    if (bbox !== undefined) {
+      const b = boxOf(g);
+      if (b === null || b[2] < bbox[0] || b[0] > bbox[2] || b[3] < bbox[1] || b[1] > bbox[3]) return;
+    }
+    matched++;
+    if (features.length < limit) features.push({ rowId: r, geometry: g });
+  });
+  return {
+    ...placing,
     rows: view.rowCount,
     placed,
+    matched,
     features,
-    truncated: placed > features.length,
+    truncated: matched > features.length,
   };
+}
+
+/**
+ * How many placed rows of a view fall in each cell of the Web Mercator grid of `level`, counting
+ * each row at its point, only points in `bbox` when it is given (the map's density view).
+ */
+export function densityOf(view: View, level: number, bbox?: Box): Density {
+  const counts = new Map<number, number>();
+  const n = 2 ** level;
+  let placed = 0;
+  let counted = 0;
+  let bounds: Box | null = null;
+  const placing = walkPlaces(view, (_r, g) => {
+    placed++;
+    const p = pointOf(g);
+    if (p === null) return;
+    const [x, y] = p;
+    if (bbox !== undefined && (x < bbox[0] || x > bbox[2] || y < bbox[1] || y > bbox[3])) return;
+    counted++;
+    bounds =
+      bounds === null
+        ? [x, y, x, y]
+        : [Math.min(bounds[0], x), Math.min(bounds[1], y), Math.max(bounds[2], x), Math.max(bounds[3], y)];
+    const [cx, cy] = mercatorCell(x, y, level);
+    const key = cy * n + cx;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  });
+  const cells = [...counts.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([key, count]) => ({ x: key % n, y: Math.floor(key / n), count }));
+  const { crs, transformed, unplaced } = placing;
+  return { crs, transformed, unplaced, rows: view.rowCount, placed, counted, bounds, cells };
 }

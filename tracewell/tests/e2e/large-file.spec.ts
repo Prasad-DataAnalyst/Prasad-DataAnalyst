@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test } from './fixtures';
+import { chooseFile, expect, test } from './fixtures';
 
 /** A synthetic daily production file of `rows` rows (deterministic, no randomness). */
 function bigCsv(rows: number): Buffer {
@@ -25,9 +25,7 @@ test.describe('@slow large files', () => {
     writeFileSync(path, bigCsv(1_000_000));
     await app.open();
     const started = Date.now();
-    const chooser = page.waitForEvent('filechooser');
-    await page.keyboard.press('Control+i');
-    await (await chooser).setFiles(path);
+    await chooseFile(page, 'Control+i', path);
     await expect(page.getByTestId('tw-import-view')).toBeVisible();
     const previewMs = Date.now() - started;
     expect(previewMs).toBeLessThan(5_000);
@@ -60,9 +58,7 @@ test.describe('@slow large files', () => {
       await page.getByTestId('tw-profile-name').fill('Prasad');
       await page.getByRole('button', { name: 'Start' }).click();
       await page.waitForFunction(() => window.__tracewellReady === true);
-      const chooser = page.waitForEvent('filechooser');
-      await page.keyboard.press('Control+i');
-      await (await chooser).setFiles(path);
+      await chooseFile(page, 'Control+i', path);
       await page.getByTestId('tw-import-button').click();
       await expect(page.getByTestId('tw-grid')).toBeVisible({ timeout: 300_000 });
       await app.runChecks();

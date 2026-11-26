@@ -18,6 +18,9 @@ export const ROW_WINDOW_MAX = 1000;
 export const PLACES_MAX = 100_000;
 export const PLACES_DEFAULT = 50_000;
 
+/** The finest level of the Web Mercator grid a density answer counts in (getDensity). */
+export const DENSITY_LEVEL_MAX = 22;
+
 /** Rows per batch; jobs yield and check for cancellation between batches. */
 export const BATCH_ROWS = 65_536;
 

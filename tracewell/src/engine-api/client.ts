@@ -6,6 +6,8 @@ import {
   type CellLineage,
   type PlacesRequest,
   type PlacesWindow,
+  type DensityGrid,
+  type DensityRequest,
   type CrsInfo,
   type ChainReport,
   type ColumnId,
@@ -122,6 +124,10 @@ export class EngineClient implements EngineApi {
 
   getPlaces(q: PlacesRequest): Promise<PlacesWindow> {
     return this.invoke('getPlaces', q);
+  }
+
+  getDensity(q: DensityRequest): Promise<DensityGrid> {
+    return this.invoke('getDensity', q);
   }
 
   explainCell(datasetId: DatasetId, rowId: RowId, columnId: ColumnId): Promise<CellLineage> {

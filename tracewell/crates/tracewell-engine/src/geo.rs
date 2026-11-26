@@ -705,6 +705,79 @@ pub fn bbox_intersects(b: &BBox, g: &J) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Places for the map (places.ts boxOf, pointOf)
+
+fn each_xy(c: &J, visit: &mut dyn FnMut(f64, f64)) {
+    if let J::Arr(items) = c {
+        if matches!(items.first(), Some(J::Num(_))) {
+            if let (Some(J::Num(x)), Some(J::Num(y))) = (items.first(), items.get(1)) {
+                visit(*x, *y);
+            }
+        } else {
+            items.iter().for_each(|i| each_xy(i, visit));
+        }
+    }
+}
+
+fn walk_geometry(g: &J, visit: &mut dyn FnMut(f64, f64)) {
+    let J::Obj(members) = g else { return };
+    for (k, v) in members {
+        if k == "coordinates" {
+            each_xy(v, visit);
+        } else if k == "geometries"
+            && let J::Arr(items) = v
+        {
+            items.iter().for_each(|m| walk_geometry(m, visit));
+        }
+    }
+}
+
+/// [west, south, east, north] of a WGS 84 geometry's positions, folded as Math.min and Math.max
+/// fold them (boxOf); None for an empty geometry.
+pub fn wgs84_box(g: &J) -> Option<BBox> {
+    use crate::shapefile::{js_max, js_min};
+    let mut b: Option<BBox> = None;
+    walk_geometry(g, &mut |x, y| {
+        b = Some(match b {
+            None => [x, y, x, y],
+            Some(b) => [
+                js_min(b[0], x),
+                js_min(b[1], y),
+                js_max(b[2], x),
+                js_max(b[3], y),
+            ],
+        });
+    });
+    b
+}
+
+/// A row's point for the density view (pointOf): a point's position, or the centre of the box of
+/// another geometry.
+pub fn wgs84_point(g: &J) -> Option<(f64, f64)> {
+    let J::Obj(members) = g else { return None };
+    let is_point = members
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "type")
+        .is_some_and(|(_, v)| matches!(v, J::Str(t) if t == "Point"));
+    if is_point {
+        let coords = members
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "coordinates")
+            .map(|(_, v)| v);
+        return match coords {
+            Some(J::Arr(c)) => match (c.first(), c.get(1)) {
+                (Some(J::Num(x)), Some(J::Num(y))) => Some((*x, *y)),
+                _ => None,
+            },
+            _ => None,
+        };
+    }
+    wgs84_box(g).map(|b| ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

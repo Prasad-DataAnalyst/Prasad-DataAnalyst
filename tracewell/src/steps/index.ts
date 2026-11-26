@@ -4,7 +4,7 @@
 
 export type { CompiledPredicate } from './predicate';
 export { compilePredicate, describePredicate } from './predicate';
-export { placesOf } from './places';
+export { densityOf, placesOf } from './places';
 export type { StepState } from './views';
 export {
   buildOutputView,

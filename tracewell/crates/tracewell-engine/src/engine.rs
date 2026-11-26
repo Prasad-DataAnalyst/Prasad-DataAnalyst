@@ -36,6 +36,8 @@ pub const PROTOCOL_VERSION: &str = "0.3.0";
 /// The most features one answer to getPlaces gives, and how many it gives when not asked.
 const PLACES_MAX: u64 = 100_000;
 const PLACES_DEFAULT: u64 = 50_000;
+/// The finest level of the Web Mercator grid a density answer counts in (getDensity).
+const DENSITY_LEVEL_MAX: u64 = 22;
 const ROW_WINDOW_MAX: u64 = 1000;
 const DISTINCT_CAP: i64 = 10_000;
 
@@ -429,6 +431,30 @@ fn count(v: &Value, name: &str, default: u64, max: u64) -> Result<u64> {
     }
 }
 
+/// The box of a request (requireBox): [west, south, east, north] of finite degrees with west ≤
+/// east and south ≤ north, or None when the request has none.
+fn require_box(q: &Value) -> Result<Option<[f64; 4]>> {
+    let Some(v) = q.get("bbox") else {
+        return Ok(None);
+    };
+    let b: Option<Vec<f64>> = v
+        .as_array()
+        .filter(|a| a.len() == 4)
+        .and_then(|a| a.iter().map(Value::as_f64).collect());
+    match b {
+        Some(b) if b.iter().all(|x| x.is_finite()) && b[0] <= b[2] && b[1] <= b[3] => {
+            Ok(Some([b[0], b[1], b[2], b[3]]))
+        }
+        _ => Err(EngineError::invalid(
+            format!(
+                "The box must be four finite numbers [west, south, east, north] with west ≤ east and south ≤ north; it was {}.",
+                crate::canonical::stringify(v)
+            ),
+            "Pass the box as WGS 84 longitude and latitude, from west to east and south to north.",
+        )),
+    }
+}
+
 /// 'well data.csv' → 'well data', as the TypeScript datasetNameFor.
 fn dataset_name_for(file_name: &str) -> String {
     let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
@@ -757,10 +783,15 @@ impl Engine {
         })
     }
 
-    /// Where a stage's rows are, in WGS 84 longitude and latitude, for the map (getPlaces,
-    /// placesOf): each row's geometry of a valid shape, or the point of its coordinate columns,
-    /// transformed from the stage's CRS when it is another, the first `limit` in row order.
-    pub fn get_places(&self, q: &Value) -> Result<Value> {
+    /// Walks a stage's rows that have a place, in row order (walkPlaces): each row's geometry of
+    /// a valid shape, or the point of its coordinate columns, transformed to WGS 84 longitude and
+    /// latitude when the stage's CRS is another. Returns the stage's row count and what the walk
+    /// found before any row: the CRS, the source and whether it transforms, or why not.
+    fn walk_places(
+        &self,
+        q: &Value,
+        visit: &mut dyn FnMut(i64, crate::json::J) -> Result<()>,
+    ) -> Result<(String, u64, Value)> {
         use crate::steps::{Coordinates, coordinate_source, pair_name};
         let d = self.dataset(&q["datasetId"])?;
         let stage = q["stage"].as_str().unwrap_or("");
@@ -770,7 +801,6 @@ impl Engine {
                 "Ask for the 'working' or the 'output' stage.",
             ));
         }
-        let limit = count(&q["limit"], "limit", PLACES_DEFAULT, PLACES_MAX)? as usize;
         let stages = d.stages()?;
         let (cols, view, rows) = if stage == "output" {
             (&stages.output, d.out_view(), d.output_rows)
@@ -782,19 +812,18 @@ impl Engine {
             .code()
             .filter(|c| *c != "unknown")
             .map(String::from);
+        let id = d.id.clone();
         let nothing = |reason: String, fix: &str| {
-            Ok(json!({
-                "datasetId": d.id,
-                "stage": stage,
-                "crs": crs,
-                "source": null,
-                "transformed": false,
-                "unplaced": { "reason": reason, "fix": fix },
-                "rows": rows,
-                "placed": 0,
-                "features": [],
-                "truncated": false,
-            }))
+            Ok((
+                id.clone(),
+                rows,
+                json!({
+                    "crs": crs,
+                    "source": null,
+                    "transformed": false,
+                    "unplaced": { "reason": reason, "fix": fix },
+                }),
+            ))
         };
         let Some(code) = crs.as_deref() else {
             return nothing(
@@ -829,45 +858,150 @@ impl Engine {
             quote_ident(&view)
         ))?;
         let mut result = stmt.query([])?;
-        let mut features = Vec::new();
-        let mut placed = 0u64;
         while let Some(row) = result.next()? {
+            use crate::json::J;
             let geometry = match &src {
                 Coordinates::Geometry(_) => row
                     .get::<_, Option<String>>(1)?
                     .and_then(|text| crate::json::parse(&text).ok())
                     .filter(crate::geo::has_shape)
-                    .and_then(|g| crate::geodesy::transform_geometry(&g, &t))
-                    .and_then(|g| serde_json::from_str::<Value>(&crate::json::stringify(&g)).ok()),
+                    .and_then(|g| crate::geodesy::transform_geometry(&g, &t)),
                 Coordinates::Pair(..) => {
                     match (row.get::<_, Option<f64>>(1)?, row.get::<_, Option<f64>>(2)?) {
-                        (Some(x), Some(y)) => t.forward(x, y).map(
-                            |(lon, lat)| json!({ "type": "Point", "coordinates": [lon, lat] }),
-                        ),
+                        (Some(x), Some(y)) => t.forward(x, y).map(|(lon, lat)| {
+                            J::Obj(vec![
+                                ("type".into(), J::Str("Point".into())),
+                                ("coordinates".into(), J::Arr(vec![J::Num(lon), J::Num(lat)])),
+                            ])
+                        }),
                         _ => None,
                     }
                 }
             };
-            let Some(geometry) = geometry else {
-                continue;
-            };
-            placed += 1;
-            if features.len() < limit {
-                features.push(json!({ "rowId": row.get::<_, i64>(0)?, "geometry": geometry }));
+            if let Some(g) = geometry {
+                visit(row.get::<_, i64>(0)?, g)?;
             }
         }
-        let truncated = placed > features.len() as u64;
+        Ok((
+            id,
+            rows,
+            json!({
+                "crs": crs,
+                "source": source,
+                "transformed": !t.operations().is_empty(),
+                "unplaced": null,
+            }),
+        ))
+    }
+
+    /// Where a stage's rows are, in WGS 84 longitude and latitude, for the map (getPlaces,
+    /// placesOf): the first `limit` placed rows in row order, or with a box the first of those
+    /// whose bounding box meets it.
+    pub fn get_places(&self, q: &Value) -> Result<Value> {
+        let limit = count(&q["limit"], "limit", PLACES_DEFAULT, PLACES_MAX)? as usize;
+        let bbox = require_box(q)?;
+        let mut features = Vec::new();
+        let (mut placed, mut matched) = (0u64, 0u64);
+        let (id, rows, placing) = self.walk_places(q, &mut |rid, g| {
+            placed += 1;
+            if let Some(b) = bbox {
+                match crate::geo::wgs84_box(&g) {
+                    Some(g) if !(g[2] < b[0] || g[0] > b[2] || g[3] < b[1] || g[1] > b[3]) => {}
+                    _ => return Ok(()),
+                }
+            }
+            matched += 1;
+            if features.len() < limit {
+                let geometry = serde_json::from_str::<Value>(&crate::json::stringify(&g))
+                    .unwrap_or(Value::Null);
+                features.push(json!({ "rowId": rid, "geometry": geometry }));
+            }
+            Ok(())
+        })?;
+        let truncated = matched > features.len() as u64;
         Ok(json!({
-            "datasetId": d.id,
-            "stage": stage,
-            "crs": crs,
-            "source": source,
-            "transformed": !t.operations().is_empty(),
-            "unplaced": null,
+            "datasetId": id,
+            "stage": q["stage"],
+            "crs": placing["crs"],
+            "source": placing["source"],
+            "transformed": placing["transformed"],
+            "unplaced": placing["unplaced"],
             "rows": rows,
             "placed": placed,
+            "matched": matched,
             "features": features,
             "truncated": truncated,
+        }))
+    }
+
+    /// How many placed rows of a stage fall in each cell of the Web Mercator grid of a level
+    /// (getDensity, densityOf), each row counted at its point, only points in the box when one
+    /// is given.
+    pub fn get_density(&self, q: &Value) -> Result<Value> {
+        let level = match q.get("level") {
+            None => {
+                return Err(EngineError::invalid(
+                    format!(
+                        "level must be a whole number from 0 to {DENSITY_LEVEL_MAX}; it was undefined."
+                    ),
+                    "Pass a valid level.",
+                ));
+            }
+            Some(v) if v.is_null() => {
+                return Err(EngineError::invalid(
+                    format!(
+                        "level must be a whole number from 0 to {DENSITY_LEVEL_MAX}; it was null."
+                    ),
+                    "Pass a valid level.",
+                ));
+            }
+            Some(v) => count(v, "level", 0, DENSITY_LEVEL_MAX)? as u32,
+        };
+        let bbox = require_box(q)?;
+        let n = 1u64 << level;
+        let mut counts: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+        let (mut placed, mut counted) = (0u64, 0u64);
+        let mut bounds: Option<[f64; 4]> = None;
+        let (id, rows, placing) = self.walk_places(q, &mut |_rid, g| {
+            placed += 1;
+            let Some((x, y)) = crate::geo::wgs84_point(&g) else {
+                return Ok(());
+            };
+            if let Some(b) = bbox
+                && (x < b[0] || x > b[2] || y < b[1] || y > b[3])
+            {
+                return Ok(());
+            }
+            counted += 1;
+            bounds = Some(match bounds {
+                None => [x, y, x, y],
+                Some(b) => [
+                    crate::shapefile::js_min(b[0], x),
+                    crate::shapefile::js_min(b[1], y),
+                    crate::shapefile::js_max(b[2], x),
+                    crate::shapefile::js_max(b[3], y),
+                ],
+            });
+            let (cx, cy) = crate::geodesy::mercator_cell(x, y, level);
+            *counts.entry(cy * n + cx).or_default() += 1;
+            Ok(())
+        })?;
+        let cells: Vec<Value> = counts
+            .into_iter()
+            .map(|(key, count)| json!({ "x": key % n, "y": key / n, "count": count }))
+            .collect();
+        Ok(json!({
+            "datasetId": id,
+            "stage": q["stage"],
+            "level": level,
+            "crs": placing["crs"],
+            "transformed": placing["transformed"],
+            "unplaced": placing["unplaced"],
+            "rows": rows,
+            "placed": placed,
+            "counted": counted,
+            "bounds": bounds,
+            "cells": cells,
         }))
     }
 

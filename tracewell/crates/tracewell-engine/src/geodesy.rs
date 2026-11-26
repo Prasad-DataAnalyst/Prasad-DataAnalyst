@@ -364,6 +364,21 @@ pub fn tanh(x: f64) -> f64 {
     sinh(x) / cosh(x)
 }
 
+/// The latitude Web Mercator reaches, atan(sinh(π)) in degrees (MERCATOR_MAX_LATITUDE).
+pub const MERCATOR_MAX_LATITUDE: f64 = 85.0511287798066;
+
+/// The cell (x, y) of a WGS 84 point in the Web Mercator grid of 2^level by 2^level cells, as
+/// map tiles are numbered (tiles.ts mercatorCell): the same operations in the same order.
+pub fn mercator_cell(lon: f64, lat: f64, level: u32) -> (u64, u64) {
+    use std::f64::consts::PI;
+    let n = (1u64 << level) as f64;
+    let x = (((lon + 180.0) / 360.0) * n).floor();
+    let phi = (lat.clamp(-MERCATOR_MAX_LATITUDE, MERCATOR_MAX_LATITUDE) * PI) / 180.0;
+    let y = (((1.0 - asinh(tan(phi)) / PI) / 2.0) * n).floor();
+    let clamp = |v: f64| v.clamp(0.0, n - 1.0) as u64;
+    (clamp(x), clamp(y))
+}
+
 pub fn asinh(x: f64) -> f64 {
     let t = x.abs();
     let r = if t > 2.0 {
@@ -1356,6 +1371,23 @@ mod tests {
                 .unwrap()
                 .operations()
                 .is_empty()
+        );
+    }
+
+    /// The cells tiles.test.ts expects, so a point lands in the same cell in both engines.
+    #[test]
+    fn puts_points_in_the_cells_the_typescript_code_does() {
+        assert_eq!(mercator_cell(0.0, 0.0, 0), (0, 0));
+        assert_eq!(mercator_cell(-0.1, 0.1, 1), (0, 0));
+        assert_eq!(mercator_cell(0.1, -0.1, 1), (1, 1));
+        assert_eq!(mercator_cell(-2.0943, 57.1497, 10), (506, 312));
+        assert_eq!(mercator_cell(180.0, 0.0, 3), (7, 4));
+        assert_eq!(mercator_cell(-180.0, 90.0, 3), (0, 0));
+        assert_eq!(mercator_cell(200.0, -90.0, 3), (7, 7));
+        assert_eq!(mercator_cell(0.0, MERCATOR_MAX_LATITUDE, 22).1, 0);
+        assert_eq!(
+            mercator_cell(0.0, -MERCATOR_MAX_LATITUDE, 22).1,
+            (1 << 22) - 1
         );
     }
 }

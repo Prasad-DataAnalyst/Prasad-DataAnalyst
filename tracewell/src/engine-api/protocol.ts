@@ -54,10 +54,12 @@ import type {
   UserProfile,
   PlacesRequest,
   PlacesWindow,
+  DensityGrid,
+  DensityRequest,
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.8.0';
+export const PROTOCOL_VERSION = '0.9.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -100,6 +102,8 @@ export interface EngineApi {
   getColumnStats(datasetId: DatasetId, columnId: ColumnId): Promise<ColumnStats>;
   /** Where a stage's rows are, in WGS 84 longitude and latitude, for the map (FR-MAP-01). Protocol 0.8. */
   getPlaces(q: PlacesRequest): Promise<PlacesWindow>;
+  /** How many placed rows fall in each cell of a Web Mercator grid, for the map's density view (FR-MAP-03). Protocol 0.9. */
+  getDensity(q: DensityRequest): Promise<DensityGrid>;
   explainCell(datasetId: DatasetId, rowId: RowId, columnId: ColumnId): Promise<CellLineage>;
   /** Result: CheckSummary. */
   runChecks(datasetId: DatasetId): Promise<JobHandle>;
@@ -209,6 +213,7 @@ export const ENGINE_METHODS = [
   'getRows',
   'getColumnStats',
   'getPlaces',
+  'getDensity',
   'explainCell',
   'runChecks',
   'listIssues',

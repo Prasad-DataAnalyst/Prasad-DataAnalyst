@@ -19,3 +19,4 @@ export {
   type CrsTransformer,
 } from './crs/transform';
 export { esriWkt } from './crs/wkt';
+export { MERCATOR_MAX_LATITUDE, mercatorCell } from './crs/tiles';

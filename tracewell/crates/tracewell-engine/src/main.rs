@@ -277,6 +277,7 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
         "getProject" => e.summary(),
         "getSchema" => e.schema(param(params, 0), param(params, 1)),
         "getPlaces" => e.get_places(param(params, 0)),
+        "getDensity" => e.get_density(param(params, 0)),
         "previewStep" => e.preview_step(param(params, 0), param(params, 1)),
         "explainCell" => e.explain_cell(param(params, 0), param(params, 1), param(params, 2)),
         "listRulePacks" => e.list_rule_packs(),

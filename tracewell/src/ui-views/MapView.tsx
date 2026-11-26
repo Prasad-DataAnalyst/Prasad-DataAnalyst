@@ -1,6 +1,8 @@
 /**
- * The map view (FR-MAP-01, FR-MAP-02, FR-MAP-04): a stage's rows where they are, in WGS 84
- * longitude and latitude, as the engine places them (getPlaces). Clicking a place selects its row,
+ * The map view (FR-MAP-01 to FR-MAP-04): a stage's rows where they are, in WGS 84 longitude and
+ * latitude, as the engine places them (getPlaces). A stage with more rows than the map draws is
+ * shown as density cells (getDensity), and a view holding few enough of them shows their places;
+ * clicking a cell zooms to it. Clicking a place selects its row,
  * which the grid and the properties panel follow, and a row selected elsewhere is marked on the
  * map. A basemap is read from a local PMTiles file; without one a graticule shows where the map is.
  * A box drawn on the map becomes a filter step, with a preview and a reason, for data in WGS 84.
@@ -8,13 +10,13 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
-import type { DatasetId, PlacesWindow, RowId, StepInput, StepPreview } from '@tw/model';
+import type { DatasetId, DensityGrid, PlacesWindow, RowId, StepInput, StepPreview } from '@tw/model';
 import { formatCount, toErrorData, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
 import { ErrorNote, useReasonPrompt } from './common';
 import { applyStep } from './dialogs';
 import { datasetFor, useEngineQuery, useProject } from './hooks';
 import type { BasemapInfo, MapController } from './map-lib';
-import { areaPredicate, themeColours, type LonLatBox } from './map-style';
+import { DETAIL_LIMIT, areaPredicate, densityLevel, themeColours, viewBox, type LonLatBox } from './map-style';
 import { gotoRow } from './store';
 import { TID } from './testids';
 
@@ -41,12 +43,18 @@ function PlacesMap(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX
   const selection = useWorkbench((s) => s.selection);
   const select = useWorkbench((s) => s.select);
   const [stage, setStage] = useState<'working' | 'output'>('working');
-  const places = useEngineQuery(engine, `places:${datasetId}:${stage}`, () => engine.getPlaces({ datasetId, stage }), [
-    'schema',
-    'steps',
-    'datasets',
-    'audit',
-  ]);
+  const places = useEngineQuery(
+    engine,
+    `places:${datasetId}:${stage}`,
+    () => engine.getPlaces({ datasetId, stage, limit: DETAIL_LIMIT }),
+    ['schema', 'steps', 'datasets', 'audit'],
+  );
+  // More rows than the map draws: the view decides between density cells and places.
+  const large = places.data?.truncated === true;
+  const [view, setView] = useState<{ box: LonLatBox; zoom: number } | null>(null);
+  const [detail, setDetail] = useState<
+    { mode: 'points'; places: PlacesWindow; density: DensityGrid } | { mode: 'density'; density: DensityGrid } | null
+  >(null);
   const container = useRef<HTMLDivElement>(null);
   const controller = useRef<MapController | null>(null);
   const lib = useRef<MapLib | null>(null);
@@ -107,6 +115,7 @@ function PlacesMap(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX
             },
             rendered: (count: number) => setRendered(count),
             basemapLoaded: () => setBasemapLoaded(true),
+            view: (bounds: LonLatBox, zoom: number) => setView({ box: viewBox(...bounds), zoom }),
           },
         );
         controller.current = made;
@@ -123,13 +132,65 @@ function PlacesMap(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX
   }, [engine, select]);
 
   // New places: fitted to the view the first time each stage is shown, kept in view after edits.
+  // A large stage is fitted to the points of all its rows, which its density over the world gives.
   const fitted = useRef<string | null>(null);
   useEffect(() => {
     if (!ready || places.data == null) return;
     const key = `${datasetId}|${stage}`;
-    controller.current?.setPlaces(places.data, fitted.current !== key);
+    const first = fitted.current !== key;
     fitted.current = key;
-  }, [ready, places.data, datasetId, stage]);
+    if (!places.data.truncated) {
+      controller.current?.setDensity(null);
+      controller.current?.setPlaces(places.data, first);
+      return;
+    }
+    controller.current?.setPlaces(null, false);
+    if (!first) return;
+    let live = true;
+    engine.getDensity({ datasetId, stage, level: 0 }).then(
+      (d) => {
+        if (live && d.bounds !== null) controller.current?.fitBox(d.bounds);
+      },
+      (e: unknown) => live && setFailed(toErrorData(e).message),
+    );
+    return () => {
+      live = false;
+    };
+  }, [ready, places.data, datasetId, stage, engine]);
+
+  // A large stage: once the view settles, its density, and its places when it holds few enough.
+  const asked = useRef(0);
+  useEffect(() => {
+    // Every change answers only the newest request, so an answer for an earlier view is dropped.
+    const token = ++asked.current;
+    if (!ready || !large || view === null) return;
+    const timer = setTimeout(() => {
+      const current = () => token === asked.current;
+      const box = view.box;
+      void (async () => {
+        try {
+          const density = await engine.getDensity({ datasetId, stage, level: densityLevel(view.zoom), bbox: box });
+          if (!current()) return;
+          if (density.counted <= DETAIL_LIMIT) {
+            const inView = await engine.getPlaces({ datasetId, stage, bbox: box, limit: DETAIL_LIMIT });
+            if (!current()) return;
+            if (!inView.truncated) {
+              controller.current?.setDensity(null);
+              controller.current?.setPlaces(inView, false);
+              setDetail({ mode: 'points', places: inView, density });
+              return;
+            }
+          }
+          controller.current?.setPlaces(null, false);
+          controller.current?.setDensity(density);
+          setDetail({ mode: 'density', density });
+        } catch (e) {
+          if (current()) setFailed(toErrorData(e).message);
+        }
+      })();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [ready, large, view, places.data, engine, datasetId, stage]);
 
   const selectedRow = selection.kind === 'cell' && selection.datasetId === datasetId ? selection.rowId : null;
   useEffect(() => {
@@ -166,6 +227,13 @@ function PlacesMap(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX
   };
 
   const data = places.data ?? undefined;
+  const shown = !large
+    ? ''
+    : detail === null
+      ? ' · reading the view…'
+      : detail.mode === 'points'
+        ? ` · the ${formatCount(detail.places.matched)} in view drawn`
+        : ` · density of the ${formatCount(detail.density.counted)} in view; zoom in or click a cell to see them`;
   const status =
     data === undefined
       ? 'Placing rows…'
@@ -173,7 +241,7 @@ function PlacesMap(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX
         ? null
         : `${formatCount(data.placed)} of ${formatCount(data.rows)} rows placed` +
           (data.transformed ? ` · shown in WGS 84, transformed from ${data.crs ?? ''}` : ` · ${data.crs ?? ''}`) +
-          (data.truncated ? ` · the first ${formatCount(data.features.length)} drawn` : '');
+          shown;
 
   return (
     <div
@@ -275,6 +343,8 @@ function PlacesMap(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX
         data-testid={TID.mapCanvas}
         data-ready={ready && rendered !== null ? 'true' : 'false'}
         data-rendered={rendered ?? ''}
+        data-mode={!large ? 'points' : (detail?.mode ?? 'loading')}
+        data-cells={detail?.mode === 'density' ? detail.density.cells.length : ''}
         data-selected={selectedRow ?? ''}
         data-basemap={basemap === null ? 'none' : basemapLoaded ? 'loaded' : 'loading'}
         aria-label={`Map of ${summary?.name ?? datasetId}`}

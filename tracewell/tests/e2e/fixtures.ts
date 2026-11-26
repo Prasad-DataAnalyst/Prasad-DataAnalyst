@@ -16,6 +16,25 @@ export { expect } from '@playwright/test';
 
 export const ORIGIN = 'http://127.0.0.1:4173';
 
+/**
+ * Presses a shortcut that opens a file chooser and gives it the file. The application clicks its
+ * file input with the key press's user activation every time, but the browser build some
+ * environments run now and then raises no chooser once a WebGL map has drawn, so the shortcut is
+ * pressed again, as a user would, up to three times.
+ */
+export async function chooseFile(page: Page, shortcut: string, path: string): Promise<void> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const chooser = page.waitForEvent('filechooser', { timeout: attempt < 3 ? 5_000 : 30_000 }).catch(() => null);
+    await page.keyboard.press(shortcut);
+    const opened = await chooser;
+    if (opened !== null) {
+      await opened.setFiles(path);
+      return;
+    }
+  }
+  throw new Error(`No file chooser opened after pressing ${shortcut} three times.`);
+}
+
 export type ExportProfileId = 'excel' | 'csv' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf';
 
 /** The engine a test's page talks to. */
@@ -113,9 +132,7 @@ export const test = base.extend<{
         await page.waitForFunction(() => window.__tracewellReady === true);
       },
       async importFixture(name, o = {}) {
-        const chooser = page.waitForEvent('filechooser');
-        await page.keyboard.press('Control+i');
-        await (await chooser).setFiles(fixturePath(name));
+        await chooseFile(page, 'Control+i', fixturePath(name));
         await expect(page.getByTestId('tw-import-view')).toBeVisible();
         if (o.acceptPreview === false) return;
         await page.getByTestId('tw-import-button').click();
@@ -210,9 +227,7 @@ export const test = base.extend<{
         return { path };
       },
       async openProject(path) {
-        const chooser = page.waitForEvent('filechooser');
-        await page.keyboard.press('Control+o');
-        await (await chooser).setFiles(path);
+        await chooseFile(page, 'Control+o', path);
         await expect(page.getByTestId('tw-open-report')).toBeVisible({ timeout: 60_000 });
       },
       async statusText() {

@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fixturePath } from './files';
-import { expect, test } from './fixtures';
+import { chooseFile, expect, test } from './fixtures';
 
 /** csv_well_daily_golden.csv as next month's export: Pressure moved last, three readings missing. */
 function nextMonth(): string {
@@ -37,9 +37,7 @@ test('a recipe saved from one month runs on the next, and the register shows onl
 
   const nextPath = testInfo.outputPath('well_daily_next.csv');
   writeFileSync(nextPath, nextMonth());
-  const chooser = page.waitForEvent('filechooser');
-  await page.keyboard.press('Control+i');
-  await (await chooser).setFiles(nextPath);
+  await chooseFile(page, 'Control+i', nextPath);
   await page.getByTestId('tw-import-button').click();
   await expect(page.getByTestId('tw-grid')).toBeVisible();
 
