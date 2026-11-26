@@ -35,6 +35,7 @@ export type ModuleName =
   | 'formats-geojson'
   | 'formats-kml'
   | 'formats-flatgeobuf'
+  | 'formats-geopackage'
   | 'formats-shapefile'
   | 'formats-json'
   | 'formats-parquet'
@@ -66,6 +67,7 @@ export const ALLOWED: Record<ModuleName, ModuleName[]> = {
   'formats-geojson': ['model', 'io'],
   'formats-kml': ['model', 'io'],
   'formats-flatgeobuf': ['model'],
+  'formats-geopackage': ['model'],
   'formats-shapefile': ['model', 'io', 'geo'],
   'formats-json': ['model', 'io'],
   'formats-parquet': ['model'],
@@ -100,6 +102,7 @@ export const ALLOWED: Record<ModuleName, ModuleName[]> = {
     'formats-geojson',
     'formats-kml',
     'formats-flatgeobuf',
+    'formats-geopackage',
     'formats-parquet',
   ],
   project: ['model', 'io'],
@@ -148,6 +151,7 @@ export const ALLOWED_NPM: Record<ModuleName, string[]> = {
   'formats-geojson': ['@streamparser/json'],
   'formats-kml': ['saxes'],
   'formats-flatgeobuf': [],
+  'formats-geopackage': [],
   'formats-shapefile': [],
   'formats-json': ['@streamparser/json'],
   'formats-parquet': ['hyparquet', 'hyparquet-writer'],
@@ -187,6 +191,7 @@ const ENGINE_SIDE: ModuleName[] = [
   'formats-geojson',
   'formats-kml',
   'formats-flatgeobuf',
+  'formats-geopackage',
   'formats-shapefile',
   'formats-json',
   'formats-parquet',

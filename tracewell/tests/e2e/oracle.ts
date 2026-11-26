@@ -17,6 +17,7 @@ export type OracleScript =
   | 'check_shapefile.py'
   | 'check_kml.py'
   | 'check_flatgeobuf.py'
+  | 'check_geopackage.py'
   | 'check_package.py'
   | 'canonical.py';
 

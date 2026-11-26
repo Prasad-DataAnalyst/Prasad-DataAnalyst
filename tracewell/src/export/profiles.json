@@ -48,6 +48,13 @@
       "destinations": ["QGIS", "ArcGIS Pro", "GDAL", "Web maps"],
       "dataExtension": ".fgb",
       "description": "A FlatGeobuf file in the coordinate reference system of the data, recorded by its EPSG code: one feature per row, in row order, with any mix of geometry kinds and every column as a typed property named \"Name [unit]\". No field-name or 2 GB limits, so it is also what a Shapefile too large for its format is delivered as."
+    },
+    {
+      "id": "geopackage",
+      "label": "QGIS / ArcGIS / GDAL (GeoPackage)",
+      "destinations": ["QGIS", "ArcGIS Pro", "GDAL"],
+      "dataExtension": ".gpkg",
+      "description": "An OGC GeoPackage 1.2, an SQLite database that QGIS opens directly, in the coordinate reference system of the data, recorded by its EPSG code and its Well-Known Text: one layer named after the dataset, with one feature per row in row order, any mix of geometry kinds, heights where every position of a geometry has one, and every column as a typed field named \"Name [unit]\". No field-name or 2 GB limits."
     }
   ]
 }

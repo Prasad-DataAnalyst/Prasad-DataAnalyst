@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const PROFILES_JSON: &str = include_str!("../../../src/export/profiles.json");
 /// The profiles this engine writes: every one.
-pub const NATIVE_PROFILES: [&str; 7] = [
+pub const NATIVE_PROFILES: [&str; 8] = [
     "excel",
     "csv",
     "parquet",
@@ -42,6 +42,7 @@ pub const NATIVE_PROFILES: [&str; 7] = [
     "shapefile",
     "kml",
     "flatgeobuf",
+    "geopackage",
 ];
 /// A package up to this size is handed back as bytes when the request names no file.
 pub const RETURN_BYTES_MAX: u64 = 256 << 20;
@@ -171,6 +172,7 @@ enum DataKind {
     Shapefile,
     Kml,
     FlatGeobuf,
+    GeoPackage,
 }
 
 /// A data file a profile writes: its path in the package and the columns of the view it holds.
@@ -281,6 +283,23 @@ fn plan_export_within(
             vec![DataFile {
                 path: "data.fgb",
                 kind: DataKind::FlatGeobuf,
+                columns: p.attributes,
+            }]
+        } else {
+            Vec::new()
+        };
+        return Ok(Plan {
+            substitutions: p.substitutions,
+            files,
+            refusal: p.refusal,
+        });
+    }
+    if profile == "geopackage" {
+        let p = crate::geopackage::plan(conn, view, columns, spatial)?;
+        let files = if p.refusal.is_none() {
+            vec![DataFile {
+                path: "data.gpkg",
+                kind: DataKind::GeoPackage,
                 columns: p.attributes,
             }]
         } else {
@@ -1752,6 +1771,18 @@ fn read_back(
             path,
             file,
         ),
+        DataKind::GeoPackage => crate::geopackage::read_back(
+            conn,
+            &input.view,
+            &input.columns,
+            &input.spatial,
+            expected,
+            &input.dataset_name,
+            &input.at,
+            input.ordered,
+            path,
+            file,
+        ),
         DataKind::Shapefile => {
             let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
             // Files taken back out of the package are named inside-data.shp and so on.
@@ -2625,6 +2656,19 @@ pub fn build_export(
                 &f.columns,
                 &input.dataset_name,
                 input.row_count,
+                input.ordered,
+                &path,
+                cancel,
+            )?,
+            DataKind::GeoPackage => crate::geopackage::write(
+                conn,
+                &input.view,
+                &input.columns,
+                &input.spatial,
+                &f.columns,
+                &input.dataset_name,
+                input.row_count,
+                &input.at,
                 input.ordered,
                 &path,
                 cancel,

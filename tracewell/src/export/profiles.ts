@@ -10,6 +10,7 @@ const PROFILE_IDS: readonly ExportProfileId[] = [
   'shapefile',
   'kml',
   'flatgeobuf',
+  'geopackage',
 ];
 const EXTENSIONS: readonly ExportProfile['dataExtension'][] = [
   '.xlsx',
@@ -19,6 +20,7 @@ const EXTENSIONS: readonly ExportProfile['dataExtension'][] = [
   '.shp',
   '.kml',
   '.fgb',
+  '.gpkg',
 ];
 
 function broken(message: string): EngineError {

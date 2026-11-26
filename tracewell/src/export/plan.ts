@@ -16,8 +16,9 @@ import {
 import { esriWkt } from '@tw/geo';
 import type { View } from '@tw/table';
 import { analyseFgb, fgbAttributes, fgbCrs } from './flatgeobuf';
+import { analyseGpkg, gpkgAttributes, gpkgNameProblem, gpkgOwnColumns, gpkgSrs } from './geopackage';
 import { analyseKml, kmlAttributes } from './kml';
-import { EXPORT_PROFILES } from './profiles';
+import { EXPORT_PROFILES, headerFor } from './profiles';
 import {
   SHAPEFILE_MAX_BYTES,
   analyseShapes,
@@ -32,7 +33,7 @@ import { textOf } from './values';
 
 export { geometrySource } from './source';
 
-export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf';
+export type DataKind = 'csv' | 'xlsx' | 'parquet' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf' | 'geopackage';
 
 /** Format limits; only tests lower them, to reach a substitution without gigabytes of data. */
 export interface ExportLimits {
@@ -293,6 +294,77 @@ function flatgeobufPlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
   };
 }
 
+function geopackagePlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
+  const base = { profile: 'geopackage' as const, substitutions: [], dataFiles: [] };
+  const refused = (reason: string, fix: string): ExportPlan => ({ ...base, available: false, reason, fix });
+  const code = knownCrs(crs);
+  const source: ShapeSource | null = shapeSource(view, code);
+  if (source === null) {
+    return refused(
+      'The dataset has no geometry column and no coordinate columns (longitude and latitude, or easting and northing).',
+      'Set the coordinate roles on the coordinate columns, or export as CSV or Excel.',
+    );
+  }
+  if (code === null) {
+    return refused(
+      'The coordinate reference system of the data is not known, and a GeoPackage records it.',
+      'Set the coordinate reference system of the dataset first.',
+    );
+  }
+  if (gpkgSrs(code) === null) {
+    return refused(
+      `A GeoPackage describes its coordinate reference system in Well-Known Text, and Tracewell has no description of ${code}.`,
+      'Export as FlatGeobuf, which records the EPSG code alone, or transform the coordinates to a listed coordinate reference system first (Data › Transform coordinates).',
+    );
+  }
+  const attributes = gpkgAttributes(view, source);
+  const headers = attributes.map((c) => headerFor(c));
+  const problem = gpkgNameProblem(headers);
+  if (problem !== null) return refused(problem, 'Rename one of the columns first.');
+  const a = analyseGpkg(view, source);
+  const geometries = (n: number) => `${n} geometr${n > 1 ? 'ies' : 'y'}`;
+  const substitutions: Substitution[] = [];
+  if (a.bad > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.bad),
+      why: 'They do not have the shape of a geometry: a misplaced array or an unknown type.',
+      instead: 'Their features have no geometry; their other values are kept.',
+    });
+  }
+  if (a.long > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.long),
+      why: 'Their positions hold more than three numbers, and a GeoPackage position holds x, y and a height.',
+      instead: 'Each position keeps its first three numbers; the GeoJSON export keeps them all.',
+    });
+  }
+  if (a.uneven > 0) {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: geometries(a.uneven),
+      why: 'Some of their positions have heights and others do not, and a GeoPackage geometry has a height at every position or at none.',
+      instead: 'They are written without heights; the GeoJSON export keeps them.',
+    });
+  }
+  const own = gpkgOwnColumns(headers);
+  if (own.fid !== 'fid' || own.geom !== 'geom') {
+    substitutions.push({
+      ruleId: 'TW-EXP-002',
+      what: 'the feature ID and geometry fields',
+      why: 'A column of the data already has the name "fid" or "geom".',
+      instead: `The feature IDs are in the field "${own.fid}" and the geometries in "${own.geom}".`,
+    });
+  }
+  return {
+    ...base,
+    available: true,
+    substitutions,
+    dataFiles: [{ path: 'data.gpkg', kind: 'geopackage', columns: attributes.map((c) => c.id) }],
+  };
+}
+
 function kmlPlan(view: View, crs: Detection<CrsRef> | null): ExportPlan {
   const base = { profile: 'kml' as const, substitutions: [], dataFiles: [] };
   const source = geometrySource(view);
@@ -387,6 +459,8 @@ export function planExport(
       return kmlPlan(view, crs);
     case 'flatgeobuf':
       return flatgeobufPlan(view, crs);
+    case 'geopackage':
+      return geopackagePlan(view, crs);
   }
 }
 

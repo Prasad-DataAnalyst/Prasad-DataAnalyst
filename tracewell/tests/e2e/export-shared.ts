@@ -18,7 +18,8 @@ export function expectOracleAgrees(
     | 'check_geojson.py'
     | 'check_shapefile.py'
     | 'check_kml.py'
-    | 'check_flatgeobuf.py',
+    | 'check_flatgeobuf.py'
+    | 'check_geopackage.py',
 ): Record<string, unknown> {
   const pkg = runOracle('check_package.py', [path]) as {
     ok: boolean;
@@ -31,7 +32,12 @@ export function expectOracleAgrees(
   expect(pkg.ok).toBe(true);
   expect(pkg.owner).toContain('Prasad');
   const data = runOracle(script, [path]) as { columns: { header: string; sha256: string }[] };
-  if (script === 'check_shapefile.py' || script === 'check_kml.py' || script === 'check_flatgeobuf.py') {
+  if (
+    script === 'check_shapefile.py' ||
+    script === 'check_kml.py' ||
+    script === 'check_flatgeobuf.py' ||
+    script === 'check_geopackage.py'
+  ) {
     // These hold the attribute columns apart from the geometry, so they are compared by header.
     const byHeader = (cs: { header: string; sha256: string }[]) =>
       Object.fromEntries(cs.map((c) => [c.header, c.sha256]));

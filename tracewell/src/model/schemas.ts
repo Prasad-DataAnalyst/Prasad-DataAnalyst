@@ -172,6 +172,7 @@ const EXPORT_PROFILE_IDS = members<ExportProfileId>()([
   'shapefile',
   'kml',
   'flatgeobuf',
+  'geopackage',
 ]);
 const VALIDATION_CHECK_IDS = members<ValidationCheck['id']>()([
   'RB-OPEN',
@@ -188,6 +189,8 @@ const VALIDATION_CHECK_IDS = members<ValidationCheck['id']>()([
   'RB-KML-GEOMETRY',
   'RB-FGB-STRUCTURE',
   'RB-FGB-GEOMETRY',
+  'RB-GPKG-STRUCTURE',
+  'RB-GPKG-GEOMETRY',
   'RB-PARQUET-TYPES',
   'RB-PKG-CHECKSUMS',
   'RB-PKG-CONTENTS',

@@ -151,6 +151,20 @@ Requirement IDs (FR-_, NFR-_, UI-*) refer to the PRD.
 
 ---
 
+### 3.5 Decision D-16 (slice 3): GeoPackage on an SQLite file format writer and reader of our own
+
+**Context.** FR-IMP-02 and the GIS export profiles need GeoPackage (OGC 12-128), which is an SQLite database. The Lite engine runs in a browser worker, where SQLite exists only as a WebAssembly build of about a megabyte; the native engine could link SQLite. Two SQLite libraries lay out a database differently, so the two engines would write different bytes, and the parity suite compares every exported file byte for byte (section 13). DuckDB reads SQLite only through an extension it downloads, which the offline rule forbids.
+
+**Decision.** Both engines write and read the SQLite file format (sqlite.org/fileformat.html) with code of their own: `src/formats/geopackage/sqlite.ts` and `sqlite.rs`, the same layout in the same order, as the FlatGeobuf, XLSX and Shapefile writers are.
+
+- **Writer.** A bulk load: 4096-byte pages, each table's rows in rowid order packed into leaf pages as they come, interior pages built level by level above them, records past a page's share spilled to overflow pages by the format's rules, and the schema table on page 1, built last (when it does not fit there, page 1 becomes an interior page over leaves, as SQLite itself deepens it). Pages are numbered in the order they are finished, which is the order they are written, so the native writer streams a dataset of any size to the file and holds only one leaf and a list of finished pages. The automatic indexes that UNIQUE and PRIMARY KEY constraints imply are written too, so SQLite's own checks pass. Integers take the fewest bytes, as SQLite chooses them.
+- **Reader.** Any database of the format, by SQLite or by us: any page size, reserved bytes, UTF-8 and UTF-16 text, interior pages, overflow chains, rows deleted in place, integers in REAL columns read as reals as SQLite reads them, and the columns and rowid alias of each table from its CREATE TABLE statement. Every page number and offset it follows is checked, and a page visited twice or a tree deeper than any valid one is refused, so a damaged or hostile file is refused rather than looped over. The native reader reads one page at a time from the file.
+- **Tests.** Python's sqlite3 module (SQLite 3.53 here) is the oracle: every database the writer makes in the unit tests passes `PRAGMA integrity_check` and reads back as written, across deep trees, overflow, negative and 64-bit rowids, an automatic index and a sweep of schema sizes around the edge of page 1; and databases SQLite writes (page sizes 512 to 65,536, UTF-8, UTF-16LE and UTF-16BE, deleted rows) read as SQLite reads them. Each GeoPackage export is also checked by SQLite's integrity and foreign key checks in the browser tests.
+
+**Consequences.** No new dependency and no WebAssembly in either engine; the GeoPackage export is the same bytes in both engines but for the time of the export. The writer writes only what a GeoPackage needs: tables, automatic indexes of one page, no free pages, no views, triggers or R-tree spatial index (QGIS and GDAL build one when asked). The reader reads tables; it does not run SQL.
+
+**Rejected.** SQLite compiled to WebAssembly in Lite with the SQLite library in the native engine: a megabyte more for the browser, and two layouts that the parity suite could compare only by their contents. Reading GeoPackage through DuckDB's spatial or SQLite extension: downloaded at run time.
+
 ## 4. Long-term architecture
 
 ### 4.1 Editions and runtimes
@@ -247,6 +261,7 @@ tracewell/
 │   ├── formats/geojson/    # streaming GeoJSON reader, writer
 │   ├── formats/kml/        # KML 2.2 writer, reader and KML/KMZ importer (Google Earth)
 │   ├── formats/flatgeobuf/ # FlatGeobuf writer, reader and importer on a FlatBuffers builder and reader of its own
+│   ├── formats/geopackage/ # GeoPackage writer and reader on an SQLite file format writer and reader of its own (D-16)
 │   ├── formats/shapefile/  # importer of a zipped Shapefile (.shp, .dbf, .prj, .cpg)
 │   ├── formats/json/       # streaming JSON records reader (array, JSON Lines, wrapped API response)
 │   ├── formats/parquet/    # Parquet writer, read-back reader, row-group importer
@@ -270,7 +285,7 @@ tracewell/
 │   ├── architecture/       # boundaries.test.ts (import allow-list)
 │   ├── conformance/        # engine-agnostic workflow scenarios over EngineApi
 │   ├── e2e/                # Playwright specs and shared offline-guard fixture
-│   └── oracle/             # canonical.py, check_csv.py, check_xlsx.py, check_geojson.py, check_package.py, lo_roundtrip.sh
+│   └── oracle/             # canonical.py, check_csv.py, check_xlsx.py, check_geojson.py, check_geopackage.py, check_package.py, lo_roundtrip.sh
 └── scripts/
     ├── test-all.mjs        # the single command
     ├── check-hygiene.mjs   # forbidden-name scan (patterns stored as SHA-256 token hashes)
@@ -307,6 +322,7 @@ Modules with the same build order can be built in parallel. Lower numbers come f
 | 2     | formats-geojson | `src/formats/geojson`                                 | model, io, @streamparser/json                                                             |
 | 2     | formats-kml     | `src/formats/kml`                                     | model, io, saxes                                                                          |
 | 2     | formats-flatgeobuf | `src/formats/flatgeobuf`                           | model                                                                                     |
+| 2     | formats-geopackage | `src/formats/geopackage`                           | model                                                                                     |
 | 2     | formats-shapefile  | `src/formats/shapefile`                            | model, io, geo                                                                            |
 | 2     | formats-json    | `src/formats/json`                                    | model, io, @streamparser/json                                                             |
 | 2     | formats-parquet | `src/formats/parquet`                                 | model, hyparquet, hyparquet-writer                                                        |
@@ -317,7 +333,7 @@ Modules with the same build order can be built in parallel. Lower numbers come f
 | 3     | ingest          | `src/ingest`                                          | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson, formats-json, formats-parquet, formats-flatgeobuf, formats-kml, formats-shapefile |
 | 3     | rules           | `src/rules`                                           | model, io, table, units, geo                                                              |
 | 3     | steps           | `src/steps`                                           | model, table, units, geo                                                                  |
-| 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson, formats-kml, formats-flatgeobuf, formats-parquet |
+| 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson, formats-kml, formats-flatgeobuf, formats-geopackage, formats-parquet |
 | 3     | project         | `src/project`                                         | model, io                                                                                 |
 | 3     | ui-views        | `src/ui-views`                                        | model, engine-api, ui-shell, @tanstack/react-virtual, maplibre-gl, pmtiles                |
 | 4     | engine          | `src/engine`                                          | model, io, units, geo, engine-api, table, audit, ingest, rules, steps, export, project    |
@@ -734,6 +750,7 @@ Digests drive export read-back, `.twp` replay verification, the conformance suit
 | `shapefile` | QGIS / ArcGIS (Shapefile)          | ESRI Shapefile (slice 3, FR-EXP-04) in the CRS of the data, details below. Read-back adds `RB-SHP-STRUCTURE` and `RB-SHP-GEOMETRY` |
 | `kml`     | Google Earth (KML)                   | KML 2.2 (OGC 07-147r2, slice 3) in WGS 84, details below. Read-back adds `RB-KML-STRUCTURE` and `RB-KML-GEOMETRY` |
 | `flatgeobuf` | QGIS / ArcGIS / GDAL (FlatGeobuf) | FlatGeobuf 3 (slice 3) in the CRS of the data, details below; also what a Shapefile past 2 GB is delivered as (FR-EXP-03). Read-back adds `RB-FGB-STRUCTURE` and `RB-FGB-GEOMETRY` |
+| `geopackage` | QGIS / ArcGIS / GDAL (GeoPackage) | OGC GeoPackage 1.2 (slice 3, decision D-16) in the CRS of the data, details below. Read-back adds `RB-GPKG-STRUCTURE` and `RB-GPKG-GEOMETRY` |
 
 Excel profile details:
 
@@ -771,6 +788,17 @@ FlatGeobuf profile details:
 - **Substitutions (`TW-EXP-002`):** a geometry without a valid shape leaves its feature without a geometry; a position with more than three numbers keeps its first three.
 - **Read-back:** a reader apart from the writer checks the magic bytes and version, the name, the feature count, that there is no index, the geometry type, `has_z` and no measures, the CRS, the column types, every feature's type against the header's, and the envelope against the geometries read; the headers, the values by column digest, and every geometry against its row's, coordinate for coordinate. The native read-back reads one feature at a time. The browser tests add an independent Python reader (struct), and the parity suite requires both engines to write the same bytes. The file has not yet been opened in GDAL or QGIS in the test suites (section 16).
 
+GeoPackage profile details:
+
+- **File:** `data.gpkg`, an OGC GeoPackage 1.2 (application ID `GPKG`, user version 10200) on the SQLite file format writer of decision D-16: `gpkg_spatial_ref_sys`, `gpkg_contents` and `gpkg_geometry_columns` as the standard defines them, with their automatic indexes, the feature table `data`, and `sqlite_sequence`, since the feature ID is `INTEGER PRIMARY KEY AUTOINCREMENT` as GDAL makes it. No R-tree spatial index: QGIS and GDAL create one when asked.
+- **Layer:** one row of `gpkg_contents`: the table `data` of features, its identifier the dataset name (which QGIS and ArcGIS show), its extent the box of every position, and its last change the time of the export.
+- **CRS:** the system of the data by organisation `EPSG`, its code and its OGC WKT 1, written from the CRS registry with an AUTHORITY for every object; `OGC:CRS84` is EPSG 4326, whose x and y a GeoPackage takes as longitude and latitude. The rows for the undefined Cartesian (−1) and geographic (0) systems and for WGS 84 are always there. A system outside the registry is refused (export as FlatGeobuf, which records the EPSG code alone).
+- **Features:** one per row, in row order, with feature IDs 1, 2, 3…; the geometry in the column `geom` as GeoPackageBinary (little-endian, a point without an envelope, an empty geometry with the empty flag, every other geometry with its x and y envelope) holding ISO WKB. Any mix of kinds is kept, and heights are per geometry: a geometry has them when every position has one, and `gpkg_geometry_columns.z` says whether none, all or some geometries have them. The geometry type is the one kind when every geometry has it, else `GEOMETRY`.
+- **Fields:** every other column, named by its header `Name [unit]`: text as TEXT, whole numbers as INTEGER, numbers as REAL, booleans as BOOLEAN (0 and 1), dates as DATE and date-times as DATETIME text in the form the standard gives, other geometries as GeoJSON TEXT. Names of any length; the feature ID and geometry fields take the names `fid` and `geom`, or `fid_1` and `geom_1` when a column has those names (a substitution says so).
+- **Refusals, with a fix:** no geometry and no coordinate pair; a CRS not known, or outside the registry; two column names that SQLite would take as one (they differ only in the case of ASCII letters), or a name with a NUL character.
+- **Substitutions (`TW-EXP-002`):** a geometry without a valid shape leaves its feature without a geometry; a position with more than three numbers keeps its first three; a geometry with heights at some positions only is written without them.
+- **Read-back:** the product's SQLite reader, apart from the writer, checks the application ID and version, the three systems and the data's with its code and WKT, the one layer with its identifier, time and system, the geometry column's row, the declared types of the feature ID, geometry and fields, feature IDs 1, 2, 3… in order, every geometry's SRS ID, type, envelope and empty flag, the layer's extent and `sqlite_sequence`; the field names, the values by column digest, and every geometry against its row's, coordinate for coordinate. The native read-back reads one page at a time. The browser tests add SQLite itself as an independent reader (Python's sqlite3, with its integrity and foreign key checks and a WKB decoder of its own), and the parity suite requires both engines to write the same bytes but for the export time.
+
 ### 10.2 Pipeline
 
 ```text
@@ -803,6 +831,8 @@ On any failure, no package is offered. The validation report is shown, and `TW-E
 | RB-KML-GEOMETRY      | Every placemark's geometry equals its row's in the form a reader takes back from KML, coordinate for coordinate |
 | RB-FGB-STRUCTURE     | FlatGeobuf 3 magic bytes, the header named after the dataset, its feature count equal to the features, no spatial index, the expected geometry type, heights and no measures, the EPSG code of the data, column types by logical type, every feature of the header's type, an envelope that bounds the geometries |
 | RB-FGB-GEOMETRY      | Every feature's geometry equals its row's, positions of at most three numbers, coordinate for coordinate |
+| RB-GPKG-STRUCTURE    | GeoPackage application ID and version 1.2, the undefined systems, WGS 84 and the data's system by EPSG code and WKT, one feature layer named after the dataset with the export time and an extent that bounds the geometries, its geometry column row, declared field types, feature IDs 1, 2, 3… in row order, each geometry's SRS ID, type, envelope and empty flag, and `sqlite_sequence` |
+| RB-GPKG-GEOMETRY     | Every feature's geometry equals its row's, heights where every position of the geometry has one, coordinate for coordinate |
 | RB-GEOJSON-STRUCTURE | FeatureCollection, feature count, no `crs` member, positions within WGS84 bounds, rings closed with ≥ 4 positions, coordinate order consistent with the source |
 | RB-PARQUET-TYPES     | Every column has the physical and converted (or logical) type of its logical type; other writers' equivalent annotations are accepted (DuckDB's `INT_64`)      |
 | RB-PKG-CHECKSUMS     | Every package entry matches `CHECKSUMS.sha256` (compatible with `sha256sum -c`)                                                                                |
@@ -938,7 +968,7 @@ Nothing is lost when the page or the app closes unexpectedly. The engine's state
 | Golden              | Vitest                                                             | Each messy fixture: detections, schema, row count and issue counts by rule ID equal its `.expected.json`                                                        |
 | Conformance         | Vitest                                                             | Engine-agnostic workflow scenarios over `EngineApi` (runs on LocalEngine now; on the native engine later, unchanged)                                            |
 | E2E                 | Playwright 1.56.1, headless Chromium 1194                          | The real production build, the full workflow per format, offline guard, accessibility smoke; again with the native engine through the host bridge (D-14)       |
-| Independent oracles | Python 3.13 (openpyxl 3.1.5, csv, json), LibreOffice 24.2 headless | Exports re-read by independent implementations; digests or values compared                                                                                      |
+| Independent oracles | Python 3.13 (openpyxl 3.1.5, csv, json, sqlite3 with SQLite 3.53), LibreOffice 24.2 headless | Exports re-read by independent implementations; digests or values compared                                                                                      |
 
 ### 13.2 Messy-file library (`fixtures/messy/`)
 
@@ -1161,7 +1191,7 @@ Other menus from the PRD (Analysis, Map, Reports, Tools) appear when they have c
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | **1 (this document)** | Core workflow end to end on CSV/TSV, XLSX and GeoJSON in the browser engine; `.twp`; validated export packages                                                                                                                                                                                                                                                                                                                                              | `npm test` green; oracles pass                                            |
 | **2**                 | Native headless engine (Rust + DuckDB + Parquet) behind `stdioTransport`; conformance parity on slice 1 scenarios; 10 GB benchmark; Parquet working files and `.twp` caches (FR-IMP-09); recipes `.twr` with "only new or changed issues" (FR-RCP-01..03); autosave/crash recovery journal (OPFS / disk); `.xls`, Parquet and JSON import; Parquet export profile; mapping templates (FR-IMP-06); data health score (FR-VAL-05); CSV formula neutralisation | Parity suite green on both engines; benchmark published                   |
-| **3**                 | CRS transformation (one exact implementation in both engines, decision D-15: done, the `transform_crs` step in both engines and the UI); map view with MapLibre and offline PMTiles, linked to the grid, and the draw-an-area filter (done, section 15); density view for large point sets (FR-MAP-03; done, section 15); the Shapefile export profile for QGIS and ArcGIS with its rules (FR-EXP-04; done, section 10.1); the Google Earth (KML) profile (done, section 10.1); the FlatGeobuf profile, which also replaces a Shapefile past 2 GB (FR-EXP-03; done, section 10.1); GeoPackage; spatial import formats (FlatGeobuf, KML/KMZ and zipped Shapefiles done, FR-IMP-02; GeoPackage)                                                                                                                                                                                                     | Spatial reference cases; GDAL read-back                                   |
+| **3**                 | CRS transformation (one exact implementation in both engines, decision D-15: done, the `transform_crs` step in both engines and the UI); map view with MapLibre and offline PMTiles, linked to the grid, and the draw-an-area filter (done, section 15); density view for large point sets (FR-MAP-03; done, section 15); the Shapefile export profile for QGIS and ArcGIS with its rules (FR-EXP-04; done, section 10.1); the Google Earth (KML) profile (done, section 10.1); the FlatGeobuf profile, which also replaces a Shapefile past 2 GB (FR-EXP-03; done, section 10.1); the GeoPackage profile on an SQLite file format writer and reader of our own (done, section 10.1, decision D-16); spatial import formats (FlatGeobuf, KML/KMZ and zipped Shapefiles done, FR-IMP-02; GeoPackage)                                                                                                                                                                                                     | Spatial reference cases; GDAL read-back                                   |
 | **4**                 | Conventions engine (FR-CNV); signed `.twrules` rule-packs with offline install and policy lock; local profiles with roles, Reviewer mode, sign-off stamps, assignment (FR-AUD-03/04); comparison view (FR-AUD-05); time-series resampling (FR-PRC-03); joins and calculated fields (FR-PRC-04)                                                                                                                                                              | Rule-pack signature tests; method reference cases                         |
 | **5**                 | Tauri desktop shell on a Windows build runner; installers (per-user, MSI, portable); code signing; software bill of materials; dockable panels, command palette, saved layouts, i18n/RTL; full WCAG 2.2 AA audit; PDF report                                                                                                                                                                                                                                | R0 exit: core suite green, 10 GB benchmark met, messy-file library passes |
 

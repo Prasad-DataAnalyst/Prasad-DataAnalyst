@@ -5,6 +5,19 @@
  */
 import { tokenizeAll } from '@tw/formats-csv';
 import { FGB_COLUMN, readFlatGeobuf, type FgbCrs, type FgbReadValue } from '@tw/formats-flatgeobuf';
+import {
+  GPKG_APPLICATION_ID,
+  GPKG_USER_VERSION,
+  envelopeOf,
+  gpkgFeatures,
+  gpkgTypeName,
+  namedRows,
+  readGeoPackage,
+  readGpkgGeometry,
+  type GpkgFile,
+  type GpkgSrs,
+  type SqlValue,
+} from '@tw/formats-geopackage';
 import { readGeoJsonAll } from '@tw/formats-geojson';
 import { readKml } from '@tw/formats-kml';
 import { PARQUET_TYPES, readParquet } from '@tw/formats-parquet';
@@ -23,6 +36,7 @@ import {
   type ValidationCheck,
 } from '@tw/model';
 import { columnDigest } from '@tw/table';
+import { GPKG_TABLE, gpkgColumnType } from './geopackage';
 import { parseHeader } from './profiles';
 import type { ExpectedShape } from './shape';
 import { SHAPE, geometryOfRecord } from './shapefile';
@@ -549,7 +563,7 @@ function dbfType(type: ExportColumn['type']): string {
   return type === 'integer' || type === 'number' ? 'N' : type === 'boolean' ? 'L' : type === 'date' ? 'D' : 'C';
 }
 
-function sameBox(a: readonly number[], b: readonly number[]): boolean {
+function sameBox(a: readonly (number | null)[], b: readonly (number | null)[]): boolean {
   return a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
 }
 
@@ -891,6 +905,177 @@ function readPackage(zip: Uint8Array, manifest: ExportManifest): ValidationCheck
   return checks;
 }
 
+// ---------------------------------------------------------------------------------------------
+// GeoPackage
+
+export interface GeoPackageReadOptions {
+  /** The name gpkg_contents must give the layer: the dataset's. */
+  identifier: string;
+  /** The time gpkg_contents must give as the layer's last change: the export's. */
+  lastChange: string;
+  /** The row gpkg_spatial_ref_sys must hold for the data. */
+  srs: GpkgSrs | null;
+  fid: string;
+  geom: string;
+  /** The type gpkg_geometry_columns must state, and every geometry have unless it is GEOMETRY. */
+  geometryType: string;
+  z: 0 | 1 | 2;
+  /** The digest of the rows' geometries, in the form a reader takes back from a GeoPackage. */
+  geometrySha256: string;
+}
+
+function retypeGpkg(v: SqlValue, type: ExportColumn['type']): CellValue | undefined {
+  if (v === null) return null;
+  switch (type) {
+    case 'integer':
+      return typeof v === 'bigint' && v >= -(2n ** 53n) + 1n && v <= 2n ** 53n - 1n ? Number(v) : undefined;
+    case 'number':
+      return typeof v === 'number' ? v : undefined;
+    case 'boolean':
+      return v === 0n ? false : v === 1n ? true : undefined;
+    default:
+      return typeof v === 'string' ? retypeText(v, type) : undefined;
+  }
+}
+
+function readGeoPackageFile(
+  bytes: Uint8Array,
+  expected: ExpectedShape,
+  file: string,
+  o: GeoPackageReadOptions,
+): ValidationCheck[] {
+  let gpkg: GpkgFile;
+  try {
+    gpkg = readGeoPackage(bytes);
+  } catch (e) {
+    return [check('RB-OPEN', false, `The file does not open as a GeoPackage: ${messageOf(e)}.`, file)];
+  }
+  const checks: ValidationCheck[] = [check('RB-OPEN', true, 'The file opens as an SQLite database.', file)];
+  const problems: string[] = [];
+  if (gpkg.applicationId !== GPKG_APPLICATION_ID) problems.push('the database is not marked as a GeoPackage');
+  if (gpkg.userVersion !== GPKG_USER_VERSION)
+    problems.push(`the database states version ${gpkg.userVersion}, not 10200`);
+  const systems = new Map(gpkg.srs.map((s) => [s.id, s]));
+  for (const id of [-1, 0, 4326]) if (!systems.has(id)) problems.push(`gpkg_spatial_ref_sys has no row ${id}`);
+  const srs = o.srs === null ? undefined : systems.get(o.srs.id);
+  if (
+    o.srs === null ||
+    srs === undefined ||
+    srs.organization !== 'EPSG' ||
+    srs.code !== o.srs.code ||
+    srs.definition !== o.srs.definition
+  ) {
+    problems.push('gpkg_spatial_ref_sys does not describe the coordinate reference system of the data');
+  }
+  const layer = gpkg.layers.length === 1 ? gpkg.layers[0] : undefined;
+  if (layer === undefined) {
+    problems.push(`gpkg_contents lists ${gpkg.layers.length} tables, not one`);
+    return [
+      ...checks,
+      check('RB-GPKG-STRUCTURE', false, `GeoPackage structure problems: ${problems.join('; ')}.`, file),
+    ];
+  }
+  const srsId = o.srs?.id ?? null;
+  if (layer.table !== GPKG_TABLE || layer.dataType !== 'features')
+    problems.push('gpkg_contents does not list the feature table');
+  if (layer.identifier !== o.identifier) problems.push('the layer is not named after the dataset');
+  if (layer.lastChange !== o.lastChange) problems.push('the last change of the layer is not the time of the export');
+  if (layer.srsId !== srsId) problems.push('gpkg_contents does not give the layer the system of the data');
+  const g = layer.geometry;
+  if (g === null || g.column !== o.geom || g.type !== o.geometryType || g.srsId !== srsId || g.z !== o.z || g.m !== 0) {
+    problems.push('gpkg_geometry_columns does not describe the geometry column as written');
+  }
+  const [fid, geom, ...fields] = layer.columns;
+  if (fid === undefined || !fid.rowid || fid.name !== o.fid)
+    problems.push(`the first column is not the feature ID "${o.fid}"`);
+  if (geom === undefined || geom.name !== o.geom || geom.type !== o.geometryType) {
+    problems.push(`the second column is not the geometry column "${o.geom}" of type ${o.geometryType}`);
+  }
+  expected.columns.forEach((col, j) => {
+    const c = fields[j];
+    if (c !== undefined && c.type !== gpkgColumnType(col.type))
+      problems.push(`the field ${c.name} is declared ${c.type}`);
+  });
+  const values: (CellValue | undefined)[][] = expected.columns.map(() => []);
+  const shapes: CellValue[] = [];
+  let count = 0;
+  let outOfOrder = 0;
+  let otherSystem = 0;
+  let mistyped = 0;
+  let misboxed = 0;
+  let box: number[] | null = null;
+  try {
+    for (const f of gpkgFeatures(gpkg, layer)) {
+      count++;
+      if (f.fid !== BigInt(count)) outOfOrder++;
+      expected.columns.forEach((col, j) => values[j]?.push(retypeGpkg(f.values[j] ?? null, col.type)));
+      if (f.blob === null) {
+        shapes.push(null);
+        continue;
+      }
+      const read = readGpkgGeometry(f.blob);
+      if (read.srsId !== srsId) otherSystem++;
+      if (o.geometryType !== 'GEOMETRY' && gpkgTypeName(read.geometry.type) !== o.geometryType) mistyped++;
+      const env = envelopeOf(read.geometry);
+      const fits =
+        read.empty === (env === null) &&
+        (read.envelope === null
+          ? env === null || read.geometry.type === 'Point'
+          : env !== null && sameBox(read.envelope, env));
+      if (!fits) misboxed++;
+      if (env !== null) {
+        box =
+          box === null
+            ? [env[0], env[2], env[1], env[3]]
+            : [
+                Math.min(box[0] as number, env[0]),
+                Math.min(box[1] as number, env[2]),
+                Math.max(box[2] as number, env[1]),
+                Math.max(box[3] as number, env[3]),
+              ];
+      }
+      shapes.push({ geometry: read.geometry });
+    }
+  } catch (e) {
+    problems.push(`the features do not read: ${messageOf(e)}`);
+  }
+  if (outOfOrder > 0) problems.push('the feature IDs are not 1, 2, 3… in row order');
+  if (otherSystem > 0) problems.push(`${otherSystem} geometries name another system`);
+  if (mistyped > 0) problems.push(`${mistyped} geometries are not of the type the layer states`);
+  if (misboxed > 0) problems.push(`${misboxed} geometries carry an envelope or empty flag that does not fit them`);
+  if (!sameBox(layer.extent, box ?? [null, null, null, null]))
+    problems.push('the extent of the layer does not bound its geometries');
+  const sequence = [...namedRows(gpkg, 'sqlite_sequence')];
+  const counted =
+    sequence.length === 1 && sequence[0]?.get('name') === GPKG_TABLE && sequence[0]?.get('seq') === BigInt(count);
+  if (count > 0 ? !counted : sequence.length > 0) problems.push('sqlite_sequence does not hold the last feature ID');
+  checks.push(
+    problems.length === 0
+      ? check(
+          'RB-GPKG-STRUCTURE',
+          true,
+          `A GeoPackage 1.2 with one layer of ${count} features in row order, typed fields, the system of the data by its EPSG code and Well-Known Text, and an extent that bounds the geometries.`,
+          file,
+        )
+      : check('RB-GPKG-STRUCTURE', false, `GeoPackage structure problems: ${problems.slice(0, 5).join('; ')}.`, file),
+  );
+  checks.push(
+    headerCheck(
+      expected.columns,
+      fields.map((c) => c.name),
+      file,
+    ),
+  );
+  checks.push(rowsCheck(count, expected.rowCount, file));
+  checks.push(valuesCheck(expected.columns, values, file));
+  checks.push(
+    columnDigest(shapes) === o.geometrySha256 && shapes.length === expected.rowCount
+      ? check('RB-GPKG-GEOMETRY', true, "Every feature's geometry matches its row's, coordinate for coordinate.", file)
+      : check('RB-GPKG-GEOMETRY', false, 'The feature geometries differ from the geometries of the rows.', file),
+  );
+  return checks;
+}
+
 export const readBack: {
   csv(bytes: Uint8Array, expected: ExpectedShape, file: string, o?: { neutralized?: boolean }): ValidationCheck[];
   parquet(bytes: Uint8Array, expected: ExpectedShape, file: string): Promise<ValidationCheck[]>;
@@ -904,6 +1089,7 @@ export const readBack: {
   shapefile(parts: ShapefileParts, expected: ExpectedShape, o: ShapefileReadOptions): ValidationCheck[];
   kml(bytes: Uint8Array, expected: ExpectedShape, file: string, o: KmlReadOptions): ValidationCheck[];
   flatgeobuf(bytes: Uint8Array, expected: ExpectedShape, file: string, o: FlatGeobufReadOptions): ValidationCheck[];
+  geopackage(bytes: Uint8Array, expected: ExpectedShape, file: string, o: GeoPackageReadOptions): ValidationCheck[];
   package(zip: Uint8Array, manifest: ExportManifest): ValidationCheck[];
 } = Object.freeze({
   csv: readCsv,
@@ -913,5 +1099,6 @@ export const readBack: {
   shapefile: readShapefile,
   kml: readKmlFile,
   flatgeobuf: readFlatGeobufFile,
+  geopackage: readGeoPackageFile,
   package: readPackage,
 });

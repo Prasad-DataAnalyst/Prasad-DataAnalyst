@@ -42,6 +42,16 @@ import { readBack, type ShapefileParts } from './readback';
 import { issuesCsv, renderReadme } from './readme';
 import { expectedShape, type ExpectedShape } from './shape';
 import { analyseFgb, expectedFgbGeometries, fgbColumns, fgbCrs, fgbFeatures } from './flatgeobuf';
+import {
+  GPKG_TABLE,
+  analyseGpkg,
+  expectedGpkgGeometries,
+  gpkgColumns,
+  gpkgFeatures,
+  gpkgOwnColumns,
+  gpkgSrs,
+  gpkgSrsRows,
+} from './geopackage';
 import { expectedKmlGeometries, placemarks } from './kml';
 import {
   analyseShapes,
@@ -217,6 +227,31 @@ function writeFiles(input: ExportInput, plan: ExportPlan, writers: ExportWriters
         };
         return { ...one, bytes: writers.flatgeobuf(header, fgbFeatures(view, source, columns)) };
       }
+      case 'geopackage': {
+        const { code, source } = shapeSourceOf(input);
+        const a = analyseGpkg(view, source);
+        const columns = f.columns.map((id) => view.columnSchema(id));
+        const srs = gpkgSrs(code);
+        if (srs === null)
+          throw new EngineError('INTERNAL', `No description of ${code} to write.`, 'Report this problem.');
+        const fields = gpkgColumns(columns);
+        const own = gpkgOwnColumns(fields.map((c) => c.name));
+        const header = {
+          table: GPKG_TABLE,
+          identifier: view.schema.name,
+          lastChange: input.at,
+          srs: gpkgSrsRows(srs),
+          srsId: srs.id,
+          fidColumn: own.fid,
+          geometryColumn: own.geom,
+          geometryType: a.geometryType,
+          z: a.z,
+          extent: a.extent,
+          columns: fields,
+          features: view.rowCount,
+        };
+        return { ...one, bytes: writers.geopackage(header, gpkgFeatures(view, source, columns, a.z)) };
+      }
       case 'csv':
         return {
           ...one,
@@ -269,6 +304,19 @@ async function validateFile(
         hasZ: a.hasZ,
         crs: fgbCrs(code),
         geometrySha256: columnDigest(expectedFgbGeometries(input.view, source)),
+      });
+    }
+    case 'geopackage': {
+      const { code, source } = shapeSourceOf(input);
+      const a = analyseGpkg(input.view, source);
+      return readBack.geopackage(bytes, file.shape, file.path, {
+        identifier: input.view.schema.name,
+        lastChange: input.at,
+        srs: gpkgSrs(code),
+        ...gpkgOwnColumns(file.shape.columns.map((c) => c.header)),
+        geometryType: a.geometryType,
+        z: a.z,
+        geometrySha256: columnDigest(expectedGpkgGeometries(input.view, source, a.z)),
       });
     }
     case 'shapefile': {

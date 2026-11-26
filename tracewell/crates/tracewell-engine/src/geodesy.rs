@@ -1152,6 +1152,120 @@ pub fn esri_wkt(code: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// OGC WKT 1 (wkt.ts): EPSG names and an AUTHORITY for every object with an EPSG code, as a
+// GeoPackage's gpkg_spatial_ref_sys holds it.
+
+/// A number as OGC WKT writes it (ogcNumber): 15 significant digits, a whole number as it is.
+fn ogc_number(x: f64) -> String {
+    let rounded: f64 = format!("{x:.14e}").parse().unwrap_or(x);
+    crate::canonical::canonical_number(rounded)
+}
+
+fn authority(code: &str) -> String {
+    format!("AUTHORITY[\"EPSG\",\"{code}\"]")
+}
+
+fn ogc_geogcs(code: &str) -> Option<String> {
+    let r = registry();
+    let g = &r["geographic"][code];
+    let datum_code = g["datum"].as_str()?;
+    let datum = &r["datums"][datum_code];
+    let el_code = datum["ellipsoid"].as_str()?;
+    let el = &r["ellipsoids"][el_code];
+    let a = el["a"].as_f64()?;
+    let inv_f = match el["invF"].as_f64() {
+        Some(f) => f,
+        None => a / (a - el["b"].as_f64()?),
+    };
+    let esri = datum["esri"].as_str()?;
+    Some(format!(
+        "GEOGCS[\"{}\",DATUM[\"{}\",SPHEROID[\"{}\",{},{},{}],{}],PRIMEM[\"Greenwich\",0,{}],UNIT[\"degree\",{},{}],{}]",
+        g["name"].as_str()?,
+        esri.strip_prefix("D_").unwrap_or(esri),
+        el["name"].as_str()?,
+        ogc_number(a),
+        ogc_number(inv_f),
+        authority(el_code),
+        authority(datum_code),
+        authority("8901"),
+        ogc_number(PI / 180.0),
+        authority("9122"),
+        authority(code)
+    ))
+}
+
+fn ogc_projcs(code: &str, name: &str, raw: &Value) -> Option<String> {
+    let base = ogc_geogcs(raw["base"].as_str()?)?;
+    let parameter =
+        |n: &str, key: &str| format!("PARAMETER[\"{n}\",{}]", ogc_number(num(raw, key)));
+    let params = if raw["method"] == "9807" {
+        [
+            "PROJECTION[\"Transverse_Mercator\"]".to_string(),
+            parameter("latitude_of_origin", "lat0"),
+            parameter("central_meridian", "lon0"),
+            parameter("scale_factor", "k0"),
+        ]
+        .join(",")
+    } else {
+        [
+            "PROJECTION[\"Lambert_Conformal_Conic_2SP\"]".to_string(),
+            parameter("latitude_of_origin", "latF"),
+            parameter("central_meridian", "lonF"),
+            parameter("standard_parallel_1", "lat1"),
+            parameter("standard_parallel_2", "lat2"),
+        ]
+        .join(",")
+    };
+    Some(format!(
+        "PROJCS[\"{name}\",{base},{params},{},{},UNIT[\"metre\",1,{}],{}]",
+        parameter("false_easting", "fe"),
+        parameter("false_northing", "fn"),
+        authority("9001"),
+        authority(code)
+    ))
+}
+
+/// The OGC WKT 1 of a CRS the registry holds (ogcWkt), or None; OGC:CRS84 is described as EPSG:4326.
+pub fn ogc_wkt(code: &str) -> Option<String> {
+    if code == "OGC:CRS84" {
+        return ogc_geogcs("4326");
+    }
+    let n = code
+        .strip_prefix("EPSG:")
+        .filter(|n| (4..=5).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))?;
+    let r = registry();
+    let projected = &r["projected"][n];
+    if projected.is_object() {
+        return ogc_projcs(n, projected["name"].as_str()?, projected);
+    }
+    if r["geographic"][n].is_object() {
+        return ogc_geogcs(n);
+    }
+    let number: i64 = n.parse().ok()?;
+    for u in r["utm"].as_array()? {
+        let zone = number - u["first"].as_i64()? + u["firstZone"].as_i64()?;
+        if zone < u["firstZone"].as_i64()? || zone > u["lastZone"].as_i64()? {
+            continue;
+        }
+        let raw = serde_json::json!({
+            "base": u["base"],
+            "method": "9807",
+            "lat0": 0,
+            "lon0": zone * 6 - 183,
+            "k0": 0.9996,
+            "fe": 500000,
+            "fn": if u["south"] == true { 10000000 } else { 0 },
+        });
+        return ogc_projcs(
+            n,
+            &u["name"].as_str()?.replace("{zone}", &zone.to_string()),
+            &raw,
+        );
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------------------------
 // Geometries (places.ts)
 
 fn positions(c: &J, t: &Transformer) -> Option<J> {
@@ -1372,6 +1486,25 @@ mod tests {
                 .operations()
                 .is_empty()
         );
+    }
+
+    /// The OGC WKT wkt.test.ts expects.
+    #[test]
+    fn writes_the_ogc_wkt_the_typescript_code_writes() {
+        assert_eq!(
+            ogc_wkt("EPSG:4326").unwrap(),
+            r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]]"#
+        );
+        assert_eq!(ogc_wkt("OGC:CRS84"), ogc_wkt("EPSG:4326"));
+        assert_eq!(
+            ogc_wkt("EPSG:2154").unwrap(),
+            r#"PROJCS["RGF93 v1 / Lambert-93",GEOGCS["RGF93 v1",DATUM["RGF_1993",SPHEROID["GRS 1980",6378137,298.257222101,AUTHORITY["EPSG","7019"]],AUTHORITY["EPSG","6171"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4171"]],PROJECTION["Lambert_Conformal_Conic_2SP"],PARAMETER["latitude_of_origin",46.5],PARAMETER["central_meridian",3],PARAMETER["standard_parallel_1",49],PARAMETER["standard_parallel_2",44],PARAMETER["false_easting",700000],PARAMETER["false_northing",6600000],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AUTHORITY["EPSG","2154"]]"#
+        );
+        let utm = ogc_wkt("EPSG:32760").unwrap();
+        assert!(utm.starts_with(r#"PROJCS["WGS 84 / UTM zone 60S",GEOGCS["WGS 84","#));
+        assert!(utm.ends_with(r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",177],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",10000000],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AUTHORITY["EPSG","32760"]]"#));
+        assert!(ogc_wkt("EPSG:3857").is_none());
+        assert!(ogc_wkt("ESRI:102001").is_none());
     }
 
     /// The cells tiles.test.ts expects, so a point lands in the same cell in both engines.

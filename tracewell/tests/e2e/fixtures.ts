@@ -35,7 +35,7 @@ export async function chooseFile(page: Page, shortcut: string, path: string): Pr
   throw new Error(`No file chooser opened after pressing ${shortcut} three times.`);
 }
 
-export type ExportProfileId = 'excel' | 'csv' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf';
+export type ExportProfileId = 'excel' | 'csv' | 'geojson' | 'shapefile' | 'kml' | 'flatgeobuf' | 'geopackage';
 
 /** The engine a test's page talks to. */
 export type EngineKind = 'lite' | 'native';
