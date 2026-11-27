@@ -1,5 +1,5 @@
 /** Always-visible facts: offline state, save state, rules, units, conventions, rows and assumptions. */
-import type { ProjectSummary } from '@tw/model';
+import { conventionsText, type Conventions, type ProjectSummary } from '@tw/model';
 import { formatCount } from './format';
 
 export function savedText(p: ProjectSummary | null): string {
@@ -7,6 +7,25 @@ export function savedText(p: ProjectSummary | null): string {
   if (p.readOnly) return 'Read-only';
   if (p.dirty || p.lastSavedAt === null) return 'Unsaved';
   return `Saved ${p.lastSavedAt.slice(11, 16)} UTC`;
+}
+
+const CONDITIONS_SHORT: Readonly<Record<string, string>> = {
+  'std-60F-14.696psia': '60 °F / 14.696 psia',
+  'std-15C-101.325kPa': '15 °C / 101.325 kPa',
+  'std-0C-101.325kPa': '0 °C / 101.325 kPa',
+};
+
+/** The conventions in a few words for the status bar; the full text is its tooltip. */
+export function conventionsShort(c: Conventions | undefined): string {
+  if (c === undefined) return 'not set';
+  const parts = [
+    c.standardConditions === null ? null : (CONDITIONS_SHORT[c.standardConditions] ?? c.standardConditions),
+    c.energyUnit,
+    c.combustionTemperature === null ? null : `combustion ${c.combustionTemperature} °C`,
+    c.meteringTemperature === null ? null : `metering ${c.meteringTemperature} °C`,
+    c.tonneToEnergy === null ? null : `${c.tonneToEnergy.factor} ${c.tonneToEnergy.unit}`,
+  ].filter((x) => x !== null);
+  return parts.length === 0 ? 'not set' : parts.join(' · ');
 }
 
 export function StatusBar(p: { project: ProjectSummary | null; edition: 'lite' | 'desktop' }): React.JSX.Element {
@@ -22,7 +41,12 @@ export function StatusBar(p: { project: ProjectSummary | null; edition: 'lite' |
       <span>{savedText(project)}</span>
       <span>Rules {rules === undefined || rules === '' ? 'built-in' : rules}</span>
       <span>Units {project?.unitSystem ?? 'SI'}</span>
-      <span>Conventions: not set</span>
+      <span
+        data-testid="tw-status-conventions"
+        title={project === null ? undefined : (conventionsText(project.conventions) ?? undefined)}
+      >
+        Conventions: {conventionsShort(project?.conventions)}
+      </span>
       <span>{formatCount(rows)} rows</span>
       <span>{formatCount(assumed)} assumed</span>
       <span className="tw-status-edition">{p.edition === 'lite' ? 'Lite edition' : 'Desktop edition'}</span>

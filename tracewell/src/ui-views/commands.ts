@@ -141,6 +141,13 @@ export function defaultCommands(): Command[] {
       enabled: writable,
       run: () => openDialog({ kind: 'area' }),
     },
+    {
+      id: 'file.conventions',
+      label: 'Conventions…',
+      menu: 'file',
+      enabled: writable,
+      run: () => openDialog({ kind: 'conventions' }),
+    },
 
     // Edit
     {

@@ -3,6 +3,7 @@
  * Every change goes through append(), and changes that can be reverted register how to undo them.
  */
 import {
+  NO_CONVENTIONS,
   AUDIT_GENESIS_PREFIX,
   canonicalJson,
   EngineError,
@@ -12,6 +13,7 @@ import {
   type AuditEntry,
   type AuditSeq,
   type BBox,
+  type Conventions,
   type ChainReport,
   type CheckSummary,
   type ColumnId,
@@ -80,6 +82,7 @@ export class StubProject {
   readonly undo = new Map<AuditSeq, Revert>();
   readonly createdAt: IsoUtc;
   area: BBox | null = null;
+  conventions: Conventions = { ...NO_CONVENTIONS };
   dirty = false;
   readOnly = false;
   lastSavedAt: IsoUtc | null = null;
@@ -324,6 +327,7 @@ export class StubProject {
       profile: { ...this.profile },
       unitSystem: this.unitSystem,
       projectArea: this.area === null ? null : [...this.area],
+      conventions: structuredClone(this.conventions),
       readOnly: this.readOnly,
       dirty: this.dirty,
       lastSavedAt: this.lastSavedAt,

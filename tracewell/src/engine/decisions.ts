@@ -6,6 +6,8 @@ import { cellParser } from '@tw/ingest';
 import {
   EngineError,
   MIN_REASON_LENGTH,
+  canonicalJson,
+  conventionsProblem,
   isDateCell,
   isDateTimeCell,
   isGeometryCell,
@@ -13,6 +15,7 @@ import {
   type AuditEntry,
   type BBox,
   type CellValue,
+  type Conventions,
   type Decision,
   type JsonValue,
   type LogicalType,
@@ -32,6 +35,7 @@ const REVERTIBLE = new Set([
   'step.apply',
   'detection.override',
   'project.area',
+  'project.conventions',
 ]);
 const LOGICAL_TYPES = new Set<LogicalType>(['string', 'integer', 'number', 'boolean', 'date', 'datetime', 'geometry']);
 const ROLES = new Set([
@@ -424,6 +428,44 @@ function areaDraft(state: ProjectState, d: Extract<Decision, { kind: 'set_projec
   return { action: 'project.area', target: {}, old: state.projectArea, new: b, reason };
 }
 
+const CONVENTIONS_FIX =
+  'Choose each convention from its list or leave it unset, and give a tonne-to-energy factor greater than 0 with its unit and its source.';
+
+/** The conventions as they are recorded: their members in one order, the factor's source trimmed. */
+export function recordedConventions(c: Conventions): Conventions {
+  const t = c.tonneToEnergy;
+  return {
+    standardConditions: c.standardConditions,
+    energyUnit: c.energyUnit,
+    combustionTemperature: c.combustionTemperature,
+    meteringTemperature: c.meteringTemperature,
+    tonneToEnergy: t === null ? null : { factor: t.factor, unit: t.unit, source: t.source.trim() },
+  };
+}
+
+function conventionsDraft(state: ProjectState, d: Extract<Decision, { kind: 'set_conventions' }>): AuditDraft {
+  const reason = requireReason(d.reason);
+  const problem = conventionsProblem(d.conventions);
+  if (problem !== null) {
+    throw new EngineError('INVALID_INPUT', `The conventions are not valid: ${problem}.`, CONVENTIONS_FIX);
+  }
+  const next = recordedConventions(d.conventions);
+  if (canonicalJson(next as unknown as JsonValue) === canonicalJson(state.conventions as unknown as JsonValue)) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      'The project already works to these conventions.',
+      'Change at least one convention, or close the dialog.',
+    );
+  }
+  return {
+    action: 'project.conventions',
+    target: {},
+    old: state.conventions as unknown as JsonValue,
+    new: next as unknown as JsonValue,
+    reason,
+  };
+}
+
 function revertDraft(state: ProjectState, d: Extract<Decision, { kind: 'revert' }>): AuditDraft {
   const reason = requireReason(d.reason);
   const target = state.log.get(d.seq);
@@ -450,7 +492,7 @@ function revertDraft(state: ProjectState, d: Extract<Decision, { kind: 'revert' 
 /** Refuses a revert that would undo more than its own entry, or that no longer has anything to undo. */
 function requireRevertible(state: ProjectState, target: AuditEntry): void {
   const ds = target.target.datasetId === undefined ? undefined : state.datasets.get(target.target.datasetId);
-  if (target.action === 'project.area') return;
+  if (target.action === 'project.area' || target.action === 'project.conventions') return;
   if (ds === undefined)
     throw new EngineError(
       'NOT_FOUND',
@@ -509,6 +551,8 @@ export function decisionDraft(state: ProjectState, d: Decision): AuditDraft {
       return overrideDraft(state, d);
     case 'set_project_area':
       return areaDraft(state, d);
+    case 'set_conventions':
+      return conventionsDraft(state, d);
     case 'revert':
       return revertDraft(state, d);
   }

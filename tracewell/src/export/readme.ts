@@ -1,6 +1,6 @@
 /** README.txt and issues.csv inside an export package (SAD section 10.4). */
 import { writeCsv } from '@tw/formats-csv';
-import type { ExportManifest, Issue } from '@tw/model';
+import { conventionsText, type ExportManifest, type Issue } from '@tw/model';
 
 export function renderReadme(m: ExportManifest, stepDescriptions: string[]): string {
   const data = m.files.filter((f) => f.role === 'data');
@@ -34,6 +34,7 @@ export function renderReadme(m: ExportManifest, stepDescriptions: string[]): str
     `RULE PACKS (${m.rulePacks.length})`,
     ...(m.rulePacks.length === 0 ? ['  none'] : m.rulePacks.map((r) => `  ${r.id} ${r.version}  SHA-256 ${r.sha256}`)),
     `UNIT REGISTRY: ${m.unitRegistry.version}  SHA-256 ${m.unitRegistry.sha256}`,
+    ...(m.conventions === undefined ? [] : [`CONVENTIONS: ${conventionsText(m.conventions) ?? 'none set'}`]),
     '',
     `STEPS (${stepDescriptions.length})`,
     ...(stepDescriptions.length === 0 ? ['  none'] : stepDescriptions.map((d, i) => `  ${i + 1}. ${d}`)),

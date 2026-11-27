@@ -19,6 +19,7 @@ import {
   type ByteSource,
   type CellValue,
   type ColumnOverride,
+  type Conventions,
   type CrsRef,
   type Detection,
   type ExportRecord,
@@ -339,6 +340,9 @@ export async function applyEntry(state: ProjectState, e: AuditEntry, env: Reduce
       for (const ds of state.datasets.values()) await recheck(state, ds, e.seq);
       return;
     }
+    case 'project.conventions':
+      state.conventions = structuredClone(e.new) as unknown as Conventions;
+      return;
     case 'export.create': {
       state.exports.push(payload<{ record: ExportRecord }>(e).record);
       return;
@@ -413,6 +417,9 @@ async function applyRevert(state: ProjectState, e: AuditEntry, env: ReduceEnv): 
       for (const ds of state.datasets.values()) await recheck(state, ds, e.seq);
       return;
     }
+    case 'project.conventions':
+      state.conventions = structuredClone(target.old) as unknown as Conventions;
+      return;
     default:
       return;
   }

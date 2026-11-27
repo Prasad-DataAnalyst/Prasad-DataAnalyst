@@ -23,6 +23,7 @@ const ACTION_TEXT: Record<AuditAction, string> = {
   'step.remove': 'Step removed',
   'entry.revert': 'Change reverted',
   'project.area': 'Project area set',
+  'project.conventions': 'Conventions set',
   'export.create': 'Exported',
   'project.save': 'Project saved',
   'recipe.apply': 'Recipe run',

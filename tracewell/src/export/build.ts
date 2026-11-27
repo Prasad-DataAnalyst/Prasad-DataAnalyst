@@ -4,6 +4,7 @@
  */
 import { checksumsFile, readZip, sha256Hex, writeZip, type ZipEntryInput } from '@tw/io';
 import {
+  conventionsText,
   EngineError,
   canonicalJson,
   schemas,
@@ -25,6 +26,7 @@ import {
   type Sha256Hex,
   type Step,
   type ValidationCheck,
+  type Conventions,
 } from '@tw/model';
 import { esriWkt } from '@tw/geo';
 import { columnDigest, viewDigest, type View } from '@tw/table';
@@ -96,6 +98,8 @@ export interface ExportInput {
   auditHead: { seq: AuditSeq; hash: Sha256Hex };
   /** CSV data files: prefix an apostrophe to text a spreadsheet would run as a formula. */
   neutralizeFormulas?: boolean;
+  /** The project's conventions; the manifest and README state them when at least one is set. */
+  conventions?: Conventions;
   /** Format limits; only tests lower them. */
   limits?: ExportLimits;
 }
@@ -426,6 +430,9 @@ export async function buildExport(
     assumptions: input.assumptions,
     substitutions: plan.substitutions,
     options: { neutralizeFormulas: input.neutralizeFormulas === true },
+    ...(input.conventions === undefined || conventionsText(input.conventions) === null
+      ? {}
+      : { conventions: structuredClone(input.conventions) }),
     validation,
     auditHead: input.auditHead,
   };

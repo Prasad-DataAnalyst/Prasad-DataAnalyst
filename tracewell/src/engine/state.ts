@@ -1,23 +1,25 @@
 /** Project state: everything rebuilt by replaying the audit log over the originals (SAD section 8.1). */
 import { AuditLog } from '@tw/audit';
 import type { ImportSpec, IngestNote } from '@tw/ingest';
-import type {
-  Assumption,
-  AuditSeq,
-  BBox,
-  DatasetId,
-  ExportRecord,
-  FileId,
-  IsoUtc,
-  IssueComment,
-  IssueDraft,
-  IssueId,
-  OriginalFileInfo,
-  ProjectId,
-  Recipe,
-  RulePackRef,
-  Step,
-  UserProfile,
+import {
+  NO_CONVENTIONS,
+  type Assumption,
+  type AuditSeq,
+  type BBox,
+  type Conventions,
+  type DatasetId,
+  type ExportRecord,
+  type FileId,
+  type IsoUtc,
+  type IssueComment,
+  type IssueDraft,
+  type IssueId,
+  type OriginalFileInfo,
+  type ProjectId,
+  type Recipe,
+  type RulePackRef,
+  type Step,
+  type UserProfile,
 } from '@tw/model';
 import { Overlay, RowSet, type Dataset } from '@tw/table';
 
@@ -64,6 +66,7 @@ export interface ProjectState {
   profile: UserProfile;
   unitSystem: 'SI' | 'Oilfield';
   projectArea: BBox | null;
+  conventions: Conventions;
   readOnly: boolean;
   lastSavedAt: IsoUtc | null;
   lastSavedSeq: AuditSeq | null;
@@ -88,6 +91,7 @@ export function emptyProject(id: ProjectId, log: AuditLog = new AuditLog(id)): P
     profile: { id: '', name: '', role: 'Analyst' },
     unitSystem: 'SI',
     projectArea: null,
+    conventions: { ...NO_CONVENTIONS },
     readOnly: false,
     lastSavedAt: null,
     lastSavedSeq: null,

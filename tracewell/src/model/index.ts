@@ -6,6 +6,7 @@ export type * from './ids';
 export type * from './schema';
 export type * from './formats';
 export type * from './units';
+export type * from './conventions';
 export type * from './rules';
 export type * from './issues';
 export type * from './audit';
@@ -36,6 +37,18 @@ export { detection, userDetection } from './detection';
 
 export type { EngineErrorData, ErrorCode } from './errors';
 export { EngineError } from './errors';
+export {
+  COMBUSTION_TEMPERATURES,
+  ENERGY_UNITS,
+  METERING_TEMPERATURES,
+  NO_CONVENTIONS,
+  STANDARD_CONDITIONS,
+  TONNE_ENERGY_UNITS,
+  conventionsProblem,
+  conventionsText,
+  referenceTemperatureText,
+  standardConditionsText,
+} from './conventions';
 
 export { schemas } from './schemas';
 

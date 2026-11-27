@@ -22,6 +22,7 @@ export type DialogRequest =
   | { kind: 'columns'; datasetId: DatasetId }
   | { kind: 'override'; datasetId: DatasetId; columnId?: ColumnId }
   | { kind: 'area' }
+  | { kind: 'conventions' }
   | { kind: 'openReport'; report: ProjectOpenReport }
   | { kind: 'licences' }
   | { kind: 'comment'; issueId: IssueId }

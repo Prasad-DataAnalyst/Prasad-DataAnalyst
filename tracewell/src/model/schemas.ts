@@ -6,6 +6,17 @@
  */
 import { z } from 'zod';
 import type { AuditAction, AuditEntry } from './audit';
+import {
+  COMBUSTION_TEMPERATURES,
+  ENERGY_UNITS,
+  METERING_TEMPERATURES,
+  STANDARD_CONDITIONS,
+  TONNE_ENERGY_UNITS,
+  type Conventions,
+  type EnergyUnit,
+  type StandardConditions,
+  type TonneEnergyUnit,
+} from './conventions';
 import type { Confidence } from './detection';
 import type { OverridableProperty, Decision } from './decisions';
 import type { ExportManifest, ExportProfileId, ValidationCheck } from './export';
@@ -144,6 +155,7 @@ const AUDIT_ACTIONS = members<AuditAction>()([
   'step.remove',
   'entry.revert',
   'project.area',
+  'project.conventions',
   'export.create',
   'project.save',
   'recipe.apply',
@@ -264,6 +276,32 @@ const bbox: z.ZodType<BBox> = z
     ([, south, , north]) => south <= north,
     'The south edge of a bounding box cannot lie north of its north edge.',
   );
+
+// ---------------------------------------------------------------------------------------------
+// Conventions
+
+const conventions: z.ZodType<Conventions> = z.strictObject({
+  standardConditions: z.enum(STANDARD_CONDITIONS as [StandardConditions, ...StandardConditions[]]).nullable(),
+  energyUnit: z.enum(ENERGY_UNITS as [EnergyUnit, ...EnergyUnit[]]).nullable(),
+  combustionTemperature: z
+    .number()
+    .refine((t) => COMBUSTION_TEMPERATURES.includes(t), 'Expected a combustion reference temperature of ISO 6976.')
+    .nullable(),
+  meteringTemperature: z
+    .number()
+    .refine((t) => METERING_TEMPERATURES.includes(t), 'Expected a metering reference temperature of ISO 6976.')
+    .nullable(),
+  tonneToEnergy: z
+    .strictObject({
+      factor: z.number().positive(),
+      unit: z.enum(TONNE_ENERGY_UNITS as [TonneEnergyUnit, ...TonneEnergyUnit[]]),
+      source: z
+        .string()
+        .max(200)
+        .refine((s) => s.trim() !== '', 'Expected the source of the factor.'),
+    })
+    .nullable(),
+});
 
 // ---------------------------------------------------------------------------------------------
 // Values
@@ -487,6 +525,7 @@ const decision = z.discriminatedUnion('kind', [
     reason: z.string(),
   }),
   z.strictObject({ kind: z.literal('set_project_area'), bbox: bbox.nullable(), reason: z.string() }),
+  z.strictObject({ kind: z.literal('set_conventions'), conventions, reason: z.string() }),
   z.strictObject({ kind: z.literal('revert'), seq: auditSeq, reason: z.string() }),
 ]);
 
@@ -629,6 +668,7 @@ const exportManifest = z
     assumptions: z.array(assumption),
     substitutions: z.array(substitution),
     options: z.strictObject({ neutralizeFormulas: z.boolean() }).exactOptional(),
+    conventions: conventions.exactOptional(),
     files: z.array(z.strictObject({ path: packagePath, size: count, sha256, role: z.enum(EXPORT_FILE_ROLES) })),
     validation: validationReport,
     auditHead,

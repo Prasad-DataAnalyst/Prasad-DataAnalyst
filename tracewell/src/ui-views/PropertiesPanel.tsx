@@ -4,7 +4,15 @@
  */
 import { Fragment } from 'react';
 import type { EngineClient } from '@tw/engine-api';
-import type { CellLineage, ColumnSchema, DatasetId, IssueId, JsonValue, ProjectSummary } from '@tw/model';
+import {
+  conventionsText,
+  type CellLineage,
+  type ColumnSchema,
+  type DatasetId,
+  type IssueId,
+  type JsonValue,
+  type ProjectSummary,
+} from '@tw/model';
 import { formatCell, formatCount, useWorkbench, type Selection } from '@tw/ui-shell';
 import { DetectionValue, ErrorNote, SeverityBadge, formatBytes, useReasonPrompt } from './common';
 import { attempt, useEngineQuery, useProject } from './hooks';
@@ -120,6 +128,8 @@ function ProjectProps(p: { project: ProjectSummary }): React.JSX.Element {
         <dd>{pr.unitSystem}</dd>
         <dt>Project area</dt>
         <dd>{pr.projectArea === null ? 'not set' : pr.projectArea.join(', ')}</dd>
+        <dt>Conventions</dt>
+        <dd>{conventionsText(pr.conventions) ?? 'not set'}</dd>
         <dt>Audit log</dt>
         <dd>
           {pr.auditHead.seq} entries

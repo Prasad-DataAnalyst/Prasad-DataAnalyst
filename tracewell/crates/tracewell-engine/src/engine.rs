@@ -341,6 +341,8 @@ pub struct Project {
     pub read_only: bool,
     /// The project area as the last project.area entry set it: null or [west, south, east, north].
     pub project_area: Value,
+    /// The conventions as the last project.conventions entry set them (conventions.rs).
+    pub conventions: Value,
     /// Entries an entry.revert has undone.
     pub reverted: HashSet<u64>,
     /// Step IDs are numbered per project: 's1', 's2', ...
@@ -682,6 +684,7 @@ impl Engine {
             last_saved_at: None,
             read_only: false,
             project_area: Value::Null,
+            conventions: crate::conventions::none(),
             reverted: HashSet::new(),
             next_step: 1,
             system_issues: Vec::new(),
@@ -725,6 +728,7 @@ impl Engine {
             "profile": p.profile,
             "unitSystem": p.unit_system,
             "projectArea": p.project_area,
+            "conventions": p.conventions,
             "readOnly": p.read_only,
             "dirty": p.log.entries().last().is_some_and(|e| e["action"] != "project.save"),
             "lastSavedAt": p.last_saved_at,
@@ -2165,6 +2169,10 @@ fn apply_decision(
                 }
             }
         }
+        "project.conventions" => {
+            // The log holds its members sorted; the project keeps them in the recorded order.
+            p.conventions = crate::conventions::recorded(&e["new"]);
+        }
         "entry.revert" => {
             let Some(target) = reverted else {
                 return Ok(());
@@ -2253,6 +2261,9 @@ fn apply_decision(
                         }
                     }
                 }
+                "project.conventions" => {
+                    p.conventions = crate::conventions::recorded(&target["old"]);
+                }
                 "detection.override" => {
                     let area = area_of(&p.project_area);
                     let o = match prepared {
@@ -2340,13 +2351,14 @@ fn row_id(r: f64, n: u64) -> Option<u64> {
     (r.fract() == 0.0 && r >= 0.0 && r < n as f64).then_some(r as u64)
 }
 
-const REVERTIBLE: [&str; 6] = [
+const REVERTIBLE: [&str; 7] = [
     "cell.edit",
     "issue.accept",
     "rows.exclude",
     "step.apply",
     "detection.override",
     "project.area",
+    "project.conventions",
 ];
 
 /// What a value of each type looks like, for the fix of a refused edit (decisions.ts EXAMPLES).
@@ -2648,6 +2660,29 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
             e.insert("reason".into(), json!(reason));
             e
         }
+        "set_conventions" => {
+            let reason = reason_of(&d["reason"])?;
+            if let Some(problem) = crate::conventions::problem(&d["conventions"]) {
+                return Err(EngineError::invalid(
+                    format!("The conventions are not valid: {problem}."),
+                    "Choose each convention from its list or leave it unset, and give a tonne-to-energy factor greater than 0 with its unit and its source.",
+                ));
+            }
+            let next = crate::conventions::recorded(&d["conventions"]);
+            if crate::canonical::canonical_json(&next)
+                == crate::canonical::canonical_json(&p.conventions)
+            {
+                return Err(EngineError::invalid(
+                    "The project already works to these conventions.",
+                    "Change at least one convention, or close the dialog.",
+                ));
+            }
+            let mut e = draft("project.conventions", json!({}));
+            e.insert("old".into(), p.conventions.clone());
+            e.insert("new".into(), next);
+            e.insert("reason".into(), json!(reason));
+            e
+        }
         "revert" => {
             let reason = reason_of(&d["reason"])?;
             let seq = d["seq"].as_u64();
@@ -2677,7 +2712,10 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
                 ));
             }
             let dataset = &target["target"]["datasetId"];
-            if action != "project.area" && !p.datasets.iter().any(|x| *dataset == x.id.as_str()) {
+            if action != "project.area"
+                && action != "project.conventions"
+                && !p.datasets.iter().any(|x| *dataset == x.id.as_str())
+            {
                 return Err(EngineError::not_found(
                     format!("The dataset of entry {seq} is no longer in the project."),
                     "Choose another entry.",
@@ -3398,6 +3436,7 @@ pub fn recover_project(shared: &Arc<Shared>) -> Result<Value> {
                 last_saved_at: None,
                 read_only: false,
                 project_area: Value::Null,
+                conventions: crate::conventions::none(),
                 reverted: HashSet::new(),
                 next_step: 1,
                 system_issues: Vec::new(),
@@ -4601,6 +4640,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
     let (seq, hash) = p.log.head();
     let mut input = crate::export::ExportInput {
         export_id: String::new(),
+        conventions: p.conventions.clone(),
         base_name,
         profile: profile.clone(),
         at: String::new(),
@@ -5717,9 +5757,17 @@ impl Reopen<'_> {
                     CheckReplay::Ran => out.checks_ran += 1,
                     CheckReplay::Superseded => {}
                 }),
-                "cell.edit" | "issue.accept" | "rows.exclude" | "issue.comment"
-                | "project.area" | "entry.revert" | "step.apply" | "step.remove"
-                | "recipe.apply" | "detection.override" => {
+                "cell.edit"
+                | "issue.accept"
+                | "rows.exclude"
+                | "issue.comment"
+                | "project.area"
+                | "project.conventions"
+                | "entry.revert"
+                | "step.apply"
+                | "step.remove"
+                | "recipe.apply"
+                | "detection.override" => {
                     let reverted = log
                         .entries()
                         .iter()
@@ -6112,6 +6160,7 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 last_saved_at: None,
                 read_only: false,
                 project_area: Value::Null,
+                conventions: crate::conventions::none(),
                 reverted: HashSet::new(),
                 next_step: 1,
                 system_issues: Vec::new(),

@@ -30,6 +30,7 @@ export type AuditAction =
   | 'step.remove'
   | 'entry.revert'
   | 'project.area'
+  | 'project.conventions'
   | 'export.create'
   | 'project.save'
   | 'recipe.apply';

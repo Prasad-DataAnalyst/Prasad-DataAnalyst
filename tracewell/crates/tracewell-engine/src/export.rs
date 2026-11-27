@@ -421,6 +421,8 @@ impl OutColumn {
 /// Everything an export needs, taken from the engine before the job starts.
 pub struct ExportInput {
     pub export_id: String,
+    /// The project's conventions; the manifest and README state them when at least one is set.
+    pub conventions: Value,
     pub base_name: String,
     pub profile: String,
     pub at: String,
@@ -2271,6 +2273,12 @@ fn render_readme(m: &Value, steps: &[String]) -> String {
         text(&m["unitRegistry"]["version"]),
         text(&m["unitRegistry"]["sha256"])
     ));
+    if !m["conventions"].is_null() {
+        lines.push(format!(
+            "CONVENTIONS: {}",
+            crate::conventions::text(&m["conventions"]).unwrap_or_else(|| "none set".into())
+        ));
+    }
     lines.push(String::new());
     lines.push(format!("STEPS ({})", steps.len()));
     if steps.is_empty() {
@@ -2764,6 +2772,18 @@ pub fn build_export(
         "auditHead": input.audit_head,
         "files": [],
     });
+    if crate::conventions::text(&input.conventions).is_some() {
+        // Where the TypeScript manifest has it: after the options.
+        let mut ordered = serde_json::Map::new();
+        for (k, v) in std::mem::take(manifest.as_object_mut().expect("the manifest is an object")) {
+            let options = k == "options";
+            ordered.insert(k, v);
+            if options {
+                ordered.insert("conventions".into(), input.conventions.clone());
+            }
+        }
+        manifest = Value::Object(ordered);
+    }
     let readme = render_readme(&manifest, &input.step_descriptions);
     let mut files: Vec<Value> = data_files
         .iter()

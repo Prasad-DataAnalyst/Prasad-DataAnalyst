@@ -1,4 +1,5 @@
 /** Project vocabulary: the `.twp` manifest (SAD section 11) and the summaries the UI shows. */
+import type { Conventions } from './conventions';
 import type { ExportRecord, OriginalFileInfo } from './export';
 import type { AuditSeq, BBox, DatasetId, IsoUtc, ProjectId, Sha256Hex, UserProfile } from './ids';
 import type { RulePackRef } from './rules';
@@ -89,6 +90,8 @@ export interface ProjectSummary {
   profile: UserProfile;
   unitSystem: 'SI' | 'Oilfield';
   projectArea: BBox | null;
+  /** The conventions the project works to (FR-CNV-02), as the last project.conventions entry set them. */
+  conventions: Conventions;
   readOnly: boolean;
   dirty: boolean;
   lastSavedAt: IsoUtc | null;

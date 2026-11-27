@@ -16,6 +16,7 @@
 mod audit;
 mod canonical;
 mod checks;
+mod conventions;
 mod csv;
 mod detect;
 mod digest;

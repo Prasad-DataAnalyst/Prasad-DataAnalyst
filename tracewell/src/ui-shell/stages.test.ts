@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DatasetSummary, ProjectSummary } from '@tw/model';
+import { NO_CONVENTIONS, type DatasetSummary, type ProjectSummary } from '@tw/model';
 import { stageStates } from './stages';
 
 function dataset(over: Partial<DatasetSummary> = {}): DatasetSummary {
@@ -25,6 +25,7 @@ function project(over: Partial<ProjectSummary> = {}): ProjectSummary {
     profile: { id: 'u1', name: 'Prasad', role: 'Analyst' },
     unitSystem: 'SI',
     projectArea: null,
+    conventions: NO_CONVENTIONS,
     readOnly: false,
     dirty: false,
     lastSavedAt: null,

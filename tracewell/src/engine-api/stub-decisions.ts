@@ -42,6 +42,7 @@ const REVERTIBLE: ReadonlySet<AuditAction> = new Set([
   'step.apply',
   'detection.override',
   'project.area',
+  'project.conventions',
 ]);
 
 const MAX_COMMENT_LENGTH = 5000;
@@ -94,6 +95,8 @@ export function decide(project: StubProject, input: unknown): Applied {
       return overrideDetection(project, d);
     case 'set_project_area':
       return setProjectArea(project, d);
+    case 'set_conventions':
+      return setConventions(project, d);
     case 'revert':
       return revert(project, d);
   }
@@ -347,6 +350,40 @@ function setProjectArea(project: StubProject, d: DecisionOf<'set_project_area'>)
     },
   });
   return { entries: [entry], changed: ['project', 'issues', 'audit'] };
+}
+
+function setConventions(project: StubProject, d: DecisionOf<'set_conventions'>): Applied {
+  const reason = requireReason(d.reason, 'change the conventions');
+  const old = project.conventions;
+  const next = structuredClone(d.conventions);
+  if (JSON.stringify(old) === JSON.stringify(next)) {
+    throw invalid(
+      'The project already works to these conventions.',
+      'Change at least one convention, or close the dialog.',
+    );
+  }
+  const entry = project.append({
+    action: 'project.conventions',
+    target: {},
+    old: asJson(old),
+    new: asJson(next),
+    reason,
+  });
+  project.conventions = next;
+  project.undo.set(entry.seq, {
+    check: () => {
+      if (JSON.stringify(project.conventions) !== JSON.stringify(next)) {
+        throw invalid(
+          `A later change replaced the conventions set in entry ${entry.seq}.`,
+          'Revert the later change first.',
+        );
+      }
+    },
+    apply: () => {
+      project.conventions = old;
+    },
+  });
+  return { entries: [entry], changed: ['project', 'audit'] };
 }
 
 function revert(project: StubProject, d: DecisionOf<'revert'>): Applied {

@@ -2,6 +2,7 @@
  * Decisions: the user's review actions. Each is validated, appended to the audit log and then
  * applied by the same reducer that replays the log (SAD section 8.1).
  */
+import type { Conventions } from './conventions';
 import type { AuditSeq, BBox, ColumnId, DatasetId, IssueId, JsonValue, RowId } from './ids';
 import type { CellValue } from './values';
 
@@ -48,5 +49,10 @@ export type Decision =
       reason: string;
     }
   | { kind: 'set_project_area'; bbox: BBox | null; reason: string }
-  /** Allowed targets: cell.edit, issue.accept, rows.exclude, step.apply, detection.override, project.area. */
+  /** Sets every convention at once (FR-CNV-02); a null leaves that convention unset. */
+  | { kind: 'set_conventions'; conventions: Conventions; reason: string }
+  /**
+   * Allowed targets: cell.edit, issue.accept, rows.exclude, step.apply, detection.override,
+   * project.area, project.conventions.
+   */
   | { kind: 'revert'; seq: AuditSeq; reason: string };

@@ -6,22 +6,33 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
-import type {
-  ColumnId,
-  ColumnSchema,
-  CrsInfo,
-  DatasetId,
-  EngineErrorData,
-  IssueId,
-  JsonValue,
-  OverridableProperty,
-  ProjectOpenReport,
-  StepInput,
-  StepPreview,
-  StepResult,
-  TableSchema,
-  UnitInfo,
-  UserProfile,
+import {
+  COMBUSTION_TEMPERATURES,
+  ENERGY_UNITS,
+  METERING_TEMPERATURES,
+  STANDARD_CONDITIONS,
+  TONNE_ENERGY_UNITS,
+  referenceTemperatureText,
+  standardConditionsText,
+  type ColumnId,
+  type ColumnSchema,
+  type Conventions,
+  type CrsInfo,
+  type EnergyUnit,
+  type StandardConditions,
+  type TonneEnergyUnit,
+  type DatasetId,
+  type EngineErrorData,
+  type IssueId,
+  type JsonValue,
+  type OverridableProperty,
+  type ProjectOpenReport,
+  type StepInput,
+  type StepPreview,
+  type StepResult,
+  type TableSchema,
+  type UnitInfo,
+  type UserProfile,
 } from '@tw/model';
 import { formatCell, formatCount, toErrorData, useWorkbench } from '@tw/ui-shell';
 import { DetectionValue, ErrorNote, Modal, display, useReasonPrompt } from './common';
@@ -56,6 +67,8 @@ export function DialogHost(p: { engine: EngineClient }): React.JSX.Element | nul
       );
     case 'area':
       return <ProjectAreaDialog engine={p.engine} onClose={closeDialog} />;
+    case 'conventions':
+      return <ConventionsDialog engine={p.engine} onClose={closeDialog} />;
     case 'openReport':
       return <OpenReportDialog report={d.report} onClose={closeDialog} />;
     case 'licences':
@@ -944,6 +957,156 @@ function ProjectAreaDialog(p: { engine: EngineClient; onClose(): void }): React.
             />
           </label>
         ))}
+      </div>
+      <ErrorNote error={error} />
+      {reason.element}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Conventions
+
+/** A select of a convention's choices, the empty value meaning "not set". */
+function ChoiceField(p: {
+  label: string;
+  testId: string;
+  value: string;
+  choices: readonly { value: string; label: string }[];
+  onChange(v: string): void;
+}): React.JSX.Element {
+  return (
+    <label className="tw-field">
+      <span>{p.label}</span>
+      <select data-testid={p.testId} value={p.value} onChange={(e) => p.onChange(e.target.value)}>
+        <option value="">not set</option>
+        {p.choices.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ConventionsDialog(p: { engine: EngineClient; onClose(): void }): React.JSX.Element {
+  const current = useWorkbench((s) => s.project?.conventions);
+  const [conditions, setConditions] = useState<string>(current?.standardConditions ?? '');
+  const [energy, setEnergy] = useState<string>(current?.energyUnit ?? '');
+  const [combustion, setCombustion] = useState<string>(
+    current?.combustionTemperature === null || current === undefined ? '' : String(current.combustionTemperature),
+  );
+  const [metering, setMetering] = useState<string>(
+    current?.meteringTemperature === null || current === undefined ? '' : String(current.meteringTemperature),
+  );
+  const [factor, setFactor] = useState<string>(
+    current?.tonneToEnergy == null ? '' : String(current.tonneToEnergy.factor),
+  );
+  const [factorUnit, setFactorUnit] = useState<string>(current?.tonneToEnergy?.unit ?? 'MMBtu/t');
+  const [source, setSource] = useState<string>(current?.tonneToEnergy?.source ?? '');
+  const [error, setError] = useState<EngineErrorData | null>(null);
+  const reason = useReasonPrompt();
+  const withFactor = factor.trim() !== '' || source.trim() !== '';
+  const conventions: Conventions = {
+    standardConditions: conditions === '' ? null : (conditions as StandardConditions),
+    energyUnit: energy === '' ? null : (energy as EnergyUnit),
+    combustionTemperature: combustion === '' ? null : Number(combustion),
+    meteringTemperature: metering === '' ? null : Number(metering),
+    tonneToEnergy: withFactor
+      ? { factor: Number(factor), unit: factorUnit as TonneEnergyUnit, source: source.trim() }
+      : null,
+  };
+  const submit = async () => {
+    const why = await reason.ask('Set the conventions');
+    if (why === null) return;
+    try {
+      await p.engine.decide({ kind: 'set_conventions', conventions, reason: why });
+      p.onClose();
+    } catch (e) {
+      setError(toErrorData(e));
+    }
+  };
+  const temperatures = (list: readonly number[]) =>
+    list.map((t) => ({ value: String(t), label: referenceTemperatureText(t) }));
+  return (
+    <Modal
+      title="Conventions"
+      testId={TID.conventionsDialog}
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" data-testid={TID.dialogCancel} onClick={p.onClose}>
+            Cancel
+          </button>
+          <button type="button" className="tw-primary" data-testid={TID.dialogApply} onClick={() => void submit()}>
+            Set conventions…
+          </button>
+        </>
+      }
+    >
+      <p className="tw-hint">
+        The conventions the project works to. Each is chosen here or left unset, never assumed; units at other standard
+        conditions are never converted silently.
+      </p>
+      <div className="tw-form-grid">
+        <ChoiceField
+          label="Standard conditions"
+          testId={TID.conventionsConditions}
+          value={conditions}
+          choices={STANDARD_CONDITIONS.map((c) => ({ value: c, label: standardConditionsText(c) }))}
+          onChange={setConditions}
+        />
+        <ChoiceField
+          label="Energy unit"
+          testId={TID.conventionsEnergy}
+          value={energy}
+          choices={ENERGY_UNITS.map((u) => ({ value: u, label: u }))}
+          onChange={setEnergy}
+        />
+        <ChoiceField
+          label="Combustion reference temperature"
+          testId={TID.conventionsCombustion}
+          value={combustion}
+          choices={temperatures(COMBUSTION_TEMPERATURES)}
+          onChange={setCombustion}
+        />
+        <ChoiceField
+          label="Metering reference temperature"
+          testId={TID.conventionsMetering}
+          value={metering}
+          choices={temperatures(METERING_TEMPERATURES)}
+          onChange={setMetering}
+        />
+        <label className="tw-field">
+          <span>Tonne-to-energy factor</span>
+          <input
+            data-testid={TID.conventionsFactor}
+            inputMode="decimal"
+            value={factor}
+            onChange={(e) => setFactor(e.target.value)}
+            placeholder="for example 52"
+          />
+        </label>
+        <label className="tw-field">
+          <span>Factor unit</span>
+          <select value={factorUnit} onChange={(e) => setFactorUnit(e.target.value)}>
+            {TONNE_ENERGY_UNITS.map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="tw-field">
+          <span>Source of the factor</span>
+          <input
+            data-testid={TID.conventionsSource}
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            placeholder="for example the sales contract, clause 12.3"
+          />
+        </label>
       </div>
       <ErrorNote error={error} />
       {reason.element}

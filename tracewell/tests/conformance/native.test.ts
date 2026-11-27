@@ -3362,6 +3362,88 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   }, 180_000);
 
+  it('records, refuses, reverts, exports and reopens project conventions as the TypeScript engine does', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const both = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+      expect(x, what).toEqual(y);
+      return [x as T, y as T];
+    };
+    const lng = {
+      standardConditions: 'std-15C-101.325kPa',
+      energyUnit: 'MMBtu',
+      combustionTemperature: 15,
+      meteringTemperature: 15.55,
+      tonneToEnergy: { factor: 51.9, unit: 'MMBtu/t', source: '  Sales contract, clause 12.3 ' },
+    };
+    const set = (conventions: unknown, reason = 'Per the sales contract') =>
+      ({ kind: 'set_conventions', conventions, reason }) as Decision;
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Conventions', profile: { ...PROFILE } });
+      await both('no conventions', async (e) => (await e.getProject()).conventions);
+      const file = { kind: 'path' as const, path: fixturePath('csv_well_daily_golden.csv') };
+      const [ds] = await both('import', async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+      const [first] = await both('set', async (e) => (await e.decide(set({ ...lng, energyUnit: 'GJ' }))).map(content));
+      for (const bad of [
+        { ...lng, standardConditions: 'std-20C-101.325kPa' },
+        { ...lng, energyUnit: 'therm' },
+        { ...lng, combustionTemperature: 16 },
+        { ...lng, meteringTemperature: 25 },
+        { ...lng, tonneToEnergy: { factor: -1, unit: 'MMBtu/t', source: 'x' } },
+        { ...lng, tonneToEnergy: { factor: 52, unit: 'MMBtu/kg', source: 'x' } },
+        { ...lng, tonneToEnergy: { factor: 52, unit: 'MMBtu/t', source: ' ' } },
+        { ...lng, tonneToEnergy: { factor: 52, unit: 'MMBtu/t' } },
+        { ...lng, extra: true },
+        { energyUnit: 'GJ' },
+        'MMBtu',
+        null,
+      ]) {
+        await both(`refuses ${JSON.stringify(bad)}`, (e) => e.decide(set(bad)));
+      }
+      await both('unchanged', (e) => e.decide(set({ ...lng, energyUnit: 'GJ' })));
+      await both('no reason', (e) => e.decide(set(lng, ' ')));
+      const [second] = await both('changed', async (e) => (await e.decide(set(lng, 'Signed'))).map(content));
+      await both('revert', async (e) =>
+        (await e.decide({ kind: 'revert', seq: second?.[0]?.seq ?? 0, reason: 'Not signed' })).map(content),
+      );
+      await both('reverted', async (e) => (await e.getProject()).conventions);
+      await both('set again', async (e) => (await e.decide(set(lng, 'Signed now'))).map(content));
+      const [x, y] = await both('export', async (e) => {
+        const r = await e.awaitJob<ExportResult>(await e.exportData({ datasetId: ds.id, profile: 'csv' }));
+        const readme = readZip(r.bytes as Uint8Array).readText('README.txt');
+        // The export ID and time differ between the engines' clocks; the conventions line does not.
+        return {
+          conventions: r.manifest.conventions,
+          readme: readme.split('\n').filter((l) => l.startsWith('CONVENTIONS')),
+        };
+      });
+      expect(x.readme).toEqual([
+        'CONVENTIONS: standard conditions 15 °C and 101.325 kPa, energy in MMBtu, combustion at 15 °C, metering at 15.55 °C (60 °F), 51.9 MMBtu/t (Sales contract, clause 12.3)',
+      ]);
+      expect(y.conventions).toMatchObject({ tonneToEnergy: { source: 'Sales contract, clause 12.3' } });
+      expect(first?.[0]?.action).toBe('project.conventions');
+      // Both engines open the native engine's project file to the same conventions.
+      const saved = await nat.client.awaitJob<SaveResult>(await nat.client.saveProject());
+      const bytes = saved.bytes as Uint8Array;
+      const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+      const { opened } = await openNatively(bytes);
+      try {
+        await opener.awaitJob<ProjectOpenReport>(
+          await opener.openProject({ kind: 'bytes', bytes, name: saved.fileName }),
+        );
+        expect((await opened.client.getProject()).conventions).toEqual((await opener.getProject()).conventions);
+        expect((await opener.getProject()).conventions).toEqual((await lite.getProject()).conventions);
+      } finally {
+        stopNative(opened);
+        opener.close();
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 120_000);
+
   it('filters, edits and checks geometries against the project area as the TypeScript engine does', async () => {
     const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
     const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
