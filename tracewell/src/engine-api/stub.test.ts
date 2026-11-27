@@ -197,6 +197,13 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
       'import',
     ]);
   },
+  installRulePack: async (c) => {
+    const file = { kind: 'bytes' as const, bytes: new TextEncoder().encode('{}'), name: 'pack.twrules' };
+    await expect(c.installRulePack(file, 'Methane reporting')).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: 'No rule-pack publisher is trusted on this installation.',
+    });
+  },
   decide: async (c) => {
     const issue = await issueOf(c, 'TW-DQ-006');
     const entries = await c.decide({

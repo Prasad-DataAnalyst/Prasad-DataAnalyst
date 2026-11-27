@@ -11,6 +11,7 @@ import { applyOverrides, importSource, previewSource, type ImportOutcome, type I
 import { bytesSource } from '@tw/io';
 import {
   EngineError,
+  schemas,
   userDetection,
   type Assumption,
   type AuditEntry,
@@ -20,6 +21,8 @@ import {
   type CellValue,
   type ColumnOverride,
   type Conventions,
+  type InstalledRulePack,
+  type RulePack,
   type CrsRef,
   type Detection,
   type ExportRecord,
@@ -53,6 +56,11 @@ export interface ReduceEnv {
 
 /** Every rule pack a check run uses, in the order they run. */
 export const CHECK_PACKS = [GENERIC_DQ, SYSTEM_RULES];
+
+/** The packs a check run runs: the built-in packs, then the installed ones in install order. */
+export function checkPacksOf(state: ProjectState): RulePack[] {
+  return [GENERIC_DQ, SYSTEM_RULES, ...state.installedPacks.map((i) => i.pack)];
+}
 
 const NEVER = new AbortController().signal;
 
@@ -99,7 +107,7 @@ export function checkDrafts(
   signal: AbortSignal,
   onProgress: (done: number, total: number) => void,
 ): Promise<IssueDraft[]> {
-  return runRules(CHECK_PACKS, {
+  return runRules(checkPacksOf(state), {
     view: workingView(ds),
     importNotes: ds.notes,
     assumptions: ds.assumptions,
@@ -343,6 +351,23 @@ export async function applyEntry(state: ProjectState, e: AuditEntry, env: Reduce
     case 'project.conventions':
       state.conventions = structuredClone(e.new) as unknown as Conventions;
       return;
+    case 'rulepack.install': {
+      const info = structuredClone(e.new) as unknown as InstalledRulePack;
+      const parsed = schemas.rulePack.safeParse(payload<{ pack: unknown }>(e).pack);
+      if (!parsed.success) {
+        throw new EngineError(
+          'INTERNAL',
+          `The rule-pack ${info.id} ${info.version} recorded in entry ${e.seq} does not follow the rule-pack format.`,
+          'Open the project file this project was saved as, or install the rule-pack again.',
+        );
+      }
+      state.packsBySha.set(info.sha256, parsed.data);
+      state.installedPacks = [
+        ...state.installedPacks.filter((i) => i.info.id !== info.id),
+        { info, pack: parsed.data },
+      ];
+      return;
+    }
     case 'export.create': {
       state.exports.push(payload<{ record: ExportRecord }>(e).record);
       return;

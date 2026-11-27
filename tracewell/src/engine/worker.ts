@@ -3,7 +3,8 @@
  * and the random ID source. Everything else receives them injected (SAD section 2.1, goal 6).
  */
 import { serve, type MessagePortLike } from '@tw/engine-api';
-import type { Clock, IdSource } from '@tw/model';
+import type { Clock, IdSource, RulePackPolicy } from '@tw/model';
+import { parsePolicy } from '@tw/rules';
 import { LocalEngine } from './engine';
 import { opfsJournalStore } from './journal-store';
 import { opfsTemplateStore } from './template-store';
@@ -23,6 +24,21 @@ const randomIds: IdSource = {
 };
 
 const env = import.meta.env as Record<string, string | undefined>;
+
+/**
+ * The administrator's rule-pack policy (FR-RUL-04) for this build: the text of the policy file,
+ * given as VITE_RULEPACK_POLICY when the Lite edition is built. Without one, or with one that is
+ * not valid, no publisher is trusted and no rule-pack file installs.
+ */
+function buildPolicy(text: string | undefined): RulePackPolicy | undefined {
+  if (text === undefined || text.trim() === '') return undefined;
+  try {
+    return parsePolicy(text);
+  } catch {
+    return undefined;
+  }
+}
+const policy = buildPolicy(env['VITE_RULEPACK_POLICY']);
 // The app names the worker 'budget=<bytes>' to lower the memory budget (the ?budget= URL parameter).
 const budget = /^budget=(\d+)$/.exec(self.name)?.[1];
 
@@ -37,6 +53,7 @@ serve(
     // Each tab's unsaved work is journalled under its own session, recoverable once the tab is gone.
     journal: opfsJournalStore(randomHex(16)),
     ...(budget === undefined ? {} : { memoryBudgetBytes: Number(budget) }),
+    ...(policy === undefined ? {} : { policy }),
   }),
   // The worker's global scope is the port: calls arrive on it and answers and events leave by it.
   self as unknown as MessagePortLike,

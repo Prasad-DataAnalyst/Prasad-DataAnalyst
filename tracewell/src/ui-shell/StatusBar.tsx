@@ -28,18 +28,42 @@ export function conventionsShort(c: Conventions | undefined): string {
   return parts.length === 0 ? 'not set' : parts.join(' · ');
 }
 
+/**
+ * The rule-packs for the status bar: those the check runs used (the built-in ones before any run),
+ * then installed ones no run has used yet.
+ */
+export function rulesShort(p: ProjectSummary | null): string {
+  const used = (p?.rulePacks ?? []).map((r) => `${r.id.replace(/^tracewell\./, '')} ${r.version}`);
+  const names = used.length === 0 ? ['built-in'] : used;
+  for (const i of p?.installedPacks ?? []) {
+    const name = `${i.id} ${i.version}`;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names.join(', ');
+}
+
+/** Who signed each installed rule-pack, for the status bar's tooltip. */
+export function installedPacksText(p: ProjectSummary | null): string | undefined {
+  const lines = (p?.installedPacks ?? []).map(
+    (i) =>
+      `${i.id} ${i.version}: ${i.title}, ${i.rules} ${i.rules === 1 ? 'rule' : 'rules'}, signed by ${i.publisher} (key ${i.keyId})`,
+  );
+  return lines.length === 0 ? undefined : lines.join('\n');
+}
+
 export function StatusBar(p: { project: ProjectSummary | null; edition: 'lite' | 'desktop' }): React.JSX.Element {
   const project = p.project;
   const rows = project?.datasets.reduce((n, d) => n + d.outputRowCount, 0) ?? 0;
   const assumed = project?.datasets.reduce((n, d) => n + d.assumptions, 0) ?? 0;
-  const rules = project?.rulePacks.map((r) => `${r.id.replace(/^tracewell\./, '')} ${r.version}`).join(', ');
   return (
     <footer role="status" aria-label="Status" className="tw-statusbar">
       <span className="tw-offline">
         <span className="tw-dot-ok" aria-hidden="true" /> Offline
       </span>
       <span>{savedText(project)}</span>
-      <span>Rules {rules === undefined || rules === '' ? 'built-in' : rules}</span>
+      <span data-testid="tw-status-rules" title={installedPacksText(project)}>
+        Rules {rulesShort(project)}
+      </span>
       <span>Units {project?.unitSystem ?? 'SI'}</span>
       <span
         data-testid="tw-status-conventions"

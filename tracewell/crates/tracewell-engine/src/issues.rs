@@ -3,7 +3,7 @@
 //! excluded rows, from which the counts and the status follow.
 
 use crate::error::{EngineError, Result};
-use crate::rules::{Draft, RowSet, find_rule};
+use crate::rules::{Draft, PackSet, RowSet};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
@@ -222,9 +222,10 @@ fn status(c: &Counts) -> &'static str {
     }
 }
 
-/// The issue as the protocol carries it (toIssue), given its dataset's excluded rows.
-pub fn to_issue(st: &IssueState, excluded: &RowSet) -> Value {
-    let rule = find_rule(&st.draft.rule_id).map(|(_, r)| r);
+/// The issue as the protocol carries it (toIssue), given its dataset's excluded rows and the
+/// project's packs, which hold the rule's title, explanation and source.
+pub fn to_issue(st: &IssueState, excluded: &RowSet, packs: &PackSet) -> Value {
+    let rule = packs.find_rule(&st.draft.rule_id).map(|(_, r)| r);
     let c = counts(st, excluded);
     let open_rows = if st.draft.scope == "rows" {
         open_rows(st, excluded).to_ranges(MAX_OPEN_RANGES)
@@ -418,7 +419,10 @@ mod cache_tests {
         let back = from_cache(&cached, n).expect("reads back");
         assert_eq!(to_cache(&back), cached);
         let none = RowSet::new(n);
-        assert_eq!(to_issue(&back, &none), to_issue(st, &none));
+        assert_eq!(
+            to_issue(&back, &none, &PackSet::default()),
+            to_issue(st, &none, &PackSet::default())
+        );
         assert_eq!((back.first_seen_seq, back.last_checked_seq), (5, 9));
 
         // Not raised by a later run: no current rows, so the draft's rows are written out.
@@ -429,9 +433,10 @@ mod cache_tests {
         assert_eq!(
             to_issue(
                 &from_cache(&cached, n).expect("reads back"),
-                &RowSet::new(n)
+                &RowSet::new(n),
+                &PackSet::default()
             ),
-            to_issue(&issues[0], &RowSet::new(n))
+            to_issue(&issues[0], &RowSet::new(n), &PackSet::default())
         );
 
         let mut wrong = cached.clone();

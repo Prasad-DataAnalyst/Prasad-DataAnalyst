@@ -130,6 +130,12 @@ function ProjectProps(p: { project: ProjectSummary }): React.JSX.Element {
         <dd>{pr.projectArea === null ? 'not set' : pr.projectArea.join(', ')}</dd>
         <dt>Conventions</dt>
         <dd>{conventionsText(pr.conventions) ?? 'not set'}</dd>
+        <dt>Installed rule-packs</dt>
+        <dd>
+          {pr.installedPacks.length === 0
+            ? 'none'
+            : pr.installedPacks.map((i) => `${i.id} ${i.version}, signed by ${i.publisher}`).join('; ')}
+        </dd>
         <dt>Audit log</dt>
         <dd>
           {pr.auditHead.seq} entries

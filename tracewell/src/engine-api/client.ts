@@ -154,6 +154,10 @@ export class EngineClient implements EngineApi {
     return this.invoke('decide', d);
   }
 
+  installRulePack(file: FileInput, reason: string): Promise<AuditEntry[]> {
+    return this.invoke('installRulePack', file, reason);
+  }
+
   listAudit(q: AuditQuery): Promise<Page<AuditEntry>> {
     return this.invoke('listAudit', q);
   }

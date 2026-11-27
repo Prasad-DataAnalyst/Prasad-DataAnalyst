@@ -17,6 +17,8 @@ import type { EngineHost } from '@tw/engine-api';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const NATIVE_BINARY = join(ROOT, 'crates', 'tracewell-engine', 'target', 'release', 'tracewell-engine');
 export const nativeBuilt = existsSync(NATIVE_BINARY);
+/** The administrator's rule-pack policy in a native host's folder; none until a test writes it. */
+export const POLICY_FILE = 'tracewell-policy.json';
 
 declare global {
   interface Window {
@@ -142,6 +144,9 @@ export async function attachNativeHost(page: Page, folder: string): Promise<Nati
       join(folder, 'mapping-templates.json'),
       '--recovery',
       join(folder, 'recovery'),
+      // Read at each install: a test writes the policy it needs once the page has loaded.
+      '--policy',
+      join(folder, POLICY_FILE),
     ]);
     session = new Session(child);
   });

@@ -4,7 +4,7 @@
 
 use crate::canonical::{canonical_number, sha256_hex};
 use serde_json::{Value, json};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 pub const GENERIC_DQ_JSON: &str = include_str!("../../../src/rules/packs/generic-dq-0.1.0.json");
 pub const SYSTEM_JSON: &str = include_str!("../../../src/rules/packs/system-0.1.0.json");
@@ -38,11 +38,16 @@ pub struct Pack {
 impl Pack {
     fn parse(text: &str) -> Pack {
         let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+        Pack::from_value(&v, sha256_hex(text.as_bytes()))
+    }
+
+    /// A pack from its JSON, which follows the rule-pack format, and the SHA-256 that names it.
+    pub fn from_value(v: &Value, sha256: String) -> Pack {
         let s = |r: &Value, k: &str| r[k].as_str().unwrap_or_default().to_string();
         Pack {
-            id: s(&v, "id"),
-            version: s(&v, "version"),
-            sha256: sha256_hex(text.as_bytes()),
+            id: s(v, "id"),
+            version: s(v, "version"),
+            sha256,
             rules: v["rules"]
                 .as_array()
                 .into_iter()
@@ -87,6 +92,58 @@ pub fn find_rule(rule_id: &str) -> Option<(&'static Pack, &'static Rule)> {
     check_packs()
         .iter()
         .find_map(|p| p.rules.iter().find(|r| r.id == rule_id).map(|r| (p, r)))
+}
+
+/// A rule-pack installed from a signed file (rulepacks.rs): what the log recorded of it
+/// (InstalledRulePack), the pack as the file held it, and its rules.
+pub struct Installed {
+    pub info: Value,
+    pub json: Value,
+    pub pack: Pack,
+}
+
+impl Installed {
+    pub fn new(info: Value, json: Value) -> Installed {
+        let sha256 = info["sha256"].as_str().unwrap_or_default().to_string();
+        let pack = Pack::from_value(&json, sha256);
+        Installed { info, json, pack }
+    }
+}
+
+/// The packs a project's check runs use, in the order they run (reducer.ts checkPacksOf): the
+/// built-in packs, then the installed ones in install order. Cloning it is cheap, so a check run
+/// on another thread takes its own.
+#[derive(Clone, Default)]
+pub struct PackSet {
+    installed: Vec<Arc<Installed>>,
+}
+
+impl PackSet {
+    pub fn iter(&self) -> impl Iterator<Item = &Pack> {
+        check_packs()
+            .iter()
+            .chain(self.installed.iter().map(|i| &i.pack))
+    }
+
+    pub fn installed(&self) -> impl Iterator<Item = &Installed> {
+        self.installed.iter().map(Arc::as_ref)
+    }
+
+    /// Adds a pack; a newer version of an installed pack takes its place at the end.
+    pub fn install(&mut self, i: Installed) {
+        self.installed.retain(|x| x.pack.id != i.pack.id);
+        self.installed.push(Arc::new(i));
+    }
+
+    pub fn find_rule(&self, rule_id: &str) -> Option<(&Pack, &Rule)> {
+        self.iter()
+            .find_map(|p| p.rules.iter().find(|r| r.id == rule_id).map(|r| (p, r)))
+    }
+
+    /// The packs as a check.run entry records them.
+    pub fn references(&self) -> Vec<Value> {
+        self.iter().map(Pack::reference).collect()
+    }
 }
 
 /// Rows of a dataset, as a bitset (the TypeScript RowSet).
@@ -246,7 +303,7 @@ impl RowSet {
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Standard base64 with padding (RFC 4648 section 4).
-fn base64_encode(bytes: &[u8]) -> String {
+pub fn base64_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b = [
@@ -267,7 +324,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 /// The bytes of standard padded base64, or None when the text is not that.
-fn base64_decode(text: &str) -> Option<Vec<u8>> {
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let t = text.as_bytes();
     if !t.len().is_multiple_of(4) {
         return None;

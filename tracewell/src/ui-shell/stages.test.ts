@@ -26,6 +26,7 @@ function project(over: Partial<ProjectSummary> = {}): ProjectSummary {
     unitSystem: 'SI',
     projectArea: null,
     conventions: NO_CONVENTIONS,
+    installedPacks: [],
     readOnly: false,
     dirty: false,
     lastSavedAt: null,

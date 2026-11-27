@@ -71,3 +71,38 @@ export interface RulePackRef {
   version: string;
   sha256: Sha256Hex;
 }
+
+/**
+ * A signed rule-pack file (.twrules, FR-RUL-01, SAD decision D-17), as a publisher's signing tool
+ * (scripts/sign-rulepack.mjs) writes it: the pack, who signed it, and an Ed25519 signature of the
+ * UTF-8 canonical JSON of the pack.
+ */
+export interface RulePackFile {
+  format: 'tracewell-rules';
+  formatVersion: '0.1';
+  pack: RulePack;
+  /** The key ID is the first 16 hex digits of the SHA-256 of the raw 32-byte public key. */
+  publisher: { name: string; keyId: string };
+  /** Base64 of the 64-byte Ed25519 signature. */
+  signature: string;
+}
+
+/** What an administrator's policy file says about rule-packs (FR-RUL-04). */
+export interface RulePackPolicy {
+  /** Publishers whose packs may be installed: a name and an Ed25519 public key (32 bytes, base64). */
+  trustedKeys: { name: string; publicKey: string }[];
+  /** Locked versions: a pack whose ID is listed installs only at that version. */
+  lockedVersions: Record<string, string>;
+}
+
+/** A rule-pack installed in a project from a signed file (FR-RUL-02). */
+export interface InstalledRulePack {
+  id: string;
+  version: string;
+  title: string;
+  /** SHA-256 of the UTF-8 canonical JSON of the pack, as check runs record it. */
+  sha256: Sha256Hex;
+  publisher: string;
+  keyId: string;
+  rules: number;
+}

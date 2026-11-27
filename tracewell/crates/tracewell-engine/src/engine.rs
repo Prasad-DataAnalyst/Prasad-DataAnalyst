@@ -18,7 +18,7 @@ use crate::issues::{
 use crate::overrides::{Outcome, ReadEnv, original_file, override_of};
 use crate::parse::Kind;
 use crate::parse::Raw;
-use crate::rules::{Draft, RowSet, check_packs, find_rule};
+use crate::rules::{Draft, Installed, PackSet, RowSet, check_packs, find_rule};
 use crate::steps::{Places, StageColumn, Stages};
 use crate::time::{Clock, IdSource, date_text, iso_from_millis};
 use duckdb::Connection;
@@ -343,6 +343,11 @@ pub struct Project {
     pub project_area: Value,
     /// The conventions as the last project.conventions entry set them (conventions.rs).
     pub conventions: Value,
+    /// The packs check runs use: the built-in ones, then those rulepack.install entries installed.
+    pub packs: PackSet,
+    /// The canonical JSON of every pack version installed, by SHA-256, so that a project file can
+    /// store the packs its check runs used (project-io.ts packJson).
+    pub pack_texts: HashMap<String, String>,
     /// Entries an entry.revert has undone.
     pub reverted: HashSet<u64>,
     /// Step IDs are numbered per project: 's1', 's2', ...
@@ -387,6 +392,8 @@ pub struct Engine {
     pub reply_bytes: Option<Vec<u8>>,
     /// This session's recovery journal (FR-PRJ-03); nothing is journalled without one.
     pub journal: Option<crate::recovery::Journal>,
+    /// The administrator's rule-pack policy file (FR-RUL-04), read at each install.
+    pub policy: Option<PathBuf>,
 }
 
 /// What every thread shares: the engine behind a lock, and the output stream behind another, so
@@ -516,6 +523,7 @@ impl Engine {
             templates: PathBuf::from("mapping-templates.json"),
             reply_bytes: None,
             journal: None,
+            policy: None,
         }
     }
 
@@ -685,6 +693,8 @@ impl Engine {
             read_only: false,
             project_area: Value::Null,
             conventions: crate::conventions::none(),
+            packs: PackSet::default(),
+            pack_texts: HashMap::new(),
             reverted: HashSet::new(),
             next_step: 1,
             system_issues: Vec::new(),
@@ -729,6 +739,7 @@ impl Engine {
             "unitSystem": p.unit_system,
             "projectArea": p.project_area,
             "conventions": p.conventions,
+            "installedPacks": p.packs.installed().map(|i| i.info.clone()).collect::<Vec<_>>(),
             "readOnly": p.read_only,
             "dirty": p.log.entries().last().is_some_and(|e| e["action"] != "project.save"),
             "lastSavedAt": p.last_saved_at,
@@ -1266,7 +1277,7 @@ impl Engine {
             let baseline = d.recipe["baseline"]["issues"].as_array();
             for st in &d.issues {
                 let columns: Vec<String> = st.draft.columns.iter().map(|c| namer(c)).collect();
-                let mut issue = to_issue(st, &d.excluded);
+                let mut issue = to_issue(st, &d.excluded, &p.packs);
                 // After a recipe run, each issue says whether it is new or changed since its baseline.
                 if let Some(baseline) = baseline {
                     issue["delta"] = crate::recipes::delta_of(&issue, &columns, baseline);
@@ -1429,6 +1440,7 @@ impl Engine {
     /// The data health score (FR-VAL-05), as queries.ts datasetHealth.
     pub fn health(&self, dataset: &Value) -> Result<Value> {
         let d = self.dataset(dataset)?;
+        let packs = &self.project()?.packs;
         let checked = d.checked();
         let rows = d.visible_rows();
         let counted: Vec<&IssueState> = d
@@ -1447,7 +1459,7 @@ impl Engine {
         let open = |sts: &[&IssueState]| {
             sts.iter()
                 .filter(|st| {
-                    to_issue(st, &d.excluded)["counts"]["open"]
+                    to_issue(st, &d.excluded, packs)["counts"]["open"]
                         .as_u64()
                         .unwrap_or(0)
                         > 0
@@ -1724,22 +1736,32 @@ fn install_views(conn: &Connection, d: &mut Dataset) -> Result<()> {
     Ok(())
 }
 
+/// What a project's check runs run with: its area, and its packs (reducer.ts checkPacksOf).
+#[derive(Clone)]
+struct RunWith {
+    area: Option<[f64; 4]>,
+    packs: PackSet,
+}
+
+fn run_with(p: &Project) -> RunWith {
+    RunWith {
+        area: area_of(&p.project_area),
+        packs: p.packs.clone(),
+    }
+}
+
 /// Every check of the check packs over a dataset's working view, as a check run does.
 fn check_drafts(
     conn: &Connection,
     d: &Dataset,
-    project_area: Option<[f64; 4]>,
+    with: &RunWith,
     cancel: &AtomicBool,
 ) -> Result<Vec<Draft>> {
-    check_ctx(conn, d, project_area).run(cancel, &mut |_, _| ())
+    check_ctx(conn, d, with).run(cancel, &mut |_, _| ())
 }
 
 /// What the checks of a dataset see: its working view, its schema and what its import noted.
-fn check_ctx<'a>(
-    conn: &'a Connection,
-    d: &'a Dataset,
-    project_area: Option<[f64; 4]>,
-) -> CheckCtx<'a> {
+fn check_ctx<'a>(conn: &'a Connection, d: &'a Dataset, with: &RunWith) -> CheckCtx<'a> {
     CheckCtx {
         conn,
         view: quote_ident(&d.view),
@@ -1751,22 +1773,18 @@ fn check_ctx<'a>(
         geometry_column: d.places().geometry_column,
         notes: &d.notes,
         assumptions: &d.assumptions,
-        project_area,
+        project_area: with.area,
+        packs: with.packs.clone(),
     }
 }
 
 /// Runs the checks again after a change recorded by entry `seq`, once a check run has been
 /// recorded for the dataset (reducer.ts recheck).
-fn recheck(
-    conn: &Connection,
-    d: &mut Dataset,
-    project_area: Option<[f64; 4]>,
-    seq: u64,
-) -> Result<()> {
+fn recheck(conn: &Connection, d: &mut Dataset, with: &RunWith, seq: u64) -> Result<()> {
     if !d.checked() {
         return Ok(());
     }
-    let drafts = check_drafts(conn, d, project_area, &AtomicBool::new(false))?;
+    let drafts = check_drafts(conn, d, with, &AtomicBool::new(false))?;
     let n = d.row_count;
     merge_check_run(&mut d.issues, drafts, seq, n);
     Ok(())
@@ -1779,7 +1797,7 @@ fn recheck(
 fn recheck_after(
     conn: &Connection,
     d: &mut Dataset,
-    project_area: Option<[f64; 4]>,
+    with: &RunWith,
     seq: u64,
     change: Change,
 ) -> Result<()> {
@@ -1787,7 +1805,7 @@ fn recheck_after(
         return Ok(());
     }
     let (mut drafts, rerun) =
-        check_ctx(conn, d, project_area).run_after(&change, &AtomicBool::new(false))?;
+        check_ctx(conn, d, with).run_after(&change, &AtomicBool::new(false))?;
     drafts.extend(
         d.issues
             .iter()
@@ -1990,7 +2008,7 @@ fn install_override(
     conn: &Connection,
     d: &mut Dataset,
     o: Outcome,
-    area: Option<[f64; 4]>,
+    with: &RunWith,
     seq: u64,
     recheck_now: bool,
 ) -> Result<()> {
@@ -2018,7 +2036,7 @@ fn install_override(
         }
     }
     if recheck_now {
-        recheck(conn, d, area, seq)?;
+        recheck(conn, d, with, seq)?;
     }
     Ok(())
 }
@@ -2074,7 +2092,7 @@ fn apply_decision(
             }
         }
         "rows.exclude" => {
-            let area = area_of(&p.project_area);
+            let with = run_with(p);
             let d = dataset_mut(p, &id)?;
             let rows = rows_of(&e["payload"]["rows"]);
             for &r in &rows {
@@ -2083,11 +2101,11 @@ fn apply_decision(
             d.exclusions.push((seq, rows));
             install_views(conn, d)?;
             if !skip(&id, seq) {
-                recheck(conn, d, area, seq)?;
+                recheck(conn, d, &with, seq)?;
             }
         }
         "cell.edit" => {
-            let area = area_of(&p.project_area);
+            let with = run_with(p);
             let d = dataset_mut(p, &id)?;
             let row = e["target"]["rowId"].as_u64().unwrap_or(0);
             let col = e["target"]["columnId"].as_str().unwrap_or("").to_string();
@@ -2095,11 +2113,11 @@ fn apply_decision(
             install_views(conn, d)?;
             if !skip(&id, seq) {
                 let change = edited(d, &col)?;
-                recheck_after(conn, d, area, seq, change)?;
+                recheck_after(conn, d, &with, seq, change)?;
             }
         }
         "step.apply" => {
-            let area = area_of(&p.project_area);
+            let with = run_with(p);
             let step_id = e["target"]["stepId"].as_str().unwrap_or("").to_string();
             let n: u64 = step_id.trim_start_matches('s').parse().unwrap_or(0);
             p.next_step = p.next_step.max(n + 1);
@@ -2111,11 +2129,11 @@ fn apply_decision(
             d.steps.push(step);
             install_views(conn, d)?;
             if working && !skip(&id, seq) {
-                recheck(conn, d, area, seq)?;
+                recheck(conn, d, &with, seq)?;
             }
         }
         "step.remove" => {
-            let area = area_of(&p.project_area);
+            let with = run_with(p);
             let d = dataset_mut(p, &id)?;
             let step_id = &e["target"]["stepId"];
             let working = d
@@ -2125,17 +2143,17 @@ fn apply_decision(
             d.steps.retain(|st| st["id"] != *step_id);
             install_views(conn, d)?;
             if working && !skip(&id, seq) {
-                recheck(conn, d, area, seq)?;
+                recheck(conn, d, &with, seq)?;
             }
         }
         "detection.override" => {
-            let area = area_of(&p.project_area);
+            let with = run_with(p);
             let o = match prepared {
                 Some(o) => o,
                 None => override_outcome(conn, p, e, None, env, seq)?,
             };
             let d = dataset_mut(p, &id)?;
-            install_override(conn, d, o, area, seq, !skip(&id, seq))?;
+            install_override(conn, d, o, &with, seq, !skip(&id, seq))?;
         }
         "recipe.apply" => {
             let r = &e["payload"]["recipe"];
@@ -2162,16 +2180,36 @@ fn apply_decision(
         }
         "project.area" => {
             p.project_area = e["new"].clone();
-            let area = area_of(&p.project_area);
+            let with = run_with(p);
             for d in &mut p.datasets {
                 if !skip(&d.id, seq) {
-                    recheck_after(conn, d, area, seq, Change::Area)?;
+                    recheck_after(conn, d, &with, seq, Change::Area)?;
                 }
             }
         }
         "project.conventions" => {
             // The log holds its members sorted; the project keeps them in the recorded order.
             p.conventions = crate::conventions::recorded(&e["new"]);
+        }
+        "rulepack.install" => {
+            let info = e["new"].clone();
+            let pack = e["payload"]["pack"].clone();
+            if !crate::rulepacks::pack_valid(&pack) {
+                return Err(EngineError::new(
+                    "INTERNAL",
+                    format!(
+                        "The rule-pack {} {} recorded in entry {seq} does not follow the rule-pack format.",
+                        info["id"].as_str().unwrap_or(""),
+                        info["version"].as_str().unwrap_or("")
+                    ),
+                    "Open the project file this project was saved as, or install the rule-pack again.",
+                ));
+            }
+            p.pack_texts.insert(
+                info["sha256"].as_str().unwrap_or("").to_string(),
+                crate::canonical::canonical_json(&pack),
+            );
+            p.packs.install(Installed::new(info, pack));
         }
         "entry.revert" => {
             let Some(target) = reverted else {
@@ -2185,16 +2223,16 @@ fn apply_decision(
                 .to_string();
             match target["action"].as_str().unwrap_or("") {
                 "step.apply" => {
-                    let area = area_of(&p.project_area);
+                    let with = run_with(p);
                     let d = dataset_mut(p, &tid)?;
                     d.steps.retain(|st| st["id"] != target["target"]["stepId"]);
                     install_views(conn, d)?;
                     if !skip(&tid, seq) {
-                        recheck(conn, d, area, seq)?;
+                        recheck(conn, d, &with, seq)?;
                     }
                 }
                 "cell.edit" => {
-                    let area = area_of(&p.project_area);
+                    let with = run_with(p);
                     let d = dataset_mut(p, &tid)?;
                     let row = target["target"]["rowId"].as_u64().unwrap_or(0);
                     let col = target["target"]["columnId"]
@@ -2210,7 +2248,7 @@ fn apply_decision(
                     install_views(conn, d)?;
                     if !skip(&tid, seq) {
                         let change = edited(d, &col)?;
-                        recheck_after(conn, d, area, seq, change)?;
+                        recheck_after(conn, d, &with, seq, change)?;
                     }
                 }
                 "issue.accept" => {
@@ -2237,7 +2275,7 @@ fn apply_decision(
                     }
                 }
                 "rows.exclude" => {
-                    let area = area_of(&p.project_area);
+                    let with = run_with(p);
                     let d = dataset_mut(p, &tid)?;
                     d.exclusions.retain(|(by, _)| *by != target_seq);
                     let mut excluded = RowSet::new(d.row_count);
@@ -2249,15 +2287,15 @@ fn apply_decision(
                     d.excluded = excluded;
                     install_views(conn, d)?;
                     if !skip(&tid, seq) {
-                        recheck(conn, d, area, seq)?;
+                        recheck(conn, d, &with, seq)?;
                     }
                 }
                 "project.area" => {
                     p.project_area = target["old"].clone();
-                    let area = area_of(&p.project_area);
+                    let with = run_with(p);
                     for d in &mut p.datasets {
                         if !skip(&d.id, seq) {
-                            recheck_after(conn, d, area, seq, Change::Area)?;
+                            recheck_after(conn, d, &with, seq, Change::Area)?;
                         }
                     }
                 }
@@ -2265,13 +2303,13 @@ fn apply_decision(
                     p.conventions = crate::conventions::recorded(&target["old"]);
                 }
                 "detection.override" => {
-                    let area = area_of(&p.project_area);
+                    let with = run_with(p);
                     let o = match prepared {
                         Some(o) => o,
                         None => override_outcome(conn, p, e, Some(target), env, seq)?,
                     };
                     let d = dataset_mut(p, &tid)?;
-                    install_override(conn, d, o, area, seq, !skip(&tid, seq))?;
+                    install_override(conn, d, o, &with, seq, !skip(&tid, seq))?;
                 }
                 other => {
                     return Err(EngineError::unsupported(format!(
@@ -2972,16 +3010,20 @@ impl Engine {
 }
 
 impl Engine {
-    /// The rule packs the checks run (listRulePacks), as shipped.
+    /// The rule packs the checks run (listRulePacks): the built-in ones as shipped, then those
+    /// installed in the open project.
     pub fn list_rule_packs(&self) -> Result<Value> {
-        [crate::rules::GENERIC_DQ_JSON, crate::rules::SYSTEM_JSON]
+        let mut packs = [crate::rules::GENERIC_DQ_JSON, crate::rules::SYSTEM_JSON]
             .iter()
             .map(|text| {
                 serde_json::from_str::<Value>(text)
                     .map_err(|_| EngineError::internal("A built-in rule pack is not JSON."))
             })
-            .collect::<Result<Vec<_>>>()
-            .map(Value::from)
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(p) = &self.project {
+            packs.extend(p.packs.installed().map(|i| i.json.clone()));
+        }
+        Ok(Value::from(packs))
     }
 
     /// The coordinate reference systems a transformation can use (listCrs).
@@ -3437,6 +3479,8 @@ pub fn recover_project(shared: &Arc<Shared>) -> Result<Value> {
                 read_only: false,
                 project_area: Value::Null,
                 conventions: crate::conventions::none(),
+                packs: PackSet::default(),
+                pack_texts: HashMap::new(),
                 reverted: HashSet::new(),
                 next_step: 1,
                 system_issues: Vec::new(),
@@ -3992,11 +4036,6 @@ fn recorded_packs(run: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// The rule packs this engine checks with, as references.
-fn builtin_packs() -> Vec<Value> {
-    check_packs().iter().map(|p| p.reference()).collect()
-}
-
 impl Engine {
     /// A recipe of a dataset's steps, checks and issues (saveRecipe); the .twr bytes go back with
     /// the answer.
@@ -4043,10 +4082,11 @@ impl Engine {
                 "Run checks or apply a step first, then save the recipe.",
             ));
         }
+        let packs = &self.project()?.packs;
         let issues: Vec<Value> = d
             .issues
             .iter()
-            .map(|st| to_issue(st, &d.excluded))
+            .map(|st| to_issue(st, &d.excluded, packs))
             .collect();
         let version = if d.recipe["name"] == name.as_str() {
             d.recipe["version"].as_u64().unwrap_or(0) + 1
@@ -4095,7 +4135,7 @@ impl Engine {
             &d.base_columns(),
             &Places::of(&d.spec),
             &d.steps,
-            &builtin_packs(),
+            &self.project()?.packs.references(),
         )
         .0)
     }
@@ -4161,7 +4201,7 @@ pub fn apply_recipe(
                 &d.base_columns(),
                 &Places::of(&d.spec),
                 &d.steps,
-                &builtin_packs(),
+                &engine.project()?.packs.references(),
             );
             if plan["fits"] != true {
                 return Err(EngineError::invalid(
@@ -4217,14 +4257,14 @@ pub fn apply_recipe(
             }
             let checked = !recipe["check"].is_null();
             if checked {
-                let area = area_of(&engine.project()?.project_area);
+                let with = run_with(engine.project()?);
                 let drafts = check_drafts(
                     &engine.conn,
                     engine.dataset(&json!(dataset_id))?,
-                    area,
+                    &with,
                     &cancel,
                 )?;
-                let packs = builtin_packs();
+                let packs = with.packs.references();
                 let mut run = draft("check.run", json!({ "datasetId": dataset_id }));
                 run.insert("payload".into(), json!({ "packs": packs }));
                 let run = engine.append(run, None)?;
@@ -4238,6 +4278,7 @@ pub fn apply_recipe(
                 d.check_packs = recorded_packs(&run);
             }
             let d = engine.dataset(&json!(dataset_id))?;
+            let packs = &engine.project()?.packs;
             let mut result = json!({
                 "datasetId": dataset_id,
                 "recipeId": recipe["id"],
@@ -4254,7 +4295,7 @@ pub fn apply_recipe(
                 let issues: Vec<Value> = d
                     .issues
                     .iter()
-                    .map(|st| to_issue(st, &d.excluded))
+                    .map(|st| to_issue(st, &d.excluded, packs))
                     .collect();
                 let states: Vec<Value> = issues
                     .iter()
@@ -4456,6 +4497,58 @@ pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
     Ok(json!([entry]))
 }
 
+/// Installs a signed rule-pack file (installRulePack, FR-RUL-01, FR-RUL-02), once it has passed
+/// every check against the administrator's policy, which is read from its file at each install.
+/// The entry records the pack itself, so the log alone holds every rule a check run used.
+/// Result: AuditEntry[].
+pub fn install_rule_pack(
+    shared: &Arc<Shared>,
+    msg: &Incoming,
+    file: &Value,
+    reason: &Value,
+) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.writable()?;
+    let why = reason_of(reason)?;
+    let (bytes, _) = input_bytes(&engine, msg, file)?;
+    let policy = crate::rulepacks::read_policy(engine.policy.as_deref())?;
+    let p = engine.writable()?;
+    let v = crate::rulepacks::verify(&bytes, &policy, &p.packs)?;
+    let previous = p
+        .packs
+        .installed()
+        .find(|i| v.info["id"] == i.pack.id.as_str())
+        .map_or(Value::Null, |i| i.info.clone());
+    let mut e = draft("rulepack.install", json!({}));
+    e.insert("old".into(), previous);
+    e.insert("new".into(), v.info);
+    e.insert("reason".into(), json!(why));
+    e.insert("payload".into(), json!({ "pack": v.pack }));
+    let entry = engine.append(e, None)?;
+    let Engine {
+        conn,
+        project,
+        workdir,
+        threads,
+        ..
+    } = &mut *engine;
+    let p = project
+        .as_mut()
+        .ok_or_else(|| EngineError::internal("The project disappeared during the install."))?;
+    let env = ReadEnv {
+        workdir,
+        threads: *threads,
+    };
+    apply_decision(conn, p, &entry, None, &|_, _| false, &env, None)?;
+    engine.journal_now();
+    drop(engine);
+    shared.event(json!({ "type": "project.changed", "what": ["project", "audit"] }));
+    Ok(json!([entry]))
+}
+
 /// Starts a check run over a dataset (SAD section 8.3): every rule of the check packs, as SQL.
 pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
     let mut engine = shared
@@ -4474,7 +4567,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
     let geometry_column = places.geometry_column;
     let notes = d.notes.clone();
     let assumptions = d.assumptions.clone();
-    let project_area = area_of(&engine.project()?.project_area);
+    let with = run_with(engine.project()?);
     let conn = engine.conn.try_clone()?;
     let (job, cancel) = engine.start_job();
     let started = engine.clock.now_ms();
@@ -4513,7 +4606,8 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
             geometry_column,
             notes: &notes,
             assumptions: &assumptions,
-            project_area,
+            project_area: with.area,
+            packs: with.packs.clone(),
         };
         let outcome = ctx.run(&cancel, &mut progress).and_then(|drafts| {
             let mut engine = shared
@@ -4527,7 +4621,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
                     "Run the checks again in the open project.",
                 ));
             }
-            let packs: Vec<Value> = check_packs().iter().map(|p| p.reference()).collect();
+            let packs = with.packs.references();
             let mut entry = draft("check.run", json!({ "datasetId": dataset_id }));
             entry.insert("payload".into(), json!({ "packs": packs }));
             let run = engine.append(entry, None)?;
@@ -4661,7 +4755,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         issues: d
             .issues
             .iter()
-            .map(|st| to_issue(st, &d.excluded))
+            .map(|st| to_issue(st, &d.excluded, &p.packs))
             .collect(),
         audit: p.log.entries().to_vec(),
         audit_head: json!({ "seq": seq, "hash": hash }),
@@ -5001,10 +5095,18 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             let packs = rule_packs_of(&p.log);
             let mut rule_packs = Vec::new();
             for r in packs {
-                let text =
-                    crate::rules::pack_json(r["id"].as_str().unwrap_or("")).ok_or_else(|| {
-                        EngineError::internal(format!("The rule pack {} is not built in.", r["id"]))
-                    })?;
+                // An installed pack's canonical JSON, else a built-in pack's file (packJson).
+                let text = match p.pack_texts.get(r["sha256"].as_str().unwrap_or("")) {
+                    Some(text) => text.clone(),
+                    None => crate::rules::pack_json(r["id"].as_str().unwrap_or(""))
+                        .map(String::from)
+                        .ok_or_else(|| {
+                            EngineError::internal(format!(
+                                "The rule pack {} is neither built in nor installed.",
+                                r["id"]
+                            ))
+                        })?,
+                };
                 rule_packs.push((r, text));
             }
             let mut manifest = Map::new();
@@ -5763,6 +5865,7 @@ impl Reopen<'_> {
                 | "issue.comment"
                 | "project.area"
                 | "project.conventions"
+                | "rulepack.install"
                 | "entry.revert"
                 | "step.apply"
                 | "step.remove"
@@ -6041,15 +6144,14 @@ impl Reopen<'_> {
         e: &Value,
         progress: &mut dyn FnMut(&str, u64),
     ) -> Result<CheckReplay> {
-        let packs: Vec<Value> = check_packs().iter().map(|p| p.reference()).collect();
-        if e["payload"]["packs"].as_array() != Some(&packs) {
+        let with = run_with(p);
+        if e["payload"]["packs"].as_array() != Some(&with.packs.references()) {
             return Err(EngineError::unsupported(
-                "check runs with rule packs other than the built-in ones",
+                "check runs with rule packs other than the built-in and installed ones",
             ));
         }
         let seq = e["seq"].as_u64().unwrap_or(0);
         let id = e["target"]["datasetId"].as_str().unwrap_or("");
-        let area = area_of(&p.project_area);
         let d = p.datasets.iter_mut().find(|d| d.id == id).ok_or_else(|| {
             EngineError::internal(format!("The log checks dataset {id} before importing it."))
         })?;
@@ -6058,7 +6160,7 @@ impl Reopen<'_> {
             return Ok(CheckReplay::Superseded);
         }
         progress("Running the recorded checks", 0);
-        let drafts = check_drafts(self.conn, d, area, self.cancel)?;
+        let drafts = check_drafts(self.conn, d, &with, self.cancel)?;
         let rows = d.row_count;
         merge_check_run(&mut d.issues, drafts, seq, rows);
         Ok(CheckReplay::Ran)
@@ -6161,6 +6263,8 @@ pub fn open_project(shared: &Arc<Shared>, msg: &Incoming, file: &Value) -> Resul
                 read_only: false,
                 project_area: Value::Null,
                 conventions: crate::conventions::none(),
+                packs: PackSet::default(),
+                pack_texts: HashMap::new(),
                 reverted: HashSet::new(),
                 next_step: 1,
                 system_issues: Vec::new(),

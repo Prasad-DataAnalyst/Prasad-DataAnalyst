@@ -252,6 +252,20 @@ export function defaultCommands(): Command[] {
       },
     },
     {
+      id: 'data.rulepack',
+      label: 'Install rule-pack…',
+      menu: 'data',
+      enabled: writable,
+      run: async (ctx) => {
+        const file = await ctx.pickFile('.twrules');
+        if (file === null) return;
+        const reason = await ctx.requestReason(`Install the rule-pack ${file.name}`);
+        if (reason === null) return;
+        await ctx.engine.installRulePack({ kind: 'blob', blob: file, name: file.name }, reason);
+        ctx.store.setBottomTab('log');
+      },
+    },
+    {
       id: 'data.templates',
       label: 'Mapping templates…',
       menu: 'data',

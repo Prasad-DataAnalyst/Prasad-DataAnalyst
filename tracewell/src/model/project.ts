@@ -2,7 +2,7 @@
 import type { Conventions } from './conventions';
 import type { ExportRecord, OriginalFileInfo } from './export';
 import type { AuditSeq, BBox, DatasetId, IsoUtc, ProjectId, Sha256Hex, UserProfile } from './ids';
-import type { RulePackRef } from './rules';
+import type { InstalledRulePack, RulePackRef } from './rules';
 import type { TableSchema } from './schema';
 import type { Step } from './steps';
 
@@ -92,6 +92,8 @@ export interface ProjectSummary {
   projectArea: BBox | null;
   /** The conventions the project works to (FR-CNV-02), as the last project.conventions entry set them. */
   conventions: Conventions;
+  /** Rule-packs installed from signed files, in the order they were installed; checks run them after the built-in packs. */
+  installedPacks: InstalledRulePack[];
   readOnly: boolean;
   dirty: boolean;
   lastSavedAt: IsoUtc | null;

@@ -3,7 +3,7 @@
  * current, accepted and excluded rows, from which the counts and the status follow.
  */
 import { findRule, GENERIC_DQ, issueId, SYSTEM_RULES } from '@tw/rules';
-import type { AuditSeq, Issue, IssueDraft, IssueId, IssueOccurrence, RowId, Severity } from '@tw/model';
+import type { AuditSeq, Issue, IssueDraft, IssueId, IssueOccurrence, RowId, RulePack, Severity } from '@tw/model';
 import { RowSet } from '@tw/table';
 import type { DatasetState, IssueState } from './state';
 
@@ -75,8 +75,9 @@ export function issueStatus(c: Issue['counts']): Issue['status'] {
   return 'partly_resolved';
 }
 
-export function toIssue(id: IssueId, st: IssueState, ds: DatasetState): Issue {
-  const rule = findRule(PACKS, st.draft.ruleId)?.rule;
+/** An issue as the protocol gives it; `packs` are the project's (built-in and installed) for the rule's text. */
+export function toIssue(id: IssueId, st: IssueState, ds: DatasetState, packs: RulePack[] = PACKS): Issue {
+  const rule = findRule(packs, st.draft.ruleId)?.rule;
   const counts = issueCounts(st, ds.excluded);
   const open =
     st.draft.scope === 'rows' ? st.current.minus(ds.excluded).minus(st.accepted) : new RowSet(ds.dataset.rowCount);

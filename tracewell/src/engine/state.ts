@@ -13,10 +13,12 @@ import {
   type IsoUtc,
   type IssueComment,
   type IssueDraft,
+  type InstalledRulePack,
   type IssueId,
   type OriginalFileInfo,
   type ProjectId,
   type Recipe,
+  type RulePack,
   type RulePackRef,
   type Step,
   type UserProfile,
@@ -67,6 +69,10 @@ export interface ProjectState {
   unitSystem: 'SI' | 'Oilfield';
   projectArea: BBox | null;
   conventions: Conventions;
+  /** Rule-packs installed from signed files, in install order (a newer version replaces its pack). */
+  installedPacks: { info: InstalledRulePack; pack: RulePack }[];
+  /** Every pack version installed in the project, by SHA-256, so a project file can store what check runs used. */
+  packsBySha: Map<string, RulePack>;
   readOnly: boolean;
   lastSavedAt: IsoUtc | null;
   lastSavedSeq: AuditSeq | null;
@@ -92,6 +98,8 @@ export function emptyProject(id: ProjectId, log: AuditLog = new AuditLog(id)): P
     unitSystem: 'SI',
     projectArea: null,
     conventions: { ...NO_CONVENTIONS },
+    installedPacks: [],
+    packsBySha: new Map(),
     readOnly: false,
     lastSavedAt: null,
     lastSavedSeq: null,

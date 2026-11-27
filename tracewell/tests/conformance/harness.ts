@@ -19,20 +19,26 @@ import {
 import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { fixturePath, type FixtureName } from '@tw/fixtures';
 import { nodeFs } from '@tw/io/node';
-import type { DatasetSummary, ImportRequestOptions, Issue, JsonValue } from '@tw/model';
+import type { DatasetSummary, ImportRequestOptions, Issue, JsonValue, RulePackPolicy } from '@tw/model';
 
 export type EngineFactory = () => Promise<EngineClient>;
 
 export const START = '2026-10-19T08:00:00.000Z';
 
-function localEngine(): LocalEngine {
+function localEngine(policy?: RulePackPolicy): LocalEngine {
   return new LocalEngine({
     appVersion: '0.1.0',
     owner: 'Prasad',
     clock: fixedClock(START),
     ids: seededIds(1),
     fs: nodeFs(),
+    ...(policy === undefined ? {} : { policy }),
   });
+}
+
+/** The TypeScript engine in-process, as ENGINE_FACTORIES makes it, under an administrator's rule-pack policy. */
+export function engineWithPolicy(policy: RulePackPolicy): EngineClient {
+  return new EngineClient(inProcessTransport(localEngine(policy)));
 }
 
 /** The engine side and the client side of two pipes, as a child process's stdin and stdout would be. */

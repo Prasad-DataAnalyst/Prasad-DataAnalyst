@@ -9,6 +9,7 @@
 import { AuditLog } from '@tw/audit';
 import { sha256Hex } from '@tw/io';
 import {
+  canonicalJson,
   EngineError,
   type AuditEntry,
   type IntegrityCheck,
@@ -41,7 +42,10 @@ export function datasetDigests(state: ProjectState): DatasetDigest[] {
   }));
 }
 
-function packJson(ref: RulePackRef): string {
+/** A pack's text as the project file stores it: a built-in pack's file, an installed pack's canonical JSON. */
+function packJson(state: ProjectState, ref: RulePackRef): string {
+  const installed = state.packsBySha.get(ref.sha256);
+  if (installed !== undefined) return canonicalJson(installed as unknown as JsonValue);
   const json = (BUILTIN_PACK_JSON as Record<string, string | undefined>)[ref.id];
   if (json === undefined) {
     throw new EngineError(
@@ -75,7 +79,7 @@ export function projectBytes(state: ProjectState, appVersion: string, digests: D
     },
     originals: [...state.originals.values()],
     auditJsonl: state.log.toJsonl(),
-    rulePacks: state.rulePacks.map((ref) => ({ ref, json: packJson(ref) })),
+    rulePacks: state.rulePacks.map((ref) => ({ ref, json: packJson(state, ref) })),
     unitRegistry: { version: REGISTRY_VERSION, json: REGISTRY_JSON },
   });
 }

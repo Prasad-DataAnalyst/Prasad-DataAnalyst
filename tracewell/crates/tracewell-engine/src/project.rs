@@ -110,7 +110,7 @@ pub struct SaveInput {
     pub caches: Vec<(Value, PathBuf)>,
     /// Caches held in memory: each dataset's notes as JSON.
     pub cache_bytes: Vec<(Value, Vec<u8>)>,
-    pub rule_packs: Vec<(Value, &'static str)>,
+    pub rule_packs: Vec<(Value, String)>,
     pub registry: (String, &'static str),
 }
 

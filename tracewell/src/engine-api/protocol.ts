@@ -59,7 +59,7 @@ import type {
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.10.0';
+export const PROTOCOL_VERSION = '0.11.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -112,6 +112,11 @@ export interface EngineApi {
   /** The data health score of a dataset (FR-VAL-05). Protocol 0.3. */
   getHealth(datasetId: DatasetId): Promise<DatasetHealth>;
   decide(d: Decision): Promise<AuditEntry[]>;
+  /**
+   * Installs a signed rule-pack file (.twrules) into the project, as the policy allows (FR-RUL-02).
+   * Protocol 0.11.
+   */
+  installRulePack(file: FileInput, reason: string): Promise<AuditEntry[]>;
   listAudit(q: AuditQuery): Promise<Page<AuditEntry>>;
   verifyAudit(): Promise<ChainReport>;
   previewStep(datasetId: DatasetId, s: StepInput): Promise<StepPreview>;
@@ -119,6 +124,7 @@ export interface EngineApi {
   applyStep(datasetId: DatasetId, s: StepInput, reason: string): Promise<JobHandle>;
   removeStep(datasetId: DatasetId, stepId: StepId, reason: string): Promise<AuditEntry>;
   listUnits(q?: { quantity?: QuantityKind; compatibleWith?: string }): Promise<UnitInfo[]>;
+  /** The packs check runs use: the built-in ones, then those installed in the open project (protocol 0.11). */
   listRulePacks(): Promise<RulePack[]>;
   /** The coordinate reference systems a transformation step can use (FR-PRC-02). Protocol 0.7. */
   listCrs(): Promise<CrsInfo[]>;
@@ -220,6 +226,7 @@ export const ENGINE_METHODS = [
   'listOccurrences',
   'getHealth',
   'decide',
+  'installRulePack',
   'listAudit',
   'verifyAudit',
   'previewStep',

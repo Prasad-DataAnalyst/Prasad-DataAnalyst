@@ -88,10 +88,11 @@ import {
   type TemplateId,
   type UnitInfo,
   type UserProfile,
+  type RulePackPolicy,
 } from '@tw/model';
 import { supportedCrs } from '@tw/geo';
 import { suggestedFileName } from '@tw/project';
-import { BUILTIN_PACK_JSON, GENERIC_DQ, SYSTEM_RULES, rulePackRef } from '@tw/rules';
+import { BUILTIN_PACK_JSON, GENERIC_DQ, SYSTEM_RULES, rulePackRef, verifyRulePackFile } from '@tw/rules';
 import {
   conversionFor,
   crsTransformationOf,
@@ -123,7 +124,7 @@ import { memoryTemplateStore, type TemplateStore } from './template-store';
 import { explainCell } from './lineage';
 import { datasetDigests, openJournal, openProjectBytes, projectBytes } from './project-io';
 import { datasetHealth, listIssues, listOccurrences, listUnits } from './queries';
-import { applyEntry, checkDrafts, overrideOutcome, type Prepared } from './reducer';
+import { applyEntry, checkDrafts, checkPacksOf, overrideOutcome, type Prepared } from './reducer';
 import { emptyProject, type DatasetState, type ProjectState } from './state';
 import { outputView, viewFor, workingView } from './views';
 import { columnStats, invalid, requireBox, requireCount, requireStage, rowWindow } from './windows';
@@ -191,6 +192,8 @@ export interface LocalEngineOptions {
   templates?: TemplateStore;
   /** Where this session's recovery journal is kept (FR-PRJ-03); nothing is journalled without one. */
   journal?: JournalStore;
+  /** The administrator's rule-pack policy (FR-RUL-04): trusted publishers and locked versions. */
+  policy?: RulePackPolicy;
 }
 
 function roundTrip<T>(value: T): T {
@@ -256,11 +259,12 @@ function mediaTypeOf(format: SourceFormat, bytes: Uint8Array): string {
   return MEDIA_TYPES[format];
 }
 
-/** The rule packs this engine checks with. */
-function builtinPacks(): RulePackRef[] {
+/** The rule packs a check run of the project runs: the built-in packs, then the installed ones. */
+function packRefsOf(state: ProjectState): RulePackRef[] {
   return [
     rulePackRef(GENERIC_DQ, BUILTIN_PACK_JSON['tracewell.generic-dq']),
     rulePackRef(SYSTEM_RULES, BUILTIN_PACK_JSON['tracewell.system']),
+    ...state.installedPacks.map((i) => ({ id: i.info.id, version: i.info.version, sha256: i.info.sha256 })),
   ];
 }
 
@@ -721,7 +725,7 @@ export class LocalEngine implements EngineImpl {
         'Run checks or apply a step first, then save the recipe.',
       );
     }
-    const issues = [...ds.issues].map(([id, st]) => toIssue(id, st, ds));
+    const issues = [...ds.issues].map(([id, st]) => toIssue(id, st, ds, checkPacksOf(state)));
     const recipe = buildRecipe(ds, issues, {
       name,
       version: ds.recipe?.name === name ? ds.recipe.version + 1 : 1,
@@ -745,7 +749,7 @@ export class LocalEngine implements EngineImpl {
   async planRecipe(datasetId: DatasetId, file: FileInput): Promise<RecipePlan> {
     const ds = this.dataset(datasetId);
     const recipe = parseRecipe(await this.readAll(file), this.fileName(file));
-    return planRecipe(recipe, ds, builtinPacks()).plan;
+    return planRecipe(recipe, ds, packRefsOf(this.project())).plan;
   }
 
   /**
@@ -761,7 +765,7 @@ export class LocalEngine implements EngineImpl {
         const state = this.writable();
         const ds = datasetOf(state, datasetId);
         const recipe = parseRecipe(await this.readAll(file), this.fileName(file));
-        const { plan, steps } = planRecipe(recipe, ds, builtinPacks());
+        const { plan, steps } = planRecipe(recipe, ds, packRefsOf(this.project()));
         if (!plan.fits) {
           throw new EngineError(
             'INVALID_INPUT',
@@ -806,7 +810,7 @@ export class LocalEngine implements EngineImpl {
         };
         if (recipe.baseline !== null && recipe.check !== null) {
           const name = columnNamer(ds);
-          const issues = [...ds.issues].map(([id, st]) => toIssue(id, st, ds));
+          const issues = [...ds.issues].map(([id, st]) => toIssue(id, st, ds, checkPacksOf(state)));
           const states = issues.map((i) => deltaOf(i, i.columns.map(name), recipe.baseline?.issues ?? []).state);
           result.delta = {
             new: states.filter((s) => s === 'new').length,
@@ -899,7 +903,7 @@ export class LocalEngine implements EngineImpl {
       ctx.progress({ phase: 'Running checks', done, total, unit: 'items' }),
     );
     ctx.checkCancelled();
-    const packs = builtinPacks();
+    const packs = packRefsOf(state);
     await this.commit(
       state,
       { action: 'check.run', target: { datasetId: ds.id }, payload: asJson({ packs }) },
@@ -929,6 +933,32 @@ export class LocalEngine implements EngineImpl {
         EVERYTHING.filter((w) => w !== 'exports'),
         entry.target.datasetId,
       );
+      return [structuredClone(entry)];
+    });
+  }
+
+  /**
+   * Installs a signed rule-pack file into the project (FR-RUL-01, FR-RUL-02), once its publisher,
+   * signature, format and version pass the policy; a newer version replaces its pack. The entry
+   * carries the pack itself, so the log alone replays it.
+   */
+  async installRulePack(file: FileInput, reason: string): Promise<AuditEntry[]> {
+    this.writable();
+    const why = requireReason(reason);
+    return this.exclusive(async () => {
+      const state = this.writable();
+      const bytes = await this.readAll(file);
+      const v = await verifyRulePackFile(bytes, this.o.policy, state.installedPacks, [GENERIC_DQ, SYSTEM_RULES]);
+      const previous = state.installedPacks.find((i) => i.info.id === v.pack.id)?.info ?? null;
+      const entry = await this.commitDraft(state, {
+        action: 'rulepack.install',
+        target: {},
+        old: previous === null ? null : asJson(previous),
+        new: asJson(v.installed),
+        reason: why,
+        payload: asJson({ pack: v.pack }),
+      });
+      this.changed(['project', 'audit']);
       return [structuredClone(entry)];
     });
   }
@@ -1054,7 +1084,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async listRulePacks(): Promise<RulePack[]> {
-    return structuredClone([GENERIC_DQ, SYSTEM_RULES]);
+    return structuredClone(this.state === null ? [GENERIC_DQ, SYSTEM_RULES] : checkPacksOf(this.state));
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1252,7 +1282,7 @@ export class LocalEngine implements EngineImpl {
       stepDescriptions: this.stepDescriptions(state, ds),
       excludedRows: ds.excluded.size,
       assumptions: ds.assumptions,
-      issues: [...ds.issues].map(([id, st]) => toIssue(id, st, ds)),
+      issues: [...ds.issues].map(([id, st]) => toIssue(id, st, ds, checkPacksOf(state))),
       audit: state.log.entries(),
       auditHead: state.log.head,
     };
@@ -1291,6 +1321,7 @@ export class LocalEngine implements EngineImpl {
       unitSystem: state.unitSystem,
       projectArea: state.projectArea === null ? null : [...state.projectArea],
       conventions: structuredClone(state.conventions),
+      installedPacks: state.installedPacks.map((i) => ({ ...i.info })),
       readOnly: state.readOnly,
       dirty: head.seq > 0 && state.lastSavedSeq !== head.seq,
       lastSavedAt: state.lastSavedAt,

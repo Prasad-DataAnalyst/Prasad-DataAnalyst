@@ -10,7 +10,7 @@ use crate::error::{EngineError, Result};
 use crate::import::quote_ident;
 use crate::import::quote_text;
 use crate::parse::Kind;
-use crate::rules::{Draft, Pack, RowSet, Rule, Var, check_packs, render_message};
+use crate::rules::{Draft, Pack, PackSet, RowSet, Rule, Var, render_message};
 use crate::stream::each_batch;
 use crate::units::{is_js_space, js_trim, physical_bounds, split_value_unit};
 use duckdb::Connection;
@@ -82,6 +82,8 @@ pub struct CheckCtx<'a> {
     pub notes: &'a [Note],
     pub assumptions: &'a [Value],
     pub project_area: Option<[f64; 4]>,
+    /// The packs the run runs: the built-in ones, then the project's installed ones.
+    pub packs: PackSet,
 }
 
 /// What changed since a dataset's last check run.
@@ -119,8 +121,8 @@ impl Rerun {
 }
 
 /// The rules a check run runs, in order: every rule of the check packs but the system rules.
-fn run_rules() -> Vec<(&'static Pack, &'static Rule)> {
-    check_packs()
+fn run_rules(packs: &PackSet) -> Vec<(&Pack, &Rule)> {
+    packs
         .iter()
         .flat_map(|p| {
             p.rules
@@ -1479,7 +1481,7 @@ impl CheckCtx<'_> {
     pub fn run_after(&self, change: &Change, cancel: &AtomicBool) -> Result<(Vec<Draft>, Rerun)> {
         let mut out = Vec::new();
         let mut rerun = Rerun::default();
-        for (pack, rule) in run_rules() {
+        for (pack, rule) in run_rules(&self.packs) {
             if cancel.load(Ordering::Relaxed) {
                 return Err(cancelled_run());
             }
@@ -1513,7 +1515,7 @@ impl CheckCtx<'_> {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Vec<Draft>> {
-        let rules = run_rules();
+        let rules = run_rules(&self.packs);
         let mut out = Vec::new();
         let cancelled = cancelled_run;
         for (done, (pack, rule)) in rules.iter().enumerate() {

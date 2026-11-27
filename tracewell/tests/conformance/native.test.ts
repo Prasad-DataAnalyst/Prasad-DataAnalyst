@@ -57,10 +57,12 @@ import {
   type RowWindow,
   type PlacesWindow,
 } from '@tw/model';
+import { parsePolicy } from '@tw/rules';
 import { columnDigest } from '@tw/table';
 import { parquetWriteBuffer } from 'hyparquet-writer';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ENGINE_FACTORIES, PROFILE, START } from './harness';
+import { ENGINE_FACTORIES, PROFILE, START, engineWithPolicy } from './harness';
+import { PACK, publisherKey, signPack } from './rulepack-signing';
 import { NATIVE_BINARY, nativeBuilt, startNative, stopNative, type NativeProcess } from './native-process';
 
 async function allRows(engine: EngineClient, datasetId: string): Promise<RowWindow['rows']> {
@@ -3441,6 +3443,139 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     } finally {
       stopNative(nat);
       lite.close();
+    }
+  }, 120_000);
+
+  it('verifies, installs, runs, saves and reopens signed rule-packs as the TypeScript engine does', async () => {
+    const acme = publisherKey();
+    const policyText = JSON.stringify({
+      format: 'tracewell-policy',
+      formatVersion: '0.1',
+      trustedKeys: [{ name: 'ACME', publicKey: acme.publicKey }],
+      lockedVersions: { 'acme.locked': '2.0.0' },
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'tw-policy-'));
+    const policyPath = join(dir, 'tracewell-policy.json');
+    writeFileSync(policyPath, policyText);
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad', '--policy', policyPath]);
+    const lite = engineWithPolicy(parsePolicy(policyText));
+    const both = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+      expect(x, what).toEqual(y);
+      return [x as T, y as T];
+    };
+    const file = (bytes: string | Uint8Array) => ({
+      kind: 'bytes' as const,
+      bytes: typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes,
+      name: 'pack.twrules',
+    });
+    const signed = (pack: unknown, key = acme.privateKey) => signPack(pack, key, ' ACME Ltd ');
+    const install = (e: EngineClient, bytes: string | Uint8Array, reason = 'Methane reporting standard MR-7') =>
+      e.installRulePack(file(bytes), reason);
+    const checked = async (e: EngineClient, datasetId: string) => {
+      const run = await e.awaitJob<CheckSummary>(await e.runChecks(datasetId));
+      const issues = (await e.listIssues({ datasetId, limit: 1000 })).items;
+      return { packs: run.packs, bySeverity: run.bySeverity, byRule: run.byRule, issues };
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Rule-packs', profile: { ...PROFILE } });
+      const csv = { kind: 'path' as const, path: fixturePath('csv_null_markers.csv') };
+      const [ds] = await both('import', async (e) => e.awaitJob<DatasetSummary>(await e.importFile(csv)));
+      await both('checked with the built-in packs', (e) => checked(e, ds.id));
+      const good = signed(PACK);
+      const envelope = JSON.parse(good) as Record<string, unknown>;
+      const rule = PACK.rules[0];
+      const refused: [string, string | Uint8Array][] = [
+        ['text that is not JSON', 'not json'],
+        ['bytes that are not UTF-8', new Uint8Array([0xff, 0xfe])],
+        ['another format version', JSON.stringify({ ...envelope, formatVersion: '0.2' })],
+        ['a file without its signature', JSON.stringify({ ...envelope, signature: 1 })],
+        ['an unknown check', signed({ ...PACK, rules: [{ ...rule, check: { kind: 'no_such_check' } }] })],
+        ['a system rule', signed({ ...PACK, rules: [{ ...rule, check: { kind: 'system' } }] })],
+        ['an empty selector', signed({ ...PACK, rules: [{ ...rule, appliesTo: {} }] })],
+        [
+          'a window that is not whole',
+          signed({ ...PACK, rules: [{ ...rule, check: { kind: 'spike', window: 1.5, k: 3 } }] }),
+        ],
+        ['a member the format does not have', signed({ ...PACK, extra: true })],
+        ['a repeated rule', signed({ ...PACK, rules: [rule, rule] })],
+        ['a built-in pack ID', signed({ ...PACK, id: 'tracewell.system' })],
+        ['a version the policy does not allow', signed({ ...PACK, id: 'acme.locked' })],
+        ['a publisher the policy does not trust', signed(PACK, publisherKey().privateKey)],
+        ['a pack changed after signing', JSON.stringify({ ...envelope, pack: { ...PACK, title: 'Changed' } })],
+        ['a rule ID of a built-in pack', signed({ ...PACK, rules: [{ ...rule, id: 'TW-DQ-001' }] })],
+      ];
+      for (const [what, bytes] of refused) await both(`refuses ${what}`, (e) => install(e, bytes));
+      await both('refuses an install without a reason', (e) => install(e, good, ' '));
+      const [installed] = await both('installs', async (e) => (await install(e, good)).map(content));
+      expect(installed[0]).toMatchObject({ action: 'rulepack.install', old: null, new: { publisher: 'ACME Ltd' } });
+      await both('lists the installed pack', async (e) => (await e.getProject()).installedPacks);
+      await both('lists its rules', (e) => e.listRulePacks());
+      await both('refuses the same version again', (e) => install(e, good));
+      await both('refuses a rule ID of an installed pack', (e) => install(e, signed({ ...PACK, id: 'acme.other' })));
+      const [first] = await both('checks with the installed pack', (e) => checked(e, ds.id));
+      expect(first.packs.map((p) => `${p.id} ${p.version}`)).toEqual([
+        'tracewell.generic-dq 0.1.0',
+        'tracewell.system 0.1.0',
+        'acme.methane 1.0.0',
+      ]);
+      expect(first.issues.some((i) => i.ruleId === 'ACME-001' && i.title === 'Measured value present')).toBe(true);
+      const newer = signed({ ...PACK, version: '1.1.0', rules: [{ ...rule, severity: 'warning' }] });
+      await both('installs a newer version', async (e) => (await install(e, newer, 'MR-7 revision 2')).map(content));
+      await both('checks with the newer version', (e) => checked(e, ds.id));
+
+      // The native engine reads its policy file at each install: a policy that no longer trusts
+      // the publisher refuses the next file, and one that is not a policy says so.
+      writeFileSync(policyPath, JSON.stringify({ format: 'tracewell-policy', formatVersion: '0.1' }));
+      await expect(install(nat.client, signed({ ...PACK, id: 'acme.third', rules: [] }))).rejects.toMatchObject({
+        message: expect.stringContaining('a publisher the policy does not trust'),
+      });
+      writeFileSync(policyPath, '{');
+      await expect(install(nat.client, good)).rejects.toMatchObject({
+        message: 'The rule-pack policy is not valid: it is not JSON text.',
+      });
+
+      // Both engines open each engine's project file, without any policy, to the same packs and
+      // issues: the log holds the packs, and the file every version the check runs used.
+      for (const [from, engine] of [
+        ['native', nat.client],
+        ['TypeScript', lite],
+      ] as const) {
+        const saved = await engine.awaitJob<SaveResult>(await engine.saveProject());
+        const bytes = saved.bytes as Uint8Array;
+        const manifest = JSON.parse(readZip(bytes).readText('manifest.json')) as ProjectManifest;
+        expect(
+          manifest.rulePacks.map((r) => `${r.id} ${r.version}`),
+          from,
+        ).toEqual(['tracewell.generic-dq 0.1.0', 'tracewell.system 0.1.0', 'acme.methane 1.0.0', 'acme.methane 1.1.0']);
+        const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+        const { report, opened } = await openNatively(bytes);
+        try {
+          const tsReport = await opener.awaitJob<ProjectOpenReport>(
+            await opener.openProject({ kind: 'bytes', bytes, name: saved.fileName }),
+          );
+          expect(
+            tsReport.checks.filter((c) => !c.ok),
+            from,
+          ).toEqual([]);
+          expect(
+            report.checks.filter((c) => !c.ok),
+            from,
+          ).toEqual([]);
+          await sameState(opened.client, opener);
+          await sameState(opened.client, lite);
+          const packs = (await lite.getProject()).installedPacks;
+          expect((await opened.client.getProject()).installedPacks, from).toEqual(packs);
+          expect((await opener.getProject()).installedPacks, from).toEqual(packs);
+        } finally {
+          stopNative(opened);
+          opener.close();
+        }
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   }, 120_000);
 

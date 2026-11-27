@@ -401,6 +401,15 @@ class StubEngine implements EngineImpl {
     return applied.entries.map((e) => structuredClone(e));
   }
 
+  /** The stub trusts no publisher, as an installation without a policy file. */
+  async installRulePack(_file: FileInput, _reason: string): Promise<AuditEntry[]> {
+    throw new EngineError(
+      'INVALID_INPUT',
+      'No rule-pack publisher is trusted on this installation.',
+      'Ask the administrator to list trusted publishers in the policy file.',
+    );
+  }
+
   async listAudit(q: AuditQuery): Promise<Page<AuditEntry>> {
     return listAudit(this.project, q);
   }

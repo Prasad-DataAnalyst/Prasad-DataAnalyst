@@ -24,6 +24,7 @@ const ACTION_TEXT: Record<AuditAction, string> = {
   'entry.revert': 'Change reverted',
   'project.area': 'Project area set',
   'project.conventions': 'Conventions set',
+  'rulepack.install': 'Rule-pack installed',
   'export.create': 'Exported',
   'project.save': 'Project saved',
   'recipe.apply': 'Recipe run',

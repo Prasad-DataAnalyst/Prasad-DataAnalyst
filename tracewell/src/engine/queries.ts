@@ -19,7 +19,7 @@ import { locator, RowSet } from '@tw/table';
 import { allUnits, compatibleUnits, getUnit, unitInfo } from '@tw/units';
 import { datasetOf } from './decisions';
 import { issueCounts, occurrenceState, severityRank, toIssue } from './issues-state';
-import { CHECK_PACKS } from './reducer';
+import { CHECK_PACKS, checkPacksOf } from './reducer';
 import { deltaOf } from './recipes';
 import type { DatasetState, IssueState, ProjectState } from './state';
 import { workingView } from './views';
@@ -153,7 +153,7 @@ export function listIssues(state: ProjectState, q: IssueQuery): Page<Issue> {
   };
   for (const ds of state.datasets.values()) {
     if (q.datasetId !== undefined && ds.id !== q.datasetId) continue;
-    for (const [id, st] of ds.issues) add(toIssue(id, st, ds), ds);
+    for (const [id, st] of ds.issues) add(toIssue(id, st, ds, checkPacksOf(state)), ds);
   }
   // Findings about the project file concern every dataset, so they are listed whatever the filter.
   for (const d of state.systemIssues) {

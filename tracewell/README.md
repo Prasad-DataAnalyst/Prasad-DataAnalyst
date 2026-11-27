@@ -69,7 +69,7 @@ src/          model, io, units, geo, engine-api, formats/{csv,xlsx,geojson}, det
               ingest, rules, steps, export, project, engine, ui-shell, ui-views, app
 fixtures/     messy-file library, expectations, generators and the fixture loader
 tests/        architecture, conformance, e2e, oracle
-scripts/      test-all.mjs, check-hygiene.mjs, check-licences.mjs
+scripts/      test-all.mjs, check-hygiene.mjs, check-licences.mjs, sign-rulepack.mjs
 crates/       tracewell-engine: the native engine (Rust, DuckDB, Parquet) behind the stdio protocol
 ```
 
@@ -95,6 +95,15 @@ asks for your name, which is recorded with every change. Then follow the process
 Data › Recipes… saves a dataset's checks, steps and export profile as a `.twr` recipe, which holds no
 data and can be shared. Run it on next month's file and the issues register shows only what is new
 or changed since the recipe was saved.
+
+Data › Install rule-pack… installs a signed `.twrules` rule-pack whose rules then run with the
+built-in checks. A file installs only when its publisher's key is in the administrator's policy
+file, and the policy can lock a pack to one version (SAD decision D-17); without a policy, nothing
+installs. The desktop engine reads the policy from `--policy <file>` at each install; the Lite
+edition takes its text from `VITE_RULEPACK_POLICY` when it is built. Publishers make a key with
+`node scripts/sign-rulepack.mjs keygen --out <key.pem>` and sign a pack with
+`node scripts/sign-rulepack.mjs sign <pack.json> --key <key.pem> --publisher <name> --out <pack.twrules>`.
+The project records each pack it installs, so it opens with the same rules anywhere.
 
 Save the project (Ctrl+S) as a `.twp` file. Opening it (Ctrl+O) verifies every checksum and the audit
 chain and rebuilds the data from the original files; if anything fails, the project opens read-only.

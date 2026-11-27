@@ -328,6 +328,7 @@ export class StubProject {
       unitSystem: this.unitSystem,
       projectArea: this.area === null ? null : [...this.area],
       conventions: structuredClone(this.conventions),
+      installedPacks: [],
       readOnly: this.readOnly,
       dirty: this.dirty,
       lastSavedAt: this.lastSavedAt,

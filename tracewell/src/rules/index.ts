@@ -10,3 +10,5 @@ export { runRules, systemIssue } from './run';
 export { issueId } from './id';
 export { renderMessage } from './message';
 export { flatlineRuns, hampelOutliers, MAD_SCALE } from './hampel';
+export { RULEPACK_FILE_MAX_BYTES, base64Bytes, keyIdOf, packDigest, parsePolicy, verifyRulePackFile } from './signed';
+export type { VerifiedRulePack } from './signed';

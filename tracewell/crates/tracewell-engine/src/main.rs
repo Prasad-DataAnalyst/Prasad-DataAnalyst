@@ -2,13 +2,16 @@
 //! frames), with DuckDB and Parquet underneath for files beyond browser memory.
 //!
 //!   tracewell-engine serve [--workdir DIR] [--memory-limit BYTES] [--threads N] [--owner NAME]
-//!                          [--templates FILE] [--recovery DIR]
+//!                          [--templates FILE] [--recovery DIR] [--policy FILE]
 //!                          [--fixed-clock ISO [--clock-step-ms N]] [--seed N]
 //!
 //! The templates file keeps the user's mapping templates; by default it is
 //! tracewell/mapping-templates.json in the user's configuration directory. The recovery folder
 //! keeps each session's journal of unsaved work; by default it is tracewell/recovery in the
 //! user's state directory.
+//! The policy file is the administrator's rule-pack policy (FR-RUL-04): the publishers whose
+//! signed rule-packs install, and locked pack versions. It is read at each install, so a changed
+//! policy applies at once; without one, no rule-pack file installs.
 //! The owner is the registered owner of this copy; every export manifest records it.
 //! The memory limit is the budget of the whole process (default half the machine's RAM); DuckDB
 //! gets a share of it (memory.rs).
@@ -44,6 +47,7 @@ mod parse;
 mod project;
 mod recipes;
 mod recovery;
+mod rulepacks;
 mod rules;
 mod shapefile;
 mod shapefile_import;
@@ -75,6 +79,7 @@ struct Args {
     owner: String,
     templates: Option<PathBuf>,
     recovery: Option<PathBuf>,
+    policy: Option<PathBuf>,
 }
 
 fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
@@ -89,6 +94,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
         owner: env!("CARGO_PKG_AUTHORS").to_string(),
         templates: None,
         recovery: None,
+        policy: None,
     };
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
@@ -117,6 +123,7 @@ fn parse_args(argv: &[String]) -> std::result::Result<Args, String> {
             "--owner" => a.owner = value()?,
             "--templates" => a.templates = Some(PathBuf::from(value()?)),
             "--recovery" => a.recovery = Some(PathBuf::from(value()?)),
+            "--policy" => a.policy = Some(PathBuf::from(value()?)),
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -182,6 +189,7 @@ fn open(args: &Args) -> Result<Engine> {
         threads,
         args.owner.clone(),
     );
+    engine.policy = args.policy.clone();
     engine.templates = args
         .templates
         .clone()
@@ -252,6 +260,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     }
     if method == "recoverProject" {
         return engine::recover_project(shared);
+    }
+    if method == "installRulePack" {
+        return engine::install_rule_pack(shared, msg, param(params, 0), param(params, 1));
     }
     if method == "planRecipe" {
         return engine::plan_recipe(shared, msg, param(params, 0), param(params, 1));

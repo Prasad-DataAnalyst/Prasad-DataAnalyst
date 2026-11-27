@@ -156,6 +156,7 @@ const AUDIT_ACTIONS = members<AuditAction>()([
   'entry.revert',
   'project.area',
   'project.conventions',
+  'rulepack.install',
   'export.create',
   'project.save',
   'recipe.apply',
