@@ -47,6 +47,20 @@ describe('detectFormat', () => {
     });
   });
 
+  it('reads an SQLite database as a GeoPackage, by its application ID, else with less confidence', () => {
+    const sqlite = (id: number) => {
+      const head = new Uint8Array(100);
+      head.set(new TextEncoder().encode('SQLite format 3\0'));
+      new DataView(head.buffer).setUint32(68, id, false);
+      return head;
+    };
+    for (const id of [0x47504b47, 0x47503130, 0x47503131]) {
+      expect(detectFormat(sqlite(id), 'layers.bin')).toMatchObject({ value: 'geopackage', confidence: 'high' });
+    }
+    expect(detectFormat(sqlite(0), 'layers.gpkg')).toMatchObject({ value: 'geopackage', confidence: 'medium' });
+    expect(detectFormat(sqlite(0), 'notes.sqlite')).toMatchObject({ value: 'geopackage', confidence: 'low' });
+  });
+
   it('does not trust a .csv extension on a ZIP archive', () => {
     const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
     expect(detectFormat(zip, 'renamed.csv')).toMatchObject({ value: 'xlsx', confidence: 'low' });

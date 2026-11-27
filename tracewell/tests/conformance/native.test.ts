@@ -11,7 +11,7 @@ import { AuditLog } from '@tw/audit';
 import { EngineClient, inProcessTransport, PROTOCOL_VERSION } from '@tw/engine-api';
 import { LocalEngine, fixedClock, seededIds } from '@tw/engine';
 import { nodeFs } from '@tw/io/node';
-import { FIXTURE_NAMES, fixturePath } from '@tw/fixtures';
+import { FIXTURE_NAMES, fixtureBytes, fixturePath } from '@tw/fixtures';
 import { readBack } from '@tw/export';
 import {
   FGB_COLUMN,
@@ -21,7 +21,14 @@ import {
   type FgbWriteFeature,
   type FgbWriteHeader,
 } from '@tw/formats-flatgeobuf';
-import { readGeoPackage } from '@tw/formats-geopackage';
+import {
+  GPKG_UNDEFINED_SRS,
+  gpkgGeometry,
+  readGeoPackage,
+  writeGeoPackage,
+  writeSqlite,
+  type GpkgSrs,
+} from '@tw/formats-geopackage';
 import { readZip, sha256Hex, writeZip } from '@tw/io';
 import { openWorkbook } from '@tw/formats-xlsx';
 import {
@@ -3215,6 +3222,120 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
         }
       }
       expect(files.filter(([n]) => n.endsWith('-lite.zip')).length).toBeGreaterThan(0);
+      for (const [name, bytes] of files) {
+        writeFileSync(join(folder, name), bytes);
+        const file = { kind: 'path' as const, path: join(folder, name) };
+        const [pa, pb] = [await settled(() => nat.client.sniff(file)), await settled(() => lite.sniff(file))];
+        expect(pa, `${name}: preview`).toEqual(pb);
+        orderDifferences(pa, pb, `${name}: preview`, found);
+        const imported = async (e: EngineClient) => e.awaitJob<DatasetSummary>(await e.importFile(file));
+        const [da, db] = [await settled(() => imported(nat.client)), await settled(() => imported(lite))];
+        expect(da, `${name}: import`).toEqual(db);
+        if ('code' in (db as object)) continue;
+        const id = (da as DatasetSummary).id;
+        const checked = async (e: EngineClient) => ({
+          ...(await e.awaitJob<CheckSummary>(await e.runChecks(id))),
+          durationMs: 0,
+        });
+        expect(await checked(nat.client), `${name}: checks`).toEqual(await checked(lite));
+        await sameDataset(nat.client, lite, id, name, found);
+      }
+      expect([...found].map(([path, order]) => `${path}: ${order}`)).toEqual([]);
+    } finally {
+      stopNative(nat);
+      lite.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('reads GeoPackages as the TypeScript engine does, its own exports included, and refuses others alike', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'tw-gpkg-'));
+    const header = (srs: GpkgSrs[], srsId: number) => ({
+      table: 'data',
+      identifier: 'Wells',
+      lastChange: '2026-11-01T00:00:00.000Z',
+      srs,
+      srsId,
+      fidColumn: 'fid',
+      geometryColumn: 'geom',
+      geometryType: 'POINT',
+      z: 0 as const,
+      extent: [1, 2, 3, 4] as const,
+      columns: [
+        { name: 'name', type: 'TEXT' },
+        { name: 'depth', type: 'REAL' },
+        { name: 'active', type: 'BOOLEAN' },
+      ],
+      features: 2,
+    });
+    const features = [
+      { geometry: { type: 'Point' as const, coordinates: [1, 2] }, z: false, values: ['A', 12.5, 1n] },
+      { geometry: null, z: false, values: ['B', 7n, 0n] },
+    ];
+    const wgs84: GpkgSrs = {
+      id: 4326,
+      name: 'WGS 84 geodetic',
+      organization: 'EPSG',
+      code: 4326,
+      definition: 'GEOGCS["WGS 84"]',
+      description: null,
+    };
+    const broken = writeGeoPackage(header([...GPKG_UNDEFINED_SRS, wgs84], 4326), features);
+    const blob = gpkgGeometry({ type: 'Point', coordinates: [1, 2] }, 4326, false);
+    for (let i = broken.length - blob.length; i >= 0; i--) {
+      if (blob.every((b, k) => broken[i + k] === b)) {
+        broken[i + 8] = 9;
+        break;
+      }
+    }
+    const contents =
+      'CREATE TABLE gpkg_contents (table_name TEXT NOT NULL PRIMARY KEY, data_type TEXT NOT NULL, identifier TEXT UNIQUE, srs_id INTEGER)';
+    const files: [string, Uint8Array][] = [
+      ['undefined.gpkg', writeGeoPackage(header([...GPKG_UNDEFINED_SRS], 0), features)],
+      [
+        'attributes.gpkg',
+        writeSqlite({ applicationId: 0x47504b47, userVersion: 10200 }, [
+          { name: 'gpkg_contents', sql: contents, rows: [[1n, ['owners', 'attributes', 'Owners', null]]] },
+          {
+            name: 'owners',
+            sql: 'CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT, share REAL)',
+            rows: [
+              [4n, [null, 'Brent Energy', 0.5]],
+              [9n, [null, 'Forties Oil', 1n]],
+            ],
+          },
+        ]),
+      ],
+      [
+        'plain.sqlite',
+        writeSqlite({ applicationId: 0, userVersion: 0 }, [{ name: 't', sql: 'CREATE TABLE t (a)', rows: [] }]),
+      ],
+      ['damaged.gpkg', fixtureBytes('gpkg_wells_points_wgs84.gpkg').slice(0, 5000)],
+      ['broken-geometry.gpkg', broken],
+    ];
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const found = new Map<string, string>();
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'GeoPackages', profile: { ...PROFILE } });
+      // The GeoPackages both engines export from the spatial fixtures, read back.
+      for (const name of [
+        'geojson_wells_points_wgs84.geojson',
+        'geojson_mixed_geometry_nested_props.geojson',
+        'shp_licence_blocks_bng.zip',
+      ] as const) {
+        const file = { kind: 'path' as const, path: fixturePath(name) };
+        for (const e of [nat.client, lite]) {
+          const d = await e.awaitJob<DatasetSummary>(await e.importFile(file));
+          const r = await settled(async () =>
+            e.awaitJob<ExportResult>(await e.exportData({ datasetId: d.id, profile: 'geopackage' })),
+          );
+          if ('code' in (r as object)) continue;
+          const gpkg = readZip((r as ExportResult).bytes as Uint8Array).read('data.gpkg');
+          files.push([`${name}-${e === lite ? 'lite' : 'native'}.gpkg`, gpkg]);
+        }
+      }
+      expect(files.filter(([n]) => n.endsWith('-lite.gpkg')).length).toBe(3);
       for (const [name, bytes] of files) {
         writeFileSync(join(folder, name), bytes);
         const file = { kind: 'path' as const, path: join(folder, name) };

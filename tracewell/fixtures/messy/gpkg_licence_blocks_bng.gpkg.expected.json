@@ -1,0 +1,18 @@
+{
+  "file": "gpkg_licence_blocks_bng.gpkg",
+  "format": "geopackage",
+  "detections": {"encoding": "utf-16le", "crs": "EPSG:27700"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 5,
+  "columns": [
+    {"name": "block_ref", "type": "string", "unit": null, "role": "id", "assumed": ["role"]},
+    {"name": "licence", "type": "string", "unit": null, "role": "text"},
+    {"name": "area", "type": "number", "unit": "km2", "role": "measure", "assumed": ["unit"]},
+    {"name": "awarded", "type": "date", "unit": null, "role": "time"},
+    {"name": "operator_name", "type": "string", "unit": null, "role": "text"},
+    {"name": "comment", "type": "string", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-DQ-001": 7, "TW-GEO-004": 1, "TW-GEO-006": 1, "TW-IMP-005": 1},
+  "notes": []
+}

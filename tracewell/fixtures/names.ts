@@ -36,7 +36,9 @@ export type FixtureName =
   | 'kml_wells_folders_extended.kml'
   | 'kmz_pipelines_latin1.kmz'
   | 'shp_licence_blocks_bng.zip'
-  | 'shp_wells_pointz_wgs84.zip';
+  | 'shp_wells_pointz_wgs84.zip'
+  | 'gpkg_licence_blocks_bng.gpkg'
+  | 'gpkg_wells_points_wgs84.gpkg';
 
 export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'csv_well_daily_golden.csv',
@@ -75,4 +77,6 @@ export const FIXTURE_NAMES: readonly FixtureName[] = Object.freeze([
   'kmz_pipelines_latin1.kmz',
   'shp_licence_blocks_bng.zip',
   'shp_wells_pointz_wgs84.zip',
+  'gpkg_licence_blocks_bng.gpkg',
+  'gpkg_wells_points_wgs84.gpkg',
 ]);

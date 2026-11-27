@@ -776,6 +776,44 @@ impl Database {
         Ok(())
     }
 
+    /// How many rows a table b-tree holds: the cells of its leaves, counted without reading them.
+    pub fn count(&mut self, root: u32) -> Got<u64> {
+        let mut seen = HashSet::new();
+        self.count_page(root, 0, &mut seen)
+    }
+
+    fn count_page(&mut self, n: u32, depth: usize, seen: &mut HashSet<u32>) -> Got<u64> {
+        if depth > 40 {
+            return Err("its b-tree is deeper than any valid one".into());
+        }
+        if !seen.insert(n) {
+            return Err(format!("its b-tree visits page {n} twice"));
+        }
+        let data = self.page(n)?;
+        let hdr = if n == 1 { FILE_HEADER } else { 0 };
+        let kind = data[hdr];
+        if kind != LEAF_TABLE && kind != INTERIOR_TABLE {
+            return Err(format!("page {n} is not a page of a table"));
+        }
+        let cells = be16(&data, hdr + 3);
+        if kind == LEAF_TABLE {
+            return Ok(cells as u64);
+        }
+        let pointers = hdr + INTERIOR_HEADER;
+        if pointers + 2 * cells > self.usable {
+            return Err(format!("page {n} lists more cells than it holds"));
+        }
+        let mut total = self.count_page(be32(&data, hdr + 8), depth + 1, seen)?;
+        for i in 0..cells {
+            let at = be16(&data, pointers + 2 * i);
+            if at < pointers + 2 * cells || at + 4 > self.usable {
+                return Err(format!("a cell of page {n} lies outside its page"));
+            }
+            total += self.count_page(be32(&data, at), depth + 1, seen)?;
+        }
+        Ok(total)
+    }
+
     /// The schema table: every table, index, view and trigger.
     pub fn schema(&mut self) -> Got<Vec<SchemaRow>> {
         let mut rows = Vec::new();

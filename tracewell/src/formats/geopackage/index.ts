@@ -41,3 +41,4 @@ export {
   type GpkgWriteFeature,
   type GpkgWriteHeader,
 } from './gpkg';
+export { GEOPACKAGE_IMPORT_MAX_BYTES, geopackageImporter } from './importer';

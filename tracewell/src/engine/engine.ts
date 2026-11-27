@@ -132,7 +132,18 @@ export const ENGINE_NAME = 'tracewell-ts';
 
 const DEFAULT_MEMORY_BUDGET = 1_500_000_000;
 const DEFAULT_PROGRESS_INTERVAL_MS = 100;
-const FORMATS: SourceFormat[] = ['csv', 'tsv', 'xlsx', 'geojson', 'json', 'parquet', 'flatgeobuf', 'kml', 'shapefile'];
+const FORMATS: SourceFormat[] = [
+  'csv',
+  'tsv',
+  'xlsx',
+  'geojson',
+  'json',
+  'parquet',
+  'flatgeobuf',
+  'kml',
+  'shapefile',
+  'geopackage',
+];
 const OVERRIDE_ORDER = ['name', 'type', 'unit', 'role', 'nullMarkers', 'dateFormat', 'timezone'] as const;
 const CSV_SETTINGS: OverridableProperty[] = ['encoding', 'delimiter', 'decimalSeparator', 'headerRows', 'skipLines'];
 const MEDIA_TYPES: Record<SourceFormat, string> = {
@@ -145,6 +156,7 @@ const MEDIA_TYPES: Record<SourceFormat, string> = {
   flatgeobuf: 'application/flatgeobuf',
   kml: 'application/vnd.google-earth.kml+xml',
   shapefile: 'application/zip',
+  geopackage: 'application/geopackage+sqlite3',
 };
 
 type Change = Extract<EngineEvent, { type: 'project.changed' }>['what'][number];

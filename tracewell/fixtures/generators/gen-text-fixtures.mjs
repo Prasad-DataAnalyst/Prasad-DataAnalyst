@@ -4,13 +4,14 @@
  * encodings, byte-order marks and line endings are chosen per file, never left to the platform.
  * The Parquet fixture is written here too, by hyparquet-writer, whose output depends only on the
  * values given, the FlatGeobuf fixture by a FlatBuffers encoder of this file's own, and the KMZ
- * fixture by a ZIP writer of this file's own over fflate's deflate. Then writes SHA256SUMS over every fixture, the XLSX files included.
+ * fixture by a ZIP writer of this file's own over fflate's deflate. Then writes SHA256SUMS over every fixture, the XLSX
+ * files and the GeoPackages included.
  *
  * Usage: node fixtures/generators/gen-text-fixtures.mjs [--out <dir>] [--no-sums]
  *   --out <dir>  write into <dir> instead of fixtures/messy
  *   --no-sums    do not write SHA256SUMS (used when only the text files are compared)
  *
- * Run make_xlsx_fixtures.py first: SHA256SUMS covers the XLSX files too. Each data value below is
+ * Run make_xlsx_fixtures.py and make_gpkg_fixtures.py first: SHA256SUMS covers their files too. Each data value below is
  * chosen so that a fixture breaks exactly what fixtures/README.md says it breaks; the expected
  * results in fixtures/messy/<name>.expected.json depend on these values.
  */
@@ -2161,7 +2162,9 @@ export function buildTextFixtures() {
 function sumsFile(dir) {
   const missing = ALL_FIXTURES.filter((name) => !existsSync(join(dir, name)));
   if (missing.length > 0) {
-    throw new Error(`Cannot write SHA256SUMS: missing ${missing.join(', ')}. Run make_xlsx_fixtures.py first.`);
+    throw new Error(
+      `Cannot write SHA256SUMS: missing ${missing.join(', ')}. Run make_xlsx_fixtures.py and make_gpkg_fixtures.py first.`,
+    );
   }
   return [...ALL_FIXTURES]
     .sort()

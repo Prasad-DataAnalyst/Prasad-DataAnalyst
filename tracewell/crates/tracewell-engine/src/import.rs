@@ -65,6 +65,8 @@ pub enum Reading {
     Kml,
     /// The records of a zipped Shapefile, the same way.
     Shapefile,
+    /// The rows of a GeoPackage's layer (the options' table), the same way.
+    GeoPackage(Option<String>),
 }
 
 /// What an import does: how the file is read, and how each column is parsed.
@@ -137,8 +139,11 @@ pub fn column_parser(c: &Value, decimal: char, thousands: &str) -> Result<Column
 
 fn plan_columns(spec: &Value, decimal: char, thousands: &str) -> Result<Vec<ColumnSpec>> {
     let format = &spec["options"]["format"];
-    let geojson =
-        format == "geojson" || format == "flatgeobuf" || format == "kml" || format == "shapefile";
+    let geojson = format == "geojson"
+        || format == "flatgeobuf"
+        || format == "kml"
+        || format == "shapefile"
+        || format == "geopackage";
     let mut columns = Vec::new();
     for c in spec["columns"].as_array().into_iter().flatten() {
         let parser = column_parser(c, decimal, thousands)?;
@@ -195,6 +200,12 @@ pub fn import_plan(spec: &Value) -> Result<ImportPlan> {
     if format == "shapefile" {
         return Ok(ImportPlan {
             reading: Reading::Shapefile,
+            columns: plan_columns(spec, '.', "")?,
+        });
+    }
+    if format == "geopackage" {
+        return Ok(ImportPlan {
+            reading: Reading::GeoPackage(text(&options["geopackage"], "layer").map(str::to_string)),
             columns: plan_columns(spec, '.', "")?,
         });
     }
@@ -905,6 +916,31 @@ fn load(
                         let mut batch = TypedBatch::default();
                         let read = crate::shapefile_import::read_rows(
                             path,
+                            &mut |(loc, fields, geometry)| {
+                                batch.rows.push(fields);
+                                batch.locs.push(loc as i64);
+                                batch.geometries.push(geometry);
+                                if batch.locs.len() == BATCH_ROWS
+                                    && !send(Batch::Typed(std::mem::take(&mut batch)))
+                                {
+                                    return Err(cancelled());
+                                }
+                                Ok(())
+                            },
+                            cancel,
+                            bytes_read,
+                        );
+                        match read {
+                            Ok(r) if batch.locs.is_empty() || send(Batch::Typed(batch)) => Ok(r),
+                            Ok(_) => Err(cancelled()),
+                            Err(e) => Err(e),
+                        }
+                    }
+                    Reading::GeoPackage(layer) => {
+                        let mut batch = TypedBatch::default();
+                        let read = crate::geopackage_import::read_rows(
+                            path,
+                            layer.as_deref(),
                             &mut |(loc, fields, geometry)| {
                                 batch.rows.push(fields);
                                 batch.locs.push(loc as i64);

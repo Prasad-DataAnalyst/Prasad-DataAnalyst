@@ -30,6 +30,7 @@ mod geodesy;
 mod geofn;
 mod geojson;
 mod geopackage;
+mod geopackage_import;
 mod import;
 mod issues;
 mod json;

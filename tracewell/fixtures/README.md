@@ -13,11 +13,12 @@ fixtures/
 ├── expectation.test.ts          the expected-file check on malformed documents
 ├── generators.test.ts           the generators reproduce the library; the large CSV is deterministic
 ├── messy/
-│   ├── <name>                   36 fixtures, byte-exact (.gitattributes marks them binary)
+│   ├── <name>                   38 fixtures, byte-exact (.gitattributes marks them binary)
 │   ├── <name>.expected.json     what importing and checking <name> must give
 │   └── SHA256SUMS               SHA-256 of every fixture, for `sha256sum -c SHA256SUMS`
 └── generators/
     ├── make_xlsx_fixtures.py    the 6 XLSX files (openpyxl, 4 of them saved again by LibreOffice) and 2 XLS copies (LibreOffice)
+    ├── make_gpkg_fixtures.py    the 2 GeoPackages, written by SQLite itself (Python's sqlite3) with geometries packed by struct
     ├── gen-text-fixtures.mjs    the 23 CSV, TSV, GeoJSON, KML and JSON files with exact bytes, the Parquet, FlatGeobuf, KMZ and zipped Shapefile files, then SHA256SUMS
     ├── gen-large-csv.mjs        seeded large CSV for the @slow tests (never committed)
     └── shared.mjs               fixture list, seeded random numbers, the Hampel test used by the generators
@@ -216,6 +217,8 @@ All are UTF-8 FeatureCollections written with two-space indentation and a final 
 | `kmz_pipelines_latin1.kmz`                    | 3    | A KMZ (deflated ZIP, by a ZIP writer of the generator's own) whose doc.kml declares ISO-8859-1 and has accented names and CRLF line ends; a Schema with SimpleData; line strings and a MultiGeometry of two lines, read as a MultiLineString; an icon beside it in the archive. |
 | `shp_licence_blocks_bng.zip`                  | 5    | A zipped Shapefile as ArcGIS writes it, by the generator's own writer: licence blocks on British National Grid (the .prj is the ESRI WKT epsg.io publishes), a block with a hole, a block in two parts, a relinquished block without a shape; windows-1252 text with no .cpg (the .dbf language driver says so), numbers padded to the left, a blank date and an unknown logical value. |
 | `shp_wells_pointz_wgs84.zip`                  | 4    | A zipped Shapefile in a folder: PointZ wells with depths as heights, a UTF-8 .cpg, the WGS 84 .prj, numbers with one decimal, dates and accented text. |
+| `gpkg_licence_blocks_bng.gpkg`                | 5    | A GeoPackage 1.0 (application ID `GP10`) written by SQLite in UTF-16LE: the features layer `blocks` on British National Grid (organisation written `epsg`), listed before an attributes table `operators` that is not read; geometry column `shape` holding a polygon with a hole and a polygon without an envelope in big-endian GeoPackageBinary, a multipolygon, a polygon with heights and an XYZ envelope, and a row without a geometry; `area_km2` holds 102 as an integer in its DOUBLE column; the column `comment` was added after the rows, so their records lack it. |
+| `gpkg_wells_points_wgs84.gpkg`                | 39   | A GeoPackage 1.4 written by SQLite with 1,024-byte pages and a WAL-mode header: 40 wells in WGS 84 with an R-tree spatial index and its shadow tables, then feature 7 deleted; typed columns (`TEXT(12)`, DATE, DATETIME, REAL with whole values stored as integers, MEDIUMINT, BOOLEAN, BLOB), a point with a height, a row without a geometry, a remark long enough for overflow pages, empty and null operators and one date-time without milliseconds. |
 
 ## Large generated CSV
 

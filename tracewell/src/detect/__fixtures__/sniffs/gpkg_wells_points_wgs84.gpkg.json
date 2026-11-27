@@ -1,0 +1,521 @@
+{
+  "fixture": "gpkg_wells_points_wgs84.gpkg",
+  "format": "geopackage",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": "",
+    "geometryColumn": true
+  },
+  "header": [["well_id", "operator", "spud_date", "last_test", "tvd_m", "slots", "online", "remarks", "photo"]],
+  "sampleRows": [
+    {
+      "srcLoc": 1,
+      "fields": ["NS-A01", "Forties Oil", "2011-02-02", "2025-02-02T01:30:00.000Z", 125.5, 1, true, "Workover 1", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.05, 57.02]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": [
+        "NS-A02",
+        "Cormorant Petroleum",
+        "2012-03-03",
+        "2025-03-03T02:30:00.000Z",
+        250,
+        2,
+        true,
+        "Workover 2",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.1, 57.04]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["NS-A03", "", "2013-04-04", "2025-04-04T03:30:00.000Z", 376.5, 3, false, "Workover 3", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.15, 57.06]
+      }
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["NS-A04", "Brent Energy", "2014-05-05", "2025-05-05T04:30:00.000Z", 500, 4, true, "Workover 4", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.2, 57.08]
+      }
+    },
+    {
+      "srcLoc": 5,
+      "fields": [
+        "NS-A05",
+        "Forties Oil",
+        "2015-06-06",
+        "2025-06-06T05:30:00.000Z",
+        627.5,
+        5,
+        true,
+        "Workover 0",
+        "000102030405060708090a0b0c0d0e0f"
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.25, 57.1]
+      }
+    },
+    {
+      "srcLoc": 6,
+      "fields": [
+        "NS-A06",
+        "Cormorant Petroleum",
+        "2016-07-07",
+        "2025-07-07T06:30:00.000Z",
+        750,
+        0,
+        false,
+        "Workover 1",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.3, 57.12]
+      }
+    },
+    {
+      "srcLoc": 8,
+      "fields": ["NS-A08", "Brent Energy", "2018-09-09", "2025-09-09T08:30:00.000Z", 1000, 2, true, "Workover 3", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.4, 57.16]
+      }
+    },
+    {
+      "srcLoc": 9,
+      "fields": [
+        "NS-A09",
+        "Forties Oil",
+        "2019-10-10",
+        "2025-10-10T09:30:00.000Z",
+        1129.5,
+        3,
+        false,
+        "Workover 4",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.45, 57.18, -1200.5]
+      }
+    },
+    {
+      "srcLoc": 10,
+      "fields": [
+        "NS-A10",
+        "Cormorant Petroleum",
+        "2020-11-11",
+        "2025-11-11T10:30:00.000Z",
+        1250,
+        4,
+        true,
+        "Workover 0",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.5, 57.2]
+      }
+    },
+    {
+      "srcLoc": 11,
+      "fields": ["NS-B01", null, "2021-12-12", "2025-12-12T11:30:00.000Z", 1380.5, 5, true, "Workover 1", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.55, 57.22]
+      }
+    },
+    {
+      "srcLoc": 12,
+      "fields": [
+        "NS-B02",
+        "Brent Energy",
+        "2010-01-13",
+        "2025-01-13T12:30:00.000Z",
+        1500,
+        0,
+        false,
+        "Workover 2",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.6, 57.24]
+      }
+    },
+    {
+      "srcLoc": 13,
+      "fields": [
+        "NS-B03",
+        "Forties Oil",
+        "2011-02-14",
+        "2025-02-14T13:30:00.000Z",
+        1631.5,
+        1,
+        true,
+        "Long test record: pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up, pressure build-up,",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.65, 57.26]
+      }
+    },
+    {
+      "srcLoc": 14,
+      "fields": [
+        "NS-B04",
+        "Cormorant Petroleum",
+        "2012-03-15",
+        "2025-03-15T14:30:00.000Z",
+        1750,
+        2,
+        true,
+        "Workover 4",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.7, 57.28]
+      }
+    },
+    {
+      "srcLoc": 15,
+      "fields": ["NS-B05", "", "2013-04-16", "2025-04-16T15:30:00.000Z", 1882.5, 3, false, "Workover 0", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.75, 57.3]
+      }
+    },
+    {
+      "srcLoc": 16,
+      "fields": ["NS-B06", "Brent Energy", "2014-05-17", "2025-05-17T16:30:00.000Z", 2000, 4, true, "Workover 1", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.8, 57.32]
+      }
+    },
+    {
+      "srcLoc": 17,
+      "fields": [
+        "NS-B07",
+        "Forties Oil",
+        "2015-06-18",
+        "2025-06-18T17:30:00.000Z",
+        2133.5,
+        5,
+        true,
+        "Workover 2",
+        null
+      ],
+      "geometry": null
+    },
+    {
+      "srcLoc": 18,
+      "fields": [
+        "NS-B08",
+        "Cormorant Petroleum",
+        "2016-07-19",
+        "2025-07-19T18:30:00.000Z",
+        2250,
+        0,
+        false,
+        "Workover 3",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.9, 57.36]
+      }
+    },
+    {
+      "srcLoc": 19,
+      "fields": ["NS-B09", "", "2017-08-20", "2025-08-20T19:30:00.000Z", 2384.5, 1, true, "Workover 4", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.95, 57.38]
+      }
+    },
+    {
+      "srcLoc": 20,
+      "fields": ["NS-B10", "Brent Energy", "2018-09-21", "2025-09-21T20:30:00.000Z", 2500, 2, true, "Workover 0", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2, 57.4]
+      }
+    },
+    {
+      "srcLoc": 21,
+      "fields": [
+        "NS-C01",
+        "Forties Oil",
+        "2019-10-22",
+        "2025-10-22T21:30:00.000Z",
+        2635.5,
+        3,
+        false,
+        "Workover 1",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.05, 57.42]
+      }
+    },
+    {
+      "srcLoc": 22,
+      "fields": ["NS-C02", null, "2020-11-23", null, 2750, 4, true, "Workover 2", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.1, 57.44]
+      }
+    },
+    {
+      "srcLoc": 23,
+      "fields": ["NS-C03", "", "2021-12-24", "2025-12-24T23:30:00.000Z", 2886.5, 5, true, "Workover 3", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.15, 57.46]
+      }
+    },
+    {
+      "srcLoc": 24,
+      "fields": [
+        "NS-C04",
+        "Brent Energy",
+        "2010-01-25",
+        "2025-01-25T00:30:00.000Z",
+        3000,
+        0,
+        false,
+        "Workover 4",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.2, 57.48]
+      }
+    },
+    {
+      "srcLoc": 25,
+      "fields": [
+        "NS-C05",
+        "Forties Oil",
+        "2011-02-26",
+        "2025-02-26T01:30:00.000Z",
+        3137.5,
+        1,
+        null,
+        "Workover 0",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.25, 57.5]
+      }
+    },
+    {
+      "srcLoc": 26,
+      "fields": [
+        "NS-C06",
+        "Cormorant Petroleum",
+        "2012-03-27",
+        "2025-03-27T02:30:00.000Z",
+        3250,
+        2,
+        true,
+        "Workover 1",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.3, 57.52]
+      }
+    },
+    {
+      "srcLoc": 27,
+      "fields": ["NS-C07", "", "2013-04-01", "2025-04-01T03:30:00.000Z", 3388.5, 3, false, "Workover 2", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.35, 57.54]
+      }
+    },
+    {
+      "srcLoc": 28,
+      "fields": ["NS-C08", "Brent Energy", "2014-05-02", "2025-05-02T04:30:00.000Z", 3500, 4, true, "Workover 3", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.4, 57.56]
+      }
+    },
+    {
+      "srcLoc": 29,
+      "fields": [
+        "NS-C09",
+        "Forties Oil",
+        "2015-06-03",
+        "2025-06-03T05:30:00.000Z",
+        3639.5,
+        5,
+        true,
+        "Workover 4",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.45, 57.58]
+      }
+    },
+    {
+      "srcLoc": 30,
+      "fields": [
+        "NS-C10",
+        "Cormorant Petroleum",
+        "2016-07-04",
+        "2025-07-04T06:30:00.000Z",
+        3750,
+        0,
+        false,
+        "Workover 0",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.5, 57.6]
+      }
+    },
+    {
+      "srcLoc": 31,
+      "fields": ["NS-D01", "", "2017-08-05", "2025-08-05T10:30:00Z", 3890.5, 1, true, "Workover 1", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.55, 57.62]
+      }
+    },
+    {
+      "srcLoc": 32,
+      "fields": ["NS-D02", "Brent Energy", "2018-09-06", "2025-09-06T08:30:00.000Z", 4000, 2, true, "Workover 2", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.6, 57.64]
+      }
+    },
+    {
+      "srcLoc": 33,
+      "fields": ["NS-D03", null, "2019-10-07", "2025-10-07T09:30:00.000Z", 4141.5, 3, false, "Workover 3", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.65, 57.66]
+      }
+    },
+    {
+      "srcLoc": 34,
+      "fields": [
+        "NS-D04",
+        "Cormorant Petroleum",
+        "2020-11-08",
+        "2025-11-08T10:30:00.000Z",
+        4250,
+        4,
+        true,
+        "Workover 4",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.7, 57.68]
+      }
+    },
+    {
+      "srcLoc": 35,
+      "fields": ["NS-D05", "", "2021-12-09", "2025-12-09T11:30:00.000Z", 4392.5, 5, true, "Workover 0", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.75, 57.7]
+      }
+    },
+    {
+      "srcLoc": 36,
+      "fields": [
+        "NS-D06",
+        "Brent Energy",
+        "2010-01-10",
+        "2025-01-10T12:30:00.000Z",
+        4500,
+        0,
+        false,
+        "Workover 1",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.8, 57.72]
+      }
+    },
+    {
+      "srcLoc": 37,
+      "fields": [
+        "NS-D07",
+        "Forties Oil",
+        "2011-02-11",
+        "2025-02-11T13:30:00.000Z",
+        4643.5,
+        1,
+        true,
+        "Workover 2",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.85, 57.74]
+      }
+    },
+    {
+      "srcLoc": 38,
+      "fields": [
+        "NS-D08",
+        "Cormorant Petroleum",
+        "2012-03-12",
+        "2025-03-12T14:30:00.000Z",
+        4750,
+        2,
+        true,
+        "Workover 3",
+        null
+      ],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.9, 57.76]
+      }
+    },
+    {
+      "srcLoc": 39,
+      "fields": ["NS-D09", "", "2013-04-13", "2025-04-13T15:30:00.000Z", 4894.5, 3, false, "Workover 4", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [2.95, 57.78]
+      }
+    },
+    {
+      "srcLoc": 40,
+      "fields": ["NS-D10", "Brent Energy", "2014-05-14", "2025-05-14T16:30:00.000Z", 5000, 4, true, "Workover 0", null],
+      "geometry": {
+        "type": "Point",
+        "coordinates": [3, 57.8]
+      }
+    }
+  ]
+}

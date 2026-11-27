@@ -1,0 +1,99 @@
+{
+  "fixture": "gpkg_licence_blocks_bng.gpkg",
+  "format": "geopackage",
+  "options": {
+    "decimalSeparator": ".",
+    "thousandsSeparator": "",
+    "geometryColumn": true
+  },
+  "header": [["block_ref", "licence", "area_km2", "awarded", "operator_name", "comment"]],
+  "sampleRows": [
+    {
+      "srcLoc": 1,
+      "fields": ["211/27a", "P.123", 54.25, "2003-06-01", "Brent Energy", null],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [400000, 100000],
+            [410000, 100000],
+            [410000, 110000],
+            [400000, 110000],
+            [400000, 100000]
+          ],
+          [
+            [402000, 102000],
+            [402000, 104000],
+            [404000, 104000],
+            [404000, 102000],
+            [402000, 102000]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 2,
+      "fields": ["211/28", "P.124", 102, "2004-01-15", "Øresund Energi ApS", null],
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [420000, 100000],
+              [425000, 100000],
+              [425000, 105000],
+              [420000, 105000],
+              [420000, 100000]
+            ]
+          ],
+          [
+            [
+              [430000, 100000],
+              [435000, 100000],
+              [435000, 105000],
+              [430000, 105000],
+              [430000, 100000]
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 3,
+      "fields": ["3/15", "P.2001", 12.5, null, "Société des Pétroles", null],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [440000, 120000],
+            [443000, 120000],
+            [443000, 123000],
+            [440000, 123000],
+            [440000, 120000]
+          ]
+        ]
+      }
+    },
+    {
+      "srcLoc": 4,
+      "fields": ["9/13a", "P.77", null, "1999-11-30", null, "Relinquished in 2020"],
+      "geometry": null
+    },
+    {
+      "srcLoc": 5,
+      "fields": ["16/26", "P.300", 77.75, "2011-02-28", "Forties Oil 北海", null],
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [450000, 130000, 15],
+            [454000, 130000, 15],
+            [454000, 134000, 15],
+            [450000, 134000, 15],
+            [450000, 130000, 15]
+          ]
+        ]
+      }
+    }
+  ]
+}

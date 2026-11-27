@@ -58,6 +58,7 @@ const SOURCE_FORMATS = members<SourceFormat>()([
   'flatgeobuf',
   'kml',
   'shapefile',
+  'geopackage',
 ]);
 const QUANTITY_KINDS = members<QuantityKind>()([
   'length',

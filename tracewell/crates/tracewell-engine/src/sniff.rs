@@ -439,6 +439,10 @@ fn detect_format(head: &[u8], file_name: &str) -> Result<&'static str> {
     if head.starts_with(b"PAR1") {
         return Ok("parquet");
     }
+    // An SQLite database is read as a GeoPackage, the SQLite format that is supported.
+    if head.starts_with(b"SQLite format 3\0") {
+        return Ok("geopackage");
+    }
     if head.starts_with(&[0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62]) {
         return Ok("flatgeobuf");
     }
@@ -1869,7 +1873,7 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
         match options["format"].as_str() {
             Some(
                 f @ ("csv" | "tsv" | "xlsx" | "parquet" | "json" | "geojson" | "flatgeobuf" | "kml"
-                | "shapefile"),
+                | "shapefile" | "geopackage"),
             ) => f.to_string(),
             other => {
                 return Err(EngineError::unsupported(format!(
@@ -1893,6 +1897,9 @@ pub fn sniff_source(conn: &Connection, src: &Source, options: &Value) -> Result<
     }
     if format == "shapefile" {
         return sniff_shapefile(src, options);
+    }
+    if format == "geopackage" {
+        return sniff_geopackage(src, options);
     }
     if format == "xlsx" {
         return sniff_xlsx(src, options);
@@ -2159,6 +2166,33 @@ fn sniff_shapefile(src: &Source, options: &Value) -> Result<Sniffed> {
     Ok(s)
 }
 
+/// A GeoPackage's sniff (geopackage/importer.ts sniff): the layer's fields, the encoding, the
+/// CRS, the geometry types and the row count, its first rows as the sample.
+fn sniff_geopackage(src: &Source, options: &Value) -> Result<Sniffed> {
+    let found = crate::geopackage_import::sniff(src.path, SAMPLE_MAX_ROWS)?;
+    let (rows, geometries) = found
+        .rows
+        .into_iter()
+        .map(|(loc, fields, geometry)| ((loc, fields), geometry))
+        .unzip();
+    let mut s = Sniffed {
+        format: "geopackage".into(),
+        options: found.options,
+        detections: found.detections,
+        header: vec![found.header],
+        rows,
+        notes: Vec::new(),
+        decimal: '.',
+        thousands: String::new(),
+        sheets: None,
+        geometries: found.geometry.then_some(geometries),
+    };
+    if !options.is_null() && stringify(&s.options) != stringify(options) {
+        s.options = options.clone();
+    }
+    Ok(s)
+}
+
 /// A KML or KMZ file's sniff (kml/importer.ts sniff): the placemark fields, the geometry types
 /// and the encoding from the document's first MiB, its placemarks there as the sample.
 fn sniff_kml(src: &Source, options: &Value) -> Result<Sniffed> {
@@ -2407,7 +2441,11 @@ fn estimate_rows(src: &Source, s: &Sniffed) -> Option<u64> {
     if src.size <= PREVIEW_MAX_BYTES as u64 && n < SAMPLE_MAX_ROWS {
         return Some(n as u64);
     }
-    if s.format == "parquet" || s.format == "flatgeobuf" || s.format == "shapefile" {
+    if s.format == "parquet"
+        || s.format == "flatgeobuf"
+        || s.format == "shapefile"
+        || s.format == "geopackage"
+    {
         // The footer, or the header, states the row count exactly.
         return s.detection("rowCount").and_then(|d| d["value"].as_u64());
     }
@@ -2462,7 +2500,8 @@ pub fn preview(src: &Source, s: &Sniffed, overrides: &[Value], budget: u64) -> R
         geometry_column: matches!(
             s.format.as_str(),
             "geojson" | "flatgeobuf" | "kml" | "shapefile"
-        ),
+        ) || (s.format == "geopackage"
+            && !s.options["geopackage"]["geometry"].is_null()),
     };
     let fields: Vec<Vec<Raw>> = s.rows.iter().map(|(_, f)| f.clone()).collect();
     let planned = detect_columns(&s.header, &fields, &o);

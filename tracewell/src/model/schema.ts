@@ -44,6 +44,7 @@ export interface CrsRef {
     | 'flatgeobuf-header'
     | 'kml-specification'
     | 'shapefile-prj'
+    | 'geopackage-srs'
     | 'assumed-latlon'
     | 'user';
 }
@@ -70,7 +71,8 @@ export interface ColumnSchema {
 /** A column as planned by detection, before any step can derive from it. */
 export type ColumnPlan = Omit<ColumnSchema, 'derivedFrom'>;
 
-export type SourceFormat = 'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet' | 'flatgeobuf' | 'kml' | 'shapefile';
+export type SourceFormat =
+  'csv' | 'tsv' | 'xlsx' | 'geojson' | 'json' | 'parquet' | 'flatgeobuf' | 'kml' | 'shapefile' | 'geopackage';
 
 export interface TableSchema {
   datasetId: DatasetId;

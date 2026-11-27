@@ -574,14 +574,14 @@ fn read_wkb(r: &mut In, depth: usize) -> std::result::Result<Geom, String> {
 }
 
 /// A GeoPackageBinary blob read (readGpkgGeometry): its SRS ID, empty flag, envelope and geometry.
-struct GeometryRead {
-    srs_id: i64,
-    empty: bool,
-    envelope: Option<Vec<f64>>,
-    geometry: Geom,
+pub(crate) struct GeometryRead {
+    pub srs_id: i64,
+    pub empty: bool,
+    pub envelope: Option<Vec<f64>>,
+    pub geometry: Geom,
 }
 
-fn read_gpkg_geometry(blob: &[u8]) -> std::result::Result<GeometryRead, String> {
+pub(crate) fn read_gpkg_geometry(blob: &[u8]) -> std::result::Result<GeometryRead, String> {
     let mut r = In {
         b: blob,
         at: 0,
@@ -1056,7 +1056,7 @@ struct GeometryColumn {
 }
 
 /// The rows of a table by its columns' names, rowid aliases filled in (namedRows).
-fn named_rows(
+pub(crate) fn named_rows(
     db: &mut Database,
     tables: &HashMap<String, (u32, Option<String>)>,
     table: &str,

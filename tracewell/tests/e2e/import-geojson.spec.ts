@@ -61,3 +61,17 @@ test('zipped Shapefiles import with their .prj CRS, their encoding and every che
   await app.importFixture('shp_wells_pointz_wgs84.zip');
   await expect(page.getByText('abandonné')).toBeVisible();
 });
+
+test('GeoPackages SQLite wrote import with their layer, CRS and encoding and every check the library expects', async ({
+  app,
+  page,
+}) => {
+  await app.open();
+  await app.importFixture('gpkg_licence_blocks_bng.gpkg');
+  await app.runChecks();
+  expect(await app.issueCounts()).toEqual(fixtureExpectation('gpkg_licence_blocks_bng.gpkg').issues);
+  await expect(page.getByText('Øresund Energi ApS').first()).toBeVisible();
+  await app.importFixture('gpkg_wells_points_wgs84.gpkg');
+  await expect(page.getByText('Cormorant Petroleum').first()).toBeVisible();
+  await expect(page.getByText('NS-A02')).toBeVisible();
+});

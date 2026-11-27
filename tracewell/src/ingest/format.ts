@@ -6,6 +6,7 @@ import { decodeAll, sniffEncoding } from '@tw/io';
 import { detection, type Detection, type Importer, type SourceFormat } from '@tw/model';
 import { csvImporter } from '@tw/formats-csv';
 import { flatgeobufImporter } from '@tw/formats-flatgeobuf';
+import { geopackageImporter } from '@tw/formats-geopackage';
 import { geojsonImporter } from '@tw/formats-geojson';
 import { kmlImporter } from '@tw/formats-kml';
 import { shapefileImporter } from '@tw/formats-shapefile';
@@ -18,6 +19,10 @@ export const FORMAT_SNIFF_BYTES = 65_536;
 
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
 const PARQUET_MAGIC = [0x50, 0x41, 0x52, 0x31];
+/** "SQLite format 3" and its NUL: the start of an SQLite database, which a GeoPackage is. */
+const SQLITE_MAGIC = [...'SQLite format 3\0'].map((c) => c.charCodeAt(0));
+/** The application IDs of GeoPackage 1.2 and later ("GPKG"), 1.0 ("GP10") and 1.1 ("GP11"). */
+const GEOPACKAGE_IDS = new Set([0x4750_4b47, 0x4750_3130, 0x4750_3131]);
 /** "fgb" and major version 3: the start of a FlatGeobuf file. */
 const FLATGEOBUF_MAGIC = [0x66, 0x67, 0x62, 0x03, 0x66, 0x67, 0x62];
 /** An OLE compound file: the container of Excel 97-2003 workbooks (.xls). */
@@ -149,6 +154,26 @@ export function detectFormat(head: Uint8Array, fileName: string): Detection<Sour
     return detection('shapefile', 'high', 'shp-file-code', 'The file starts with the Shapefile file code 9994.');
   }
 
+  if (startsWith(head, SQLITE_MAGIC) && head.length >= 72) {
+    const id = new DataView(head.buffer, head.byteOffset, head.byteLength).getUint32(68, false);
+    if (GEOPACKAGE_IDS.has(id)) {
+      return detection(
+        'geopackage',
+        'high',
+        'geopackage-header',
+        'The file is an SQLite database marked as a GeoPackage.',
+      );
+    }
+    return detection(
+      'geopackage',
+      ext === 'gpkg' ? 'medium' : 'low',
+      'sqlite-header',
+      ext === 'gpkg'
+        ? 'The file is an SQLite database with the .gpkg extension, though not marked as a GeoPackage.'
+        : 'The file is an SQLite database; it is read as a GeoPackage, the SQLite format that is supported.',
+    );
+  }
+
   if (startsWith(head, FLATGEOBUF_MAGIC)) {
     return detection('flatgeobuf', 'high', 'flatgeobuf-magic', 'The file starts with the FlatGeobuf marker fgb.');
   }
@@ -232,5 +257,7 @@ export function importerFor(format: SourceFormat): Importer {
       return kmlImporter;
     case 'shapefile':
       return shapefileImporter;
+    case 'geopackage':
+      return geopackageImporter;
   }
 }

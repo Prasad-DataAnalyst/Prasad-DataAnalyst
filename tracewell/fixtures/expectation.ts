@@ -54,6 +54,7 @@ const FORMATS: ReadonlySet<string> = new Set<SourceFormat>([
   'flatgeobuf',
   'kml',
   'shapefile',
+  'geopackage',
 ]);
 const TYPES: ReadonlySet<string> = new Set<LogicalType>([
   'string',

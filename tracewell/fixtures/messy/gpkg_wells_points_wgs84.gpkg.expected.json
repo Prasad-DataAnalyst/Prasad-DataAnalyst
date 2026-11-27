@@ -1,0 +1,21 @@
+{
+  "file": "gpkg_wells_points_wgs84.gpkg",
+  "format": "geopackage",
+  "detections": {"encoding": "utf-8", "crs": "EPSG:4326"},
+  "confidence": {"encoding": "high", "crs": "high"},
+  "rowCount": 39,
+  "columns": [
+    {"name": "well_id", "type": "string", "unit": null, "role": "id"},
+    {"name": "operator", "type": "string", "unit": null, "role": "text"},
+    {"name": "spud_date", "type": "date", "unit": null, "role": "time"},
+    {"name": "last_test", "type": "datetime", "unit": null, "role": "time"},
+    {"name": "tvd_m", "type": "number", "unit": "m", "role": "measure", "assumed": ["unit"]},
+    {"name": "slots", "type": "integer", "unit": null, "role": "measure"},
+    {"name": "online", "type": "boolean", "unit": null, "role": "text"},
+    {"name": "remarks", "type": "string", "unit": null, "role": "text"},
+    {"name": "photo", "type": "string", "unit": null, "role": "text"},
+    {"name": "geometry", "type": "geometry", "unit": null, "role": "geometry"}
+  ],
+  "issues": {"TW-DQ-001": 51, "TW-GEO-006": 1, "TW-IMP-005": 1, "TW-UNIT-001": 1},
+  "notes": []
+}

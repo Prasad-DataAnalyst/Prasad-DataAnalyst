@@ -8,3 +8,4 @@ fixtures/messy/** binary
 *.zip binary
 *.twp binary
 *.png binary
+*.gpkg binary

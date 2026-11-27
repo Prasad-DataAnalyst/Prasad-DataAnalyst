@@ -15,6 +15,12 @@ export function detectOptionsFor(options: FormatOptions): DetectOptions {
     case 'kml':
     case 'shapefile':
       return { decimalSeparator: '.', thousandsSeparator: '', geometryColumn: true };
+    case 'geopackage':
+      return {
+        decimalSeparator: '.',
+        thousandsSeparator: '',
+        ...(options.geopackage.geometry === null ? {} : { geometryColumn: true }),
+      };
     case 'json':
     case 'parquet':
       return { decimalSeparator: '.', thousandsSeparator: '' };
@@ -22,7 +28,13 @@ export function detectOptionsFor(options: FormatOptions): DetectOptions {
 }
 
 /** Formats whose rows carry their geometry beside their fields. */
-const GEOMETRY_FORMATS: ReadonlySet<FormatOptions['format']> = new Set(['geojson', 'flatgeobuf', 'kml', 'shapefile']);
+const GEOMETRY_FORMATS: ReadonlySet<FormatOptions['format']> = new Set([
+  'geojson',
+  'flatgeobuf',
+  'kml',
+  'shapefile',
+  'geopackage',
+]);
 
 export type CellParseResult = { ok: true; value: CellValue; nullMarker?: string } | { ok: false; raw: string };
 export type RowParser = (row: RawRow) => CellParseResult[];

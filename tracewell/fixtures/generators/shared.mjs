@@ -43,6 +43,8 @@ export const ALL_FIXTURES = Object.freeze([
   'kmz_pipelines_latin1.kmz',
   'shp_licence_blocks_bng.zip',
   'shp_wells_pointz_wgs84.zip',
+  'gpkg_licence_blocks_bng.gpkg',
+  'gpkg_wells_points_wgs84.gpkg',
 ]);
 
 /**

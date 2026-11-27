@@ -617,6 +617,32 @@ export class SqliteDatabase {
     yield* this.walk(root, 0, new Set());
   }
 
+  /** How many rows a table b-tree holds: the cells of its leaves, counted without reading them. */
+  count(root: number): number {
+    const seen = new Set<number>();
+    const visit = (n: number, depth: number): number => {
+      if (depth > 40) fail('its b-tree is deeper than any valid one');
+      if (seen.has(n)) fail(`its b-tree visits page ${n} twice`);
+      seen.add(n);
+      const data = this.page(n);
+      const hdr = n === 1 ? FILE_HEADER : 0;
+      const type = data[hdr] as number;
+      if (type !== LEAF_TABLE && type !== INTERIOR_TABLE) fail(`page ${n} is not a page of a table`);
+      const cells = u16(data, hdr + 3);
+      if (type === LEAF_TABLE) return cells;
+      const pointers = hdr + INTERIOR_HEADER;
+      if (pointers + 2 * cells > this.usable) fail(`page ${n} lists more cells than it holds`);
+      let total = visit(u32(data, hdr + 8), depth + 1);
+      for (let i = 0; i < cells; i++) {
+        const at = u16(data, pointers + 2 * i);
+        if (at < pointers + 2 * cells || at + 4 > this.usable) fail(`a cell of page ${n} lies outside its page`);
+        total += visit(u32(data, at), depth + 1);
+      }
+      return total;
+    };
+    return visit(root, 0);
+  }
+
   private *walk(n: number, depth: number, seen: Set<number>): Generator<{ rowid: bigint; values: SqlValue[] }> {
     if (depth > 40) fail('its b-tree is deeper than any valid one');
     if (seen.has(n)) fail(`its b-tree visits page ${n} twice`);

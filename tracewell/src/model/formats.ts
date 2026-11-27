@@ -72,6 +72,13 @@ export interface ShapefileOptions {
   entry: string;
 }
 
+export interface GeoPackageOptions {
+  /** The table read: one gpkg_contents lists as features or attributes. */
+  layer: string;
+  /** Its geometry column, or null for a table of attributes. */
+  geometry: string | null;
+}
+
 export type FormatOptions =
   | { format: 'csv' | 'tsv'; csv: CsvOptions }
   | { format: 'xlsx'; xlsx: XlsxOptions }
@@ -80,12 +87,14 @@ export type FormatOptions =
   | { format: 'parquet'; parquet: ParquetOptions }
   | { format: 'flatgeobuf'; flatgeobuf: FlatGeobufOptions }
   | { format: 'kml'; kml: KmlOptions }
-  | { format: 'shapefile'; shapefile: ShapefileOptions };
+  | { format: 'shapefile'; shapefile: ShapefileOptions }
+  | { format: 'geopackage'; geopackage: GeoPackageOptions };
 
 export interface RawRow {
   /**
    * CSV physical line (1-based) | sheet row (1-based) | GeoJSON or FlatGeobuf feature index
-   * (0-based) | KML placemark or Shapefile record index (0-based) | JSON record index (0-based) or, for JSON Lines,
+   * (0-based) | KML placemark or Shapefile record index (0-based) | GeoPackage feature ID (the
+   * table's rowid) | JSON record index (0-based) or, for JSON Lines,
    * line (1-based) | Parquet row index (0-based).
    */
   srcLoc: number;
