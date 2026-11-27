@@ -330,7 +330,7 @@ Modules with the same build order can be built in parallel. Lower numbers come f
 | 2     | table           | `src/table`                                           | model, io                                                                                 |
 | 2     | audit           | `src/audit`                                           | model, io                                                                                 |
 | 2     | ui-shell        | `src/ui-shell`                                        | model, engine-api, react, zustand, react-resizable-panels, lucide-react                   |
-| 3     | ingest          | `src/ingest`                                          | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson, formats-json, formats-parquet, formats-flatgeobuf, formats-kml, formats-shapefile |
+| 3     | ingest          | `src/ingest`                                          | model, io, detect, table, formats-csv, formats-xlsx, formats-geojson, formats-json, formats-parquet, formats-flatgeobuf, formats-geopackage, formats-kml, formats-shapefile |
 | 3     | rules           | `src/rules`                                           | model, io, table, units, geo                                                              |
 | 3     | steps           | `src/steps`                                           | model, table, units, geo                                                                  |
 | 3     | export          | `src/export`                                          | model, io, table, units, geo, formats-csv, formats-xlsx, formats-geojson, formats-kml, formats-flatgeobuf, formats-geopackage, formats-parquet |

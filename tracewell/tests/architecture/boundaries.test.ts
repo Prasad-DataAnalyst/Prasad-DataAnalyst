@@ -86,6 +86,7 @@ export const ALLOWED: Record<ModuleName, ModuleName[]> = {
     'formats-json',
     'formats-parquet',
     'formats-flatgeobuf',
+    'formats-geopackage',
     'formats-kml',
     'formats-shapefile',
   ],
