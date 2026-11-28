@@ -3,7 +3,7 @@
  * keyboard shortcuts. Theme, density, keyboard shortcuts and About come from the shell itself.
  */
 import type { AuditEntry, DatasetId, DatasetSummary, ProjectOpenReport, SaveResult } from '@tw/model';
-import type { Command, CommandContext, WorkbenchState } from '@tw/ui-shell';
+import { roleOf, type Command, type CommandContext, type WorkbenchState } from '@tw/ui-shell';
 import { addPendingImport, openDialog, views } from './store';
 
 const ACCEPT = '.csv,.tsv,.txt,.xlsx,.xls,.geojson,.json,.jsonl,.ndjson,.parquet,.fgb,.kml,.kmz,.zip,.shp,.gpkg';
@@ -26,9 +26,15 @@ export function activeDataset(s: WorkbenchState): DatasetId | null {
 }
 
 const hasProject = (s: WorkbenchState) => s.project !== null;
-const writable = (s: WorkbenchState) => s.project !== null && !s.project.readOnly;
+const analyst = (s: WorkbenchState) => roleOf(s) === 'Analyst';
+/** The project can change, and the profile at work is an Analyst, who changes data (FR-AUD-03). */
+const writable = (s: WorkbenchState) => s.project !== null && !s.project.readOnly && analyst(s);
 const hasData = (s: WorkbenchState) => writable(s) && (s.project?.datasets.length ?? 0) > 0;
 const anyData = (s: WorkbenchState) => (s.project?.datasets.length ?? 0) > 0;
+/** An Analyst or a Reviewer: who may save, comment on issues and assign them. */
+const reviewing = (s: WorkbenchState) => s.project !== null && !s.project.readOnly && roleOf(s) !== 'Viewer';
+const signing = (s: WorkbenchState) =>
+  s.project !== null && !s.project.readOnly && roleOf(s) === 'Reviewer' && anyData(s);
 
 function datasetName(s: WorkbenchState, id: DatasetId): string {
   return s.project?.datasets.find((d) => d.id === id)?.name ?? id;
@@ -67,7 +73,7 @@ export function defaultCommands(): Command[] {
       id: 'file.new',
       label: 'New project…',
       menu: 'file',
-      enabled: () => true,
+      enabled: analyst,
       run: () => openDialog({ kind: 'newProject' }),
     },
     {
@@ -95,7 +101,7 @@ export function defaultCommands(): Command[] {
       label: 'Save project',
       menu: 'file',
       shortcut: 'Ctrl+S',
-      enabled: writable,
+      enabled: reviewing,
       run: async (ctx) => {
         const saved = await runJob<SaveResult>(ctx, () => ctx.engine.saveProject(), 'Save project');
         if (saved.bytes !== undefined) ctx.download(saved.bytes, saved.fileName, TWP_TYPE);
@@ -122,7 +128,7 @@ export function defaultCommands(): Command[] {
       menu: 'file',
       stage: 'export',
       shortcut: 'Ctrl+E',
-      enabled: anyData,
+      enabled: (s) => anyData(s) && analyst(s),
       run: (ctx) => {
         const id = activeDataset(ctx.store);
         if (id === null) return;
@@ -147,6 +153,25 @@ export function defaultCommands(): Command[] {
       menu: 'file',
       enabled: writable,
       run: () => openDialog({ kind: 'conventions' }),
+    },
+    {
+      id: 'file.profile',
+      label: 'Switch profile…',
+      menu: 'file',
+      enabled: () => true,
+      run: () => openDialog({ kind: 'profile' }),
+    },
+
+    // Review (FR-AUD-04)
+    {
+      id: 'review.signoff',
+      label: 'Sign off dataset…',
+      menu: 'review',
+      enabled: signing,
+      run: (ctx) => {
+        const id = activeDataset(ctx.store);
+        if (id !== null) openDialog({ kind: 'signoff', datasetId: id });
+      },
     },
 
     // Edit
@@ -270,7 +295,7 @@ export function defaultCommands(): Command[] {
       label: 'Mapping templates…',
       menu: 'data',
       stage: 'import',
-      enabled: () => true,
+      enabled: analyst,
       run: (ctx) => {
         const id = activeDataset(ctx.store);
         ctx.store.openTab({
@@ -286,7 +311,7 @@ export function defaultCommands(): Command[] {
       label: 'Recipes…',
       menu: 'data',
       stage: 'export',
-      enabled: anyData,
+      enabled: (s) => anyData(s) && analyst(s),
       run: (ctx) => {
         const id = activeDataset(ctx.store);
         if (id === null) return;

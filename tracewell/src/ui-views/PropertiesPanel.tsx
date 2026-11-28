@@ -12,6 +12,7 @@ import {
   type IssueId,
   type JsonValue,
   type ProjectSummary,
+  type SignOff,
 } from '@tw/model';
 import { formatCell, formatCount, useWorkbench, type Selection } from '@tw/ui-shell';
 import { DetectionValue, ErrorNote, SeverityBadge, formatBytes, useReasonPrompt } from './common';
@@ -149,6 +150,35 @@ function ProjectProps(p: { project: ProjectSummary }): React.JSX.Element {
   );
 }
 
+/** A dataset's sign-off stamps, the latest first (FR-AUD-04): who, when, the verdict and whether the dataset changed since. */
+function SignOffList(p: { signOffs: SignOff[] }): React.JSX.Element {
+  if (p.signOffs.length === 0) {
+    return (
+      <p className="tw-muted" data-testid={TID.signOffs}>
+        Not signed off.
+      </p>
+    );
+  }
+  return (
+    <ul className="tw-signoffs" data-testid={TID.signOffs}>
+      {[...p.signOffs].reverse().map((s, i) => (
+        <li key={s.seq}>
+          <strong>{s.status === 'approved' ? 'Approved' : 'Changes requested'}</strong> by {s.by.name} ({s.by.role}),{' '}
+          {s.at.slice(0, 16).replace('T', ' ')} UTC, entry {s.seq}
+          <div className="tw-muted">
+            {s.changedSeq !== null
+              ? `The dataset changed after it, at entry ${s.changedSeq}.`
+              : i === 0
+                ? 'The dataset has not changed since.'
+                : 'Followed by a later sign-off.'}
+          </div>
+          {s.statement !== '' && <div>“{s.statement}”</div>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function DatasetProps(p: { engine: EngineClient; project: ProjectSummary; datasetId: DatasetId }): React.JSX.Element {
   const d = p.project.datasets.find((x) => x.id === p.datasetId);
   const schema = useEngineQuery(p.engine, `schema:${p.datasetId}`, () => p.engine.getSchema(p.datasetId), [
@@ -184,6 +214,8 @@ function DatasetProps(p: { engine: EngineClient; project: ProjectSummary; datase
           </>
         )}
       </dl>
+      <h4 className="tw-prop-subtitle">Sign-off</h4>
+      <SignOffList signOffs={d.signOffs} />
       {d.steps.length > 0 && (
         <>
           <h4 className="tw-prop-subtitle">Steps</h4>

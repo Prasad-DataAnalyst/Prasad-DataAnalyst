@@ -5,7 +5,7 @@
  * blocked storage), so every access is guarded and the app works the same without it.
  */
 import { create } from 'zustand';
-import type { EngineErrorData, JobHandle, JobId, JobProgress, ProjectSummary } from '@tw/model';
+import type { EngineErrorData, JobHandle, JobId, JobProgress, ProjectSummary, Role, UserProfile } from '@tw/model';
 import type { EngineEvent, EngineInfo } from '@tw/engine-api';
 import type { CentreTab, Selection } from './types';
 
@@ -19,6 +19,8 @@ export interface TrackedJob {
 
 export interface WorkbenchState {
   project: ProjectSummary | null;
+  /** Who is working (FR-AUD-03), as the app set it on the engine; the project summary's user is the engine's word. */
+  user: UserProfile | null;
   engineInfo: EngineInfo | null;
   selection: Selection;
   tabs: CentreTab[];
@@ -29,6 +31,7 @@ export interface WorkbenchState {
   density: 'compact' | 'comfortable';
   lastError: EngineErrorData | null;
   setProject(p: ProjectSummary | null): void;
+  setUser(u: UserProfile | null): void;
   setEngineInfo(i: EngineInfo | null): void;
   select(s: Selection): void;
   openTab(t: CentreTab): void;
@@ -90,6 +93,7 @@ export function createWorkbenchStore() {
   const prefs = loadPrefs();
   return create<WorkbenchState>()((set, get) => ({
     project: null,
+    user: null,
     engineInfo: null,
     selection: { kind: 'none' },
     tabs: [],
@@ -101,6 +105,7 @@ export function createWorkbenchStore() {
     lastError: null,
 
     setProject: (project) => set({ project }),
+    setUser: (user) => set({ user }),
     setEngineInfo: (engineInfo) => set({ engineInfo }),
     select: (selection) => set({ selection }),
 
@@ -168,3 +173,8 @@ export function createWorkbenchStore() {
 }
 
 export const useWorkbench = createWorkbenchStore();
+
+/** The role at work: the open project's user, else the profile the app set (FR-AUD-03). */
+export function roleOf(s: Pick<WorkbenchState, 'project' | 'user'>): Role {
+  return s.project?.user.role ?? s.user?.role ?? 'Analyst';
+}

@@ -56,6 +56,8 @@ export interface Issue {
   counts: { flagged: number; open: number; accepted: number; excluded: number; fixed: number };
   openRows: RowRanges;
   comments: IssueComment[];
+  /** Who the issue is assigned to, by name (FR-VAL-04), or null. */
+  assignee: string | null;
   firstSeenSeq: AuditSeq;
   lastCheckedSeq: AuditSeq;
   /**

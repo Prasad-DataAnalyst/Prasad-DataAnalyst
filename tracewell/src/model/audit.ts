@@ -10,6 +10,7 @@ import type {
   IsoUtc,
   IssueId,
   JsonValue,
+  Role,
   RowId,
   Sha256Hex,
   StepId,
@@ -25,6 +26,7 @@ export type AuditAction =
   | 'cell.edit'
   | 'issue.accept'
   | 'issue.comment'
+  | 'issue.assign'
   | 'rows.exclude'
   | 'step.apply'
   | 'step.remove'
@@ -32,13 +34,13 @@ export type AuditAction =
   | 'project.area'
   | 'project.conventions'
   | 'rulepack.install'
+  | 'dataset.signoff'
   | 'export.create'
   | 'project.save'
   | 'recipe.apply';
 
 export type Actor =
-  | { kind: 'user'; profileId: string; name: string; role: 'Analyst' }
-  | { kind: 'system'; component: 'detector' | 'engine' };
+  { kind: 'user'; profileId: string; name: string; role: Role } | { kind: 'system'; component: 'detector' | 'engine' };
 
 export interface AuditTarget {
   datasetId?: DatasetId;

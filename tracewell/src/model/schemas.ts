@@ -29,6 +29,7 @@ import type { CheckSpec, RuleCategory, RulePack, Severity } from './rules';
 import type { ColumnRole, DateFormat, QuantityKind, SourceFormat, TimezoneMode } from './schema';
 import type { Predicate, StepInput } from './steps';
 import type { Recipe } from './recipes';
+import { ROLES, SIGN_OFF_STATUSES } from './review';
 import type { MappingTemplate } from './templates';
 import type { UnitConvention, UnitDef } from './units';
 import { isDateText, isDateTimeText, type Geometry, type LogicalType } from './values';
@@ -150,6 +151,7 @@ const AUDIT_ACTIONS = members<AuditAction>()([
   'cell.edit',
   'issue.accept',
   'issue.comment',
+  'issue.assign',
   'rows.exclude',
   'step.apply',
   'step.remove',
@@ -157,6 +159,7 @@ const AUDIT_ACTIONS = members<AuditAction>()([
   'project.area',
   'project.conventions',
   'rulepack.install',
+  'dataset.signoff',
   'export.create',
   'project.save',
   'recipe.apply',
@@ -364,7 +367,7 @@ const conversionMethod = z.strictObject({
 });
 
 const actor = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('user'), profileId: nonEmpty, name: nonEmpty, role: z.literal('Analyst') }),
+  z.strictObject({ kind: z.literal('user'), profileId: nonEmpty, name: nonEmpty, role: z.enum(ROLES) }),
   z.strictObject({ kind: z.literal('system'), component: z.enum(['detector', 'engine']) }),
 ]);
 
@@ -517,6 +520,8 @@ const decision = z.discriminatedUnion('kind', [
     reason: z.string(),
   }),
   z.strictObject({ kind: z.literal('comment_issue'), issueId, text: z.string() }),
+  z.strictObject({ kind: z.literal('assign_issue'), issueId, assignee: z.string().nullable(), reason: z.string() }),
+  z.strictObject({ kind: z.literal('sign_off'), datasetId, status: z.enum(SIGN_OFF_STATUSES), reason: z.string() }),
   z.strictObject({
     kind: z.literal('override_detection'),
     datasetId,
@@ -538,6 +543,14 @@ const rulePackRef = z.strictObject({ id: nonEmpty, version: semver, sha256 });
 const packKey = (ref: { id: string; version: string }): string => `${ref.id}@${ref.version}`;
 const registryRef = z.strictObject({ version: nonEmpty, sha256 });
 const auditHead = z.strictObject({ seq: auditSeq, hash: sha256 });
+const signOff = z.strictObject({
+  seq: auditSeq,
+  at: isoUtc,
+  by: z.strictObject({ profileId: nonEmpty, name: nonEmpty, role: z.enum(ROLES) }),
+  status: z.enum(SIGN_OFF_STATUSES),
+  statement: z.string(),
+  changedSeq: auditSeq.nullable(),
+});
 const originalFileShape = { fileId: sha256, name: nonEmpty, size: count, mediaType: nonEmpty, addedSeq: auditSeq };
 
 const projectManifest = z
@@ -670,6 +683,7 @@ const exportManifest = z
     substitutions: z.array(substitution),
     options: z.strictObject({ neutralizeFormulas: z.boolean() }).exactOptional(),
     conventions: conventions.exactOptional(),
+    signOff: signOff.exactOptional(),
     files: z.array(z.strictObject({ path: packagePath, size: count, sha256, role: z.enum(EXPORT_FILE_ROLES) })),
     validation: validationReport,
     auditHead,

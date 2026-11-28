@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { checkProtocol } from './protocol';
-import { loadProfile, saveProfile } from './profile';
 
 describe('checkProtocol', () => {
   it('rejects a different major version with PROTOCOL_MISMATCH and a fix', () => {
@@ -16,13 +15,5 @@ describe('checkProtocol', () => {
 
   it('rejects a version that is not semantic', () => {
     expect(() => checkProtocol('latest', '0.1.0')).toThrow(expect.objectContaining({ code: 'PROTOCOL_MISMATCH' }));
-  });
-});
-
-describe('profile storage', () => {
-  it('keeps the profile in memory when there is no localStorage', () => {
-    expect(loadProfile()).toBeNull();
-    saveProfile({ id: 'u_1', name: 'Prasad', role: 'Analyst' });
-    expect(loadProfile()).toEqual({ id: 'u_1', name: 'Prasad', role: 'Analyst' });
   });
 });

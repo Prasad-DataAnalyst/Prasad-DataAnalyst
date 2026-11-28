@@ -60,6 +60,9 @@ function packJson(state: ProjectState, ref: RulePackRef): string {
 /** The `.twp` bytes of a project whose last audit entry is its `project.save`. */
 export function projectBytes(state: ProjectState, appVersion: string, digests: DatasetDigest[]): Uint8Array {
   const savedAt = state.lastSavedAt ?? state.createdAt;
+  // Whoever saved: the actor of the project.save entry the file ends with (FR-AUD-03).
+  const save = state.log.entries().findLast((e) => e.action === 'project.save');
+  const savedBy = save?.actor.kind === 'user' ? save.actor.name : state.profile.name;
   return writeTwp({
     manifest: {
       appVersion,
@@ -67,7 +70,7 @@ export function projectBytes(state: ProjectState, appVersion: string, digests: D
       name: state.name,
       createdAt: state.createdAt,
       savedAt,
-      savedBy: state.profile.name,
+      savedBy,
       unitSystem: state.unitSystem,
       projectArea: state.projectArea,
       // writeTwp computes these three from the files it stores.

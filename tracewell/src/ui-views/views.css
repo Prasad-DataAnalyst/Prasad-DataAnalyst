@@ -759,13 +759,19 @@
 }
 .tw-history,
 .tw-steps,
+.tw-signoffs,
 .tw-col-list,
 .tw-top-values {
   margin: 0;
   padding-left: 18px;
 }
-.tw-history li {
+.tw-history li,
+.tw-signoffs li {
   margin-bottom: 8px;
+}
+.tw-radio {
+  display: block;
+  margin: 2px 0;
 }
 .tw-method {
   font-family: var(--tw-font-mono);

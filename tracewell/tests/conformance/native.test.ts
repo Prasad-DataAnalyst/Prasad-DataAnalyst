@@ -3446,6 +3446,177 @@ describe.skipIf(!nativeBuilt)('native engine parity (tracewell-native over a rea
     }
   }, 120_000);
 
+  it('holds profiles to their roles, assigns issues and records sign-offs as the TypeScript engine does', async () => {
+    const nat = startNative(['--fixed-clock', START, '--seed', '1', '--owner', 'Prasad']);
+    const lite = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+    const both = async <T>(what: string, run: (e: EngineClient) => Promise<T>): Promise<[T, T]> => {
+      const [x, y] = [await settled(() => run(nat.client)), await settled(() => run(lite))];
+      expect(x, what).toEqual(y);
+      return [x as T, y as T];
+    };
+    const jane = { id: 'u_jane', name: ' Jane ', role: 'Reviewer' as const };
+    const sam = { id: 'u_sam', name: 'Sam', role: 'Viewer' as const };
+    const analyst = { ...PROFILE };
+    /** Each dataset's stamps, without their times: each engine's clock is its own. */
+    const stampsOf = async (e: EngineClient) =>
+      (await e.getProject()).datasets.map((d) => d.signOffs.map(({ at: _at, ...rest }) => rest));
+    const as = (profile: typeof jane | typeof sam | typeof analyst) => async (e: EngineClient) => {
+      await e.setProfile(profile);
+      return (await e.getProject()).user;
+    };
+    try {
+      for (const e of [nat.client, lite]) await e.newProject({ name: 'Review', profile: { ...PROFILE } });
+      const file = { kind: 'path' as const, path: fixturePath('csv_well_daily_golden.csv') };
+      const [ds] = await both('import', async (e) => e.awaitJob<DatasetSummary>(await e.importFile(file)));
+      const [issues] = await both('checks', async (e) => {
+        await e.awaitJob(await e.runChecks(ds.id));
+        return (await e.listIssues({ datasetId: ds.id, limit: 1000 })).items;
+      });
+      const issue = issues[0] as Issue;
+      const pressure = (await lite.getSchema(ds.id)).columns.find((c) => c.name === 'Pressure')?.id ?? '';
+      const edit = {
+        kind: 'edit_cell',
+        datasetId: ds.id,
+        rowId: 0,
+        columnId: pressure,
+        value: { text: '1860.5' },
+        reason: 'Re-read',
+      } as Decision;
+      const assign = (assignee: unknown, reason = 'Owns the logger') =>
+        ({ kind: 'assign_issue', issueId: issue.id, assignee, reason }) as unknown as Decision;
+      const signOff = (status: unknown, datasetId = ds.id, reason = 'Checked against the field sheets') =>
+        ({ kind: 'sign_off', datasetId, status, reason }) as unknown as Decision;
+
+      await both('a Reviewer', as(jane));
+      const refusals: [string, (e: EngineClient) => Promise<unknown>][] = [
+        ['an edit', (e: EngineClient) => e.decide(edit)],
+        ['a check run', (e: EngineClient) => e.runChecks(ds.id)],
+        ['an export', (e: EngineClient) => e.exportData({ datasetId: ds.id, profile: 'csv' })],
+        ['an import', (e: EngineClient) => e.importFile(file)],
+        [
+          'a step',
+          (e: EngineClient) =>
+            e.applyStep(ds.id, { kind: 'filter', predicate: { combinator: 'all', conditions: [] } } as never, 'Narrow'),
+        ],
+        ['a step removal', (e: EngineClient) => e.removeStep(ds.id, 's1', 'Gone')],
+        [
+          'a rule-pack',
+          (e: EngineClient) =>
+            e.installRulePack({ kind: 'bytes', bytes: new Uint8Array(), name: 'p.twrules' }, 'Policy'),
+        ],
+        ['a mapping template', (e: EngineClient) => e.saveMappingTemplate({ datasetId: ds.id, name: 'Wells' })],
+        ['a template deletion', (e: EngineClient) => e.deleteMappingTemplate('mt_x')],
+        ['a recipe', (e: EngineClient) => e.saveRecipe({ datasetId: ds.id, name: 'Monthly', export: null })],
+        [
+          'a project area',
+          (e: EngineClient) => e.decide({ kind: 'set_project_area', bbox: [0, 50, 2, 52], reason: 'North Sea' }),
+        ],
+        ['a revert', (e: EngineClient) => e.decide({ kind: 'revert', seq: 1, reason: 'Undo' })],
+        ['a new project', (e: EngineClient) => e.newProject({ name: 'Mine', profile: jane })],
+      ];
+      for (const [what, run] of refusals) await both(`refuses ${what}`, run);
+      await both('a comment', async (e) =>
+        (await e.decide({ kind: 'comment_issue', issueId: issue.id, text: 'Please confirm.' })).map(content),
+      );
+      await both('an assignment', async (e) => (await e.decide(assign(' Prasad '))).map(content));
+      for (const bad of ['Prasad', '', 'x'.repeat(101), 7, undefined]) {
+        await both(`refuses the assignee ${JSON.stringify(bad)}`, (e) => e.decide(assign(bad)));
+      }
+      await both('refuses an assignment without a reason', (e) => e.decide(assign('Sam', ' ')));
+      await both('an unassignment', async (e) => (await e.decide(assign(null, 'Not his'))).map(content));
+      await both('refuses unassigning no one', (e) => e.decide(assign(null)));
+      await both('assigns again', async (e) => (await e.decide(assign('Sam'))).map(content));
+      for (const bad of ['done', 1, undefined]) {
+        await both(`refuses the status ${JSON.stringify(bad)}`, (e) => e.decide(signOff(bad)));
+      }
+      await both('refuses a sign-off of a dataset that is not there', (e) => e.decide(signOff('approved', 'd9')));
+      await both('a sign-off', async (e) => (await e.decide(signOff('approved'))).map(content));
+      await both('the stamps', stampsOf);
+      await both('the assignee', async (e) =>
+        (await e.listIssues({ datasetId: ds.id, limit: 1000 })).items.map((i) => i.assignee),
+      );
+      await both('saves as the Reviewer', async (e) => {
+        const saved = await e.awaitJob<SaveResult>(await e.saveProject());
+        return (JSON.parse(readZip(saved.bytes as Uint8Array).readText('manifest.json')) as { savedBy: string })
+          .savedBy;
+      });
+
+      await both('a Viewer', as(sam));
+      await both("refuses a Viewer's comment", (e) =>
+        e.decide({ kind: 'comment_issue', issueId: issue.id, text: 'Hi' }),
+      );
+      await both("refuses a Viewer's sign-off", (e) => e.decide(signOff('approved')));
+      await both("refuses a Viewer's save", (e) => e.saveProject());
+      await both('refuses an incomplete profile', (e) =>
+        e.setProfile({ id: 'u_x', name: 'X', role: 'Admin' } as never),
+      );
+
+      await both('the Analyst', as(analyst));
+      await both("refuses the Analyst's sign-off", (e) => e.decide(signOff('approved')));
+      await both('an edit after the sign-off', async (e) => (await e.decide(edit)).map(content));
+      await both('the superseded stamp', stampsOf);
+      const nulls = { kind: 'path' as const, path: fixturePath('csv_null_markers.csv') };
+      const [other] = await both('another import', async (e) => e.awaitJob<DatasetSummary>(await e.importFile(nulls)));
+      await both('the Reviewer again', as(jane));
+      await both('refuses a sign-off before checks', (e) => e.decide(signOff('approved', other.id)));
+      await both('requests changes', async (e) =>
+        (await e.decide(signOff('changes_requested', ds.id, 'The edit needs a source'))).map(content),
+      );
+      await both('the analyst exports', as(analyst));
+      const [x] = await both('the export states the sign-off', async (e) => {
+        const r = await e.awaitJob<ExportResult>(await e.exportData({ datasetId: ds.id, profile: 'csv' }));
+        const readme = readZip(r.bytes as Uint8Array).readText('README.txt');
+        // The time is each engine's clock's; the rest of the stamp is not.
+        const { at: _at, ...signOff } = r.manifest.signOff ?? { at: '' };
+        const lines = readme
+          .split('\n')
+          .filter((l) => l.startsWith('SIGN-OFF'))
+          .map((l) => l.replace(/ at \S+, entry/, ' at <time>, entry'));
+        return { signOff, lines };
+      });
+      expect(x.lines[0]).toMatch(
+        /^SIGN-OFF: changes requested by Jane \(Reviewer\) at .+, entry \d+; the dataset has not changed since$/,
+      );
+
+      // Both engines open each engine's project file to the same stamps and assignees.
+      for (const [from, engine] of [
+        ['native', nat.client],
+        ['TypeScript', lite],
+      ] as const) {
+        const saved = await engine.awaitJob<SaveResult>(await engine.saveProject());
+        const bytes = saved.bytes as Uint8Array;
+        const opener = await (ENGINE_FACTORIES['tracewell-ts'] as () => Promise<EngineClient>)();
+        const { report, opened } = await openNatively(bytes);
+        try {
+          const tsReport = await opener.awaitJob<ProjectOpenReport>(
+            await opener.openProject({ kind: 'bytes', bytes, name: saved.fileName }),
+          );
+          expect(
+            tsReport.checks.filter((c) => !c.ok),
+            from,
+          ).toEqual([]);
+          expect(
+            report.checks.filter((c) => !c.ok),
+            from,
+          ).toEqual([]);
+          await sameState(opened.client, opener);
+          expect(await stampsOf(opened.client), from).toEqual(await stampsOf(engine));
+          expect(await stampsOf(opener), from).toEqual(await stampsOf(engine));
+          const assignees = async (e: EngineClient) =>
+            (await e.listIssues({ datasetId: ds.id, limit: 1000 })).items.map((i) => [i.id, i.assignee]);
+          expect(await assignees(opened.client), from).toEqual(await assignees(engine));
+          expect(await assignees(opener), from).toEqual(await assignees(engine));
+        } finally {
+          stopNative(opened);
+          opener.close();
+        }
+      }
+    } finally {
+      stopNative(nat);
+      lite.close();
+    }
+  }, 120_000);
+
   it('verifies, installs, runs, saves and reopens signed rule-packs as the TypeScript engine does', async () => {
     const acme = publisherKey();
     const policyText = JSON.stringify({

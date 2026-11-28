@@ -4,6 +4,7 @@
  */
 import type { Conventions } from './conventions';
 import type { AuditSeq, BBox, ColumnId, DatasetId, IssueId, JsonValue, RowId } from './ids';
+import type { SignOffStatus } from './review';
 import type { CellValue } from './values';
 
 /** Text is parsed with the column's parser; a value is taken as already typed. */
@@ -40,6 +41,10 @@ export type Decision =
   | { kind: 'accept_issue'; issueId: IssueId; rows: 'all' | RowId[]; reason: string }
   | { kind: 'exclude_rows'; datasetId: DatasetId; rows: RowId[] | { issueId: IssueId }; reason: string }
   | { kind: 'comment_issue'; issueId: IssueId; text: string }
+  /** Assigns an issue to a person by name, or to no one (FR-VAL-04). */
+  | { kind: 'assign_issue'; issueId: IssueId; assignee: string | null; reason: string }
+  /** A Reviewer's sign-off stamp on a dataset as it stands (FR-AUD-04); the reason is the reviewer's statement. */
+  | { kind: 'sign_off'; datasetId: DatasetId; status: SignOffStatus; reason: string }
   | {
       kind: 'override_detection';
       datasetId: DatasetId;

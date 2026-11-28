@@ -96,6 +96,12 @@ Data › Recipes… saves a dataset's checks, steps and export profile as a `.tw
 data and can be shared. Run it on next month's file and the issues register shows only what is new
 or changed since the recipe was saved.
 
+Each person works under a local profile with a role (SAD decision D-18): an Analyst works on the
+data; a Reviewer reads a project, comments on issues, assigns them and signs datasets off
+(Review › Sign off dataset…); a Viewer only reads. File › Switch profile… changes who is working,
+and the audit log records each change under the profile that made it. A sign-off stamp shows
+whether the dataset changed after it, and an export states the latest one.
+
 Data › Install rule-pack… installs a signed `.twrules` rule-pack whose rules then run with the
 built-in checks. A file installs only when its publisher's key is in the administrator's policy
 file, and the policy can lock a pack to one version (SAD decision D-17); without a policy, nothing

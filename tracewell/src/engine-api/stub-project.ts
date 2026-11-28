@@ -86,6 +86,8 @@ export class StubProject {
   dirty = false;
   readOnly = false;
   lastSavedAt: IsoUtc | null = null;
+  /** Who is working, once setProfile names someone other than the creator. */
+  acting: UserProfile | null = null;
   private steps = 0;
 
   constructor(
@@ -108,7 +110,8 @@ export class StubProject {
   }
 
   user(): Actor {
-    return { kind: 'user', profileId: this.profile.id, name: this.profile.name, role: this.profile.role };
+    const p = this.acting ?? this.profile;
+    return { kind: 'user', profileId: p.id, name: p.name, role: p.role };
   }
 
   /** Refuses every change to a project that failed an integrity check on open (TW-PRJ-*). */
@@ -302,6 +305,7 @@ export class StubProject {
       assumptions: this.assumptions(ds).length,
       partial: false,
       steps: ds.steps.map((s) => structuredClone(s)),
+      signOffs: [],
     };
   }
 
@@ -325,6 +329,7 @@ export class StubProject {
       name: this.name,
       createdAt: this.createdAt,
       profile: { ...this.profile },
+      user: { ...(this.acting ?? this.profile) },
       unitSystem: this.unitSystem,
       projectArea: this.area === null ? null : [...this.area],
       conventions: structuredClone(this.conventions),

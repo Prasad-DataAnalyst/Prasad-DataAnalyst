@@ -11,6 +11,7 @@ export const MENUS: readonly { id: NonNullable<Command['menu']>; label: string }
   { id: 'edit', label: 'Edit' },
   { id: 'view', label: 'View' },
   { id: 'data', label: 'Data' },
+  { id: 'review', label: 'Review' },
   { id: 'help', label: 'Help' },
 ];
 

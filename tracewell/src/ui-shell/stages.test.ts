@@ -13,6 +13,7 @@ function dataset(over: Partial<DatasetSummary> = {}): DatasetSummary {
     assumptions: 0,
     partial: false,
     steps: [],
+    signOffs: [],
     ...over,
   };
 }
@@ -23,6 +24,7 @@ function project(over: Partial<ProjectSummary> = {}): ProjectSummary {
     name: 'Test',
     createdAt: '2026-10-19T09:00:00.000Z',
     profile: { id: 'u1', name: 'Prasad', role: 'Analyst' },
+    user: { id: 'u1', name: 'Prasad', role: 'Analyst' },
     unitSystem: 'SI',
     projectArea: null,
     conventions: NO_CONVENTIONS,

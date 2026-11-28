@@ -17,7 +17,7 @@ export interface CommandContext {
 export interface Command {
   id: string;
   label: string;
-  menu?: 'file' | 'edit' | 'view' | 'data' | 'help';
+  menu?: 'file' | 'edit' | 'view' | 'data' | 'review' | 'help';
   stage?: Stage;
   /** Written as 'Ctrl+S'; Ctrl also matches Cmd on macOS. */
   shortcut?: string;

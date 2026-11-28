@@ -179,6 +179,7 @@ export function toIssue(issue: StubIssue, ds: StubDataset, columnName: (id: Colu
     counts: c,
     openRows: rowRanges(openRows(issue)),
     comments: issue.comments.map((x) => ({ ...x })),
+    assignee: null,
     firstSeenSeq: issue.firstSeenSeq,
     lastCheckedSeq: issue.lastCheckedSeq,
   };

@@ -8,7 +8,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { EngineClient } from '@tw/engine-api';
 import type { CellValue, ColumnId, DatasetId, RowWindow, RowWindowColumn, Severity } from '@tw/model';
-import { cellTooltip, formatCell, formatCount, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
+import { cellTooltip, formatCell, formatCount, roleOf, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
 import { useReasonPrompt } from './common';
 import { attempt, datasetFor, useChangeVersion, useProject } from './hooks';
 import { RowPageCache } from './row-cache';
@@ -67,7 +67,9 @@ function Grid(p: { engine: EngineClient; datasetId: DatasetId }): React.JSX.Elem
   const { engine, datasetId } = p;
   const project = useProject();
   const summary = project?.datasets.find((d) => d.id === datasetId);
-  const readOnly = project?.readOnly === true;
+  // Only an Analyst edits cells (FR-AUD-03); for anyone else the grid reads like a read-only project's.
+  const analyst = useWorkbench((s) => roleOf(s) === 'Analyst');
+  const readOnly = project?.readOnly === true || !analyst;
   const density = useWorkbench((s) => s.density);
   const select = useWorkbench((s) => s.select);
   const rowHeight = density === 'compact' ? 24 : 32;

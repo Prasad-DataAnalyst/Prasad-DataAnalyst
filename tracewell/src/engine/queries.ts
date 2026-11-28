@@ -57,6 +57,7 @@ function systemToIssue(d: IssueDraft, seq: number): Issue {
     counts: { flagged: 1, open: 1, accepted: 0, excluded: 0, fixed: 0 },
     openRows: { count: 0, ranges: [] },
     comments: [],
+    assignee: null,
     firstSeenSeq: seq,
     lastCheckedSeq: seq,
   };

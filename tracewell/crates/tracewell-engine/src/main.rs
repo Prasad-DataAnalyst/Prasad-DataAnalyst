@@ -47,6 +47,7 @@ mod parse;
 mod project;
 mod recipes;
 mod recovery;
+mod roles;
 mod rulepacks;
 mod rules;
 mod shapefile;
@@ -260,6 +261,9 @@ fn call(shared: &Arc<Shared>, msg: &Incoming, method: &str, params: &[Value]) ->
     }
     if method == "recoverProject" {
         return engine::recover_project(shared);
+    }
+    if method == "setProfile" {
+        return engine::set_profile(shared, param(params, 0));
     }
     if method == "installRulePack" {
         return engine::install_rule_pack(shared, msg, param(params, 0), param(params, 1));

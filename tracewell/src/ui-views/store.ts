@@ -26,6 +26,9 @@ export type DialogRequest =
   | { kind: 'openReport'; report: ProjectOpenReport }
   | { kind: 'licences' }
   | { kind: 'comment'; issueId: IssueId }
+  | { kind: 'assign'; issueId: IssueId; assignee: string | null }
+  | { kind: 'signoff'; datasetId: DatasetId }
+  | { kind: 'profile' }
   | { kind: 'newProject' };
 
 export interface ViewsState {

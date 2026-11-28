@@ -19,6 +19,8 @@ pub struct IssueState {
     pub present: bool,
     pub accepted_whole: bool,
     pub comments: Vec<Value>,
+    /// Who the issue is assigned to (issue.assign), by name.
+    pub assignee: Option<String>,
     pub first_seen_seq: u64,
     pub last_checked_seq: u64,
     /// The issue.accept entry that decided each accepted row, for drill-down.
@@ -50,6 +52,7 @@ pub fn merge_check_run(issues: &mut Vec<IssueState>, drafts: Vec<Draft>, seq: u6
                 present: true,
                 accepted_whole: false,
                 comments: Vec::new(),
+                assignee: None,
                 first_seen_seq: seq,
                 last_checked_seq: seq,
                 decided_by: HashMap::new(),
@@ -95,6 +98,7 @@ pub fn to_cache(st: &IssueState) -> Value {
         "present": st.present,
         "acceptedWhole": st.accepted_whole,
         "comments": st.comments,
+        "assignee": st.assignee,
         "firstSeenSeq": st.first_seen_seq,
         "lastCheckedSeq": st.last_checked_seq,
         "decidedBy": decided_groups(st),
@@ -164,6 +168,8 @@ pub fn from_cache(v: &Value, n: u64) -> Option<IssueState> {
         present: v["present"].as_bool()?,
         accepted_whole: v["acceptedWhole"].as_bool()?,
         comments: v["comments"].as_array()?.clone(),
+        // Caches written before assignment hold none.
+        assignee: v["assignee"].as_str().map(String::from),
         first_seen_seq: v["firstSeenSeq"].as_u64()?,
         last_checked_seq: v["lastCheckedSeq"].as_u64()?,
         decided_by: {
@@ -257,6 +263,7 @@ pub fn to_issue(st: &IssueState, excluded: &RowSet, packs: &PackSet) -> Value {
         },
         "openRows": open_rows,
         "comments": st.comments,
+        "assignee": st.assignee,
         "firstSeenSeq": st.first_seen_seq,
         "lastCheckedSeq": st.last_checked_seq,
     })

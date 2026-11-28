@@ -1,6 +1,7 @@
 /** Project vocabulary: the `.twp` manifest (SAD section 11) and the summaries the UI shows. */
 import type { Conventions } from './conventions';
 import type { ExportRecord, OriginalFileInfo } from './export';
+import type { SignOff } from './review';
 import type { AuditSeq, BBox, DatasetId, IsoUtc, ProjectId, Sha256Hex, UserProfile } from './ids';
 import type { InstalledRulePack, RulePackRef } from './rules';
 import type { TableSchema } from './schema';
@@ -81,13 +82,18 @@ export interface DatasetSummary {
   assumptions: number;
   partial: boolean;
   steps: Step[];
+  /** Every sign-off of the dataset, oldest first (FR-AUD-04); the last one stands. */
+  signOffs: SignOff[];
 }
 
 export interface ProjectSummary {
   id: ProjectId;
   name: string;
   createdAt: IsoUtc;
+  /** Who created the project. */
   profile: UserProfile;
+  /** Who is working in this session (FR-AUD-03): new entries are recorded as theirs, and their role says what they may do. */
+  user: UserProfile;
   unitSystem: 'SI' | 'Oilfield';
   projectArea: BBox | null;
   /** The conventions the project works to (FR-CNV-02), as the last project.conventions entry set them. */

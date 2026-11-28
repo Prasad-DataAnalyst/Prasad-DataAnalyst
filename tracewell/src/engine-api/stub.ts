@@ -6,6 +6,8 @@
  */
 import {
   EngineError,
+  checkedProfile,
+  roleRefusal,
   type AuditEntry,
   type AuditQuery,
   type CellLineage,
@@ -155,19 +157,12 @@ function requireProjectOptions(o: { name: string; profile: UserProfile; unitSyst
   if (typeof o.name !== 'string' || o.name.trim() === '' || o.name.length > 200) {
     throw invalid('A project name must be text of 1 to 200 characters.', 'Type a name for the project.');
   }
-  const p = o.profile as Partial<UserProfile> | undefined;
-  if (
-    typeof p?.id !== 'string' ||
-    p.id === '' ||
-    typeof p.name !== 'string' ||
-    p.name.trim() === '' ||
-    p.role !== 'Analyst'
-  ) {
-    throw invalid('The user profile is incomplete.', 'Pass a profile with an id, a name and the role Analyst.');
-  }
+  const profile = checkedProfile(o.profile);
   if (o.unitSystem !== undefined && o.unitSystem !== 'SI' && o.unitSystem !== 'Oilfield') {
     throw invalid(`The unit system ${String(o.unitSystem)} is not supported.`, 'Choose SI or Oilfield.');
   }
+  const refused = roleRefusal(profile, 'create_project');
+  if (refused !== null) throw refused;
 }
 
 /** Import-time overrides as single-property changes, in a fixed order so dependent ones (unit after type) work. */
@@ -233,6 +228,12 @@ class StubEngine implements EngineImpl {
 
   async getProject(): Promise<ProjectSummary> {
     return this.project.summary();
+  }
+
+  /** The stub records who is working, but does not hold them to their role. */
+  async setProfile(profile: UserProfile): Promise<void> {
+    this.project.acting = checkedProfile(profile);
+    this.changed(['project']);
   }
 
   async openProject(file: FileInput): Promise<JobHandle> {

@@ -198,6 +198,13 @@ body {
   border-bottom: 1px solid var(--tw-error);
   border-left: 4px solid var(--tw-error);
 }
+.tw-mode-banner {
+  padding: 6px 12px;
+  background: var(--tw-surface-2);
+  color: var(--tw-text);
+  border-bottom: 1px solid var(--tw-border);
+  border-left: 4px solid var(--tw-accent);
+}
 .tw-tabpanel {
   flex: 1;
   min-height: 0;

@@ -11,7 +11,10 @@ import { applyTemplate, creditTemplate, importSource, matchTemplate, previewSour
 import { blobSource, bytesSource, sha256Hex } from '@tw/io';
 import {
   EngineError,
+  checkedProfile,
+  roleRefusal,
   schemas,
+  signOffsOf,
   type Actor,
   type AuditDraft,
   type AuditEntry,
@@ -38,6 +41,8 @@ import {
   type DatasetId,
   type DatasetSummary,
   type Decision,
+  type Operation,
+  type SignOff,
   type ExportProfileId,
   type ExportProfileStatus,
   type ExportRecord,
@@ -205,27 +210,36 @@ function asJson(value: unknown): JsonValue {
 }
 
 function userActor(p: UserProfile): Actor {
-  return { kind: 'user', profileId: p.id, name: p.name, role: 'Analyst' };
+  return { kind: 'user', profileId: p.id, name: p.name, role: p.role };
 }
 
-function requireProjectOptions(o: { name: string; profile: UserProfile; unitSystem?: 'SI' | 'Oilfield' }): void {
+/** The new project's creator: an Analyst, since only an Analyst creates projects (FR-AUD-03). */
+function requireProjectOptions(o: { name: string; profile: UserProfile; unitSystem?: 'SI' | 'Oilfield' }): UserProfile {
   if (typeof o?.name !== 'string' || o.name.trim() === '' || o.name.trim().length > 200) {
     throw invalid('A project name must be text of 1 to 200 characters.', 'Type a name for the project.');
   }
-  const p = o.profile as Partial<UserProfile> | undefined;
-  if (
-    typeof p?.id !== 'string' ||
-    p.id === '' ||
-    typeof p.name !== 'string' ||
-    p.name.trim() === '' ||
-    p.role !== 'Analyst'
-  ) {
-    throw invalid('The user profile is incomplete.', 'Pass a profile with an id, a name and the role Analyst.');
-  }
+  const profile = checkedProfile(o.profile);
   if (o.unitSystem !== undefined && o.unitSystem !== 'SI' && o.unitSystem !== 'Oilfield') {
     throw invalid(`The unit system ${String(o.unitSystem)} is not supported.`, 'Choose SI or Oilfield.');
   }
+  const refused = roleRefusal(profile, 'create_project');
+  if (refused !== null) throw refused;
+  return profile;
 }
+
+/** The operation each decision is, for the role check (FR-AUD-03). */
+const DECISION_OPERATIONS: Readonly<Record<Decision['kind'], Operation>> = {
+  edit_cell: 'edit_cell',
+  accept_issue: 'accept_issue',
+  exclude_rows: 'exclude_rows',
+  comment_issue: 'comment_issue',
+  assign_issue: 'assign_issue',
+  sign_off: 'sign_off',
+  override_detection: 'override_detection',
+  set_project_area: 'set_project_area',
+  set_conventions: 'set_conventions',
+  revert: 'revert',
+};
 
 /** Reading settings the user chose that differ from the detected ones, as single overrides. */
 function optionChanges(
@@ -289,6 +303,8 @@ export class LocalEngine implements EngineImpl {
   private journalWrites: Promise<void> = Promise.resolve();
   private journalFailed = false;
   private state: ProjectState | null = null;
+  /** Who is working in this session (FR-AUD-03): set by setProfile, or by creating a project. */
+  private user: UserProfile | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly o: LocalEngineOptions) {
@@ -324,9 +340,9 @@ export class LocalEngine implements EngineImpl {
   // Project
 
   async newProject(o: { name: string; profile: UserProfile; unitSystem?: 'SI' | 'Oilfield' }): Promise<ProjectSummary> {
-    requireProjectOptions(o);
+    const profile = requireProjectOptions(o);
     return this.exclusive(async () => {
-      const profile: UserProfile = { id: o.profile.id, name: o.profile.name.trim(), role: 'Analyst' };
+      this.user = profile;
       const state = emptyProject(this.o.ids.newProjectId());
       state.profile = profile;
       await this.commit(state, {
@@ -343,6 +359,18 @@ export class LocalEngine implements EngineImpl {
 
   async getProject(): Promise<ProjectSummary> {
     return this.summary(this.project());
+  }
+
+  /**
+   * Sets who is working (FR-AUD-03): later entries are recorded as theirs, and their role says
+   * what they may do. Protocol 0.12.
+   */
+  async setProfile(profile: UserProfile): Promise<void> {
+    const checked = checkedProfile(profile);
+    return this.exclusive(async () => {
+      this.user = checked;
+      if (this.state !== null) this.changed(['project']);
+    });
   }
 
   async openProject(file: FileInput): Promise<JobHandle> {
@@ -371,6 +399,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async saveProject(target?: FileTarget): Promise<JobHandle> {
+    this.allow('save');
     this.writable();
     this.requireTarget(target);
     return this.jobs.start('save', (ctx) =>
@@ -458,6 +487,7 @@ export class LocalEngine implements EngineImpl {
    * shows what was detected, what the template set and what the user chose.
    */
   async importFile(file: FileInput, o?: ImportRequestOptions): Promise<JobHandle> {
+    this.allow('import');
     this.writable();
     const name = this.fileName(file);
     const overrides = overrideList(o?.columnOverrides ?? []);
@@ -645,6 +675,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async saveMappingTemplate(o: { datasetId: DatasetId; name: string }): Promise<MappingTemplate> {
+    this.allow('save_template');
     const state = this.project();
     const ds = datasetOf(state, o?.datasetId);
     const name = typeof o.name === 'string' ? o.name.normalize('NFC').trim() : '';
@@ -665,7 +696,7 @@ export class LocalEngine implements EngineImpl {
       savedFrom: { fileName: schema.source.fileName, format: schema.source.format },
       columns,
       savedAt: this.o.clock.now().toISOString(),
-      savedBy: state.profile.name,
+      savedBy: (this.acting(state) ?? state.profile).name,
     };
     const checked = schemas.mappingTemplate.safeParse(template);
     if (!checked.success) {
@@ -682,6 +713,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async deleteMappingTemplate(id: TemplateId): Promise<void> {
+    this.allow('delete_template');
     const templates = await this.templates.load();
     const gone = templates.find((t) => t.id === id);
     if (gone === undefined) {
@@ -703,6 +735,7 @@ export class LocalEngine implements EngineImpl {
     name: string;
     export: { profile: ExportProfileId; neutralizeFormulas: boolean } | null;
   }): Promise<SavedRecipe> {
+    this.allow('save_recipe');
     const state = this.project();
     const ds = datasetOf(state, o?.datasetId);
     const name = typeof o.name === 'string' ? o.name.normalize('NFC').trim() : '';
@@ -730,7 +763,7 @@ export class LocalEngine implements EngineImpl {
       name,
       version: ds.recipe?.name === name ? ds.recipe.version + 1 : 1,
       savedAt: this.o.clock.now().toISOString(),
-      savedBy: state.profile.name,
+      savedBy: (this.acting(state) ?? state.profile).name,
       appVersion: this.o.appVersion,
       export: exported === null ? null : { profile: exported.profile, neutralizeFormulas: exported.neutralizeFormulas },
     });
@@ -758,6 +791,7 @@ export class LocalEngine implements EngineImpl {
    * fit the dataset is refused before anything is recorded.
    */
   async applyRecipe(datasetId: DatasetId, file: FileInput, reason: string): Promise<JobHandle> {
+    this.allow('run_recipe');
     const text = requireReason(reason);
     datasetOf(this.writable(), datasetId);
     return this.jobs.start('recipe', (ctx) =>
@@ -866,6 +900,7 @@ export class LocalEngine implements EngineImpl {
   // Checks and issues
 
   async runChecks(datasetId: DatasetId): Promise<JobHandle> {
+    this.allow('check');
     datasetOf(this.writable(), datasetId);
     return this.jobs.start('check', (ctx) =>
       this.exclusive(async () => {
@@ -925,6 +960,8 @@ export class LocalEngine implements EngineImpl {
   }
 
   async decide(d: Decision): Promise<AuditEntry[]> {
+    const kind = d?.kind;
+    if (typeof kind === 'string' && Object.hasOwn(DECISION_OPERATIONS, kind)) this.allow(DECISION_OPERATIONS[kind]);
     this.writable();
     return this.exclusive(async () => {
       const state = this.writable();
@@ -943,6 +980,7 @@ export class LocalEngine implements EngineImpl {
    * carries the pack itself, so the log alone replays it.
    */
   async installRulePack(file: FileInput, reason: string): Promise<AuditEntry[]> {
+    this.allow('install_rulepack');
     this.writable();
     const why = requireReason(reason);
     return this.exclusive(async () => {
@@ -980,6 +1018,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async applyStep(datasetId: DatasetId, s: StepInput, reason: string): Promise<JobHandle> {
+    this.allow('apply_step');
     const text = requireReason(reason);
     this.validStep(datasetOf(this.writable(), datasetId), s);
     return this.jobs.start('step', (ctx) =>
@@ -1045,6 +1084,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async removeStep(datasetId: DatasetId, stepId: StepId, reason: string): Promise<AuditEntry> {
+    this.allow('remove_step');
     const text = requireReason(reason);
     this.writable();
     return this.exclusive(async () => {
@@ -1097,6 +1137,7 @@ export class LocalEngine implements EngineImpl {
   }
 
   async exportData(req: ExportRequest): Promise<JobHandle> {
+    this.allow('export');
     const ds = datasetOf(this.writable(), req?.datasetId);
     if (!EXPORT_PROFILES.some((p) => p.id === req.profile)) {
       throw invalid(
@@ -1180,6 +1221,18 @@ export class LocalEngine implements EngineImpl {
     return run;
   }
 
+  /** The profile at work: the one set for the session, else the project's creator. */
+  private acting(state: ProjectState | null = this.state): UserProfile | null {
+    return this.user ?? state?.profile ?? null;
+  }
+
+  /** Refuses an operation the role of the profile at work may not do (FR-AUD-03). */
+  private allow(op: Operation): void {
+    const profile = this.acting();
+    const refused = profile === null ? null : roleRefusal(profile, op);
+    if (refused !== null) throw refused;
+  }
+
   private project(): ProjectState {
     if (this.state === null) {
       throw new EngineError('NOT_FOUND', 'No project is open.', 'Create a new project or open a .twp project file.');
@@ -1210,7 +1263,11 @@ export class LocalEngine implements EngineImpl {
     prepared?: Prepared,
     actor?: Actor,
   ): Promise<AuditEntry> {
-    const entry = state.log.append(draft, this.o.clock.now().toISOString(), actor ?? userActor(state.profile));
+    const entry = state.log.append(
+      draft,
+      this.o.clock.now().toISOString(),
+      actor ?? userActor(this.acting(state) ?? state.profile),
+    );
     await applyEntry(state, entry, {
       memoryBudgetBytes: this.memoryBudgetBytes,
       signal: new AbortController().signal,
@@ -1263,6 +1320,7 @@ export class LocalEngine implements EngineImpl {
   private exportInput(state: ProjectState, ds: DatasetState, req: ExportRequest): ExportInput {
     const view = outputView(ds);
     const original = state.originals.get(ds.fileId);
+    const signOff = signOffsOf(state.log.entries()).get(ds.id)?.at(-1);
     return {
       exportId: this.o.ids.newExportId(),
       baseName: req.baseName?.trim() || ds.dataset.schema.name,
@@ -1278,6 +1336,7 @@ export class LocalEngine implements EngineImpl {
       rulePacks: ds.checkPacks,
       unitRegistry: { version: REGISTRY_VERSION, sha256: sha256Hex(REGISTRY_JSON) },
       conventions: structuredClone(state.conventions),
+      ...(signOff === undefined ? {} : { signOff }),
       steps: ds.steps,
       stepDescriptions: this.stepDescriptions(state, ds),
       excludedRows: ds.excluded.size,
@@ -1296,7 +1355,7 @@ export class LocalEngine implements EngineImpl {
     });
   }
 
-  private datasetSummary(ds: DatasetState): DatasetSummary {
+  private datasetSummary(ds: DatasetState, signOffs: SignOff[] = []): DatasetSummary {
     const schema = ds.dataset.schema;
     return {
       id: ds.id,
@@ -1308,16 +1367,19 @@ export class LocalEngine implements EngineImpl {
       assumptions: ds.assumptions.length,
       partial: schema.partial,
       steps: structuredClone(ds.steps),
+      signOffs: structuredClone(signOffs),
     };
   }
 
   private summary(state: ProjectState): ProjectSummary {
     const head = state.log.head;
+    const signOffs = signOffsOf(state.log.entries());
     return {
       id: state.id,
       name: state.name,
       createdAt: state.createdAt,
       profile: { ...state.profile },
+      user: { ...(this.acting(state) ?? state.profile) },
       unitSystem: state.unitSystem,
       projectArea: state.projectArea === null ? null : [...state.projectArea],
       conventions: structuredClone(state.conventions),
@@ -1326,7 +1388,7 @@ export class LocalEngine implements EngineImpl {
       dirty: head.seq > 0 && state.lastSavedSeq !== head.seq,
       lastSavedAt: state.lastSavedAt,
       originals: [...state.originals.values()].map((o) => ({ ...o.info })),
-      datasets: [...state.datasets.values()].map((ds) => this.datasetSummary(ds)),
+      datasets: [...state.datasets.values()].map((ds) => this.datasetSummary(ds, signOffs.get(ds.id))),
       exports: state.exports.map((e) => ({ ...e })),
       rulePacks: state.rulePacks.map((r) => ({ ...r })),
       auditHead: { ...head },

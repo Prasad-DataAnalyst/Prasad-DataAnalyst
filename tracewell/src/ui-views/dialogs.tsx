@@ -7,9 +7,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
 import {
+  ASSIGNEE_MAX_LENGTH,
   COMBUSTION_TEMPERATURES,
   ENERGY_UNITS,
   METERING_TEMPERATURES,
+  MIN_REASON_LENGTH,
+  ROLES,
   STANDARD_CONDITIONS,
   TONNE_ENERGY_UNITS,
   referenceTemperatureText,
@@ -27,6 +30,8 @@ import {
   type JsonValue,
   type OverridableProperty,
   type ProjectOpenReport,
+  type Role,
+  type SignOffStatus,
   type StepInput,
   type StepPreview,
   type StepResult,
@@ -34,7 +39,16 @@ import {
   type UnitInfo,
   type UserProfile,
 } from '@tw/model';
-import { formatCell, formatCount, toErrorData, useWorkbench } from '@tw/ui-shell';
+import {
+  ROLE_TEXT,
+  formatCell,
+  formatCount,
+  loadProfiles,
+  reasonLength,
+  rememberProfile,
+  toErrorData,
+  useWorkbench,
+} from '@tw/ui-shell';
 import { DetectionValue, ErrorNote, Modal, display, useReasonPrompt } from './common';
 import { OP_LABELS, buildPredicate, opsFor, type FilterCondition, type FilterFormState } from './filter-form';
 import { attempt, useEngineQuery } from './hooks';
@@ -77,6 +91,12 @@ export function DialogHost(p: { engine: EngineClient }): React.JSX.Element | nul
       return <CommentDialog engine={p.engine} issueId={d.issueId} onClose={closeDialog} />;
     case 'newProject':
       return <NewProjectDialog engine={p.engine} onClose={closeDialog} />;
+    case 'assign':
+      return <AssignDialog engine={p.engine} issueId={d.issueId} assignee={d.assignee} onClose={closeDialog} />;
+    case 'signoff':
+      return <SignOffDialog engine={p.engine} datasetId={d.datasetId} onClose={closeDialog} />;
+    case 'profile':
+      return <SwitchProfileDialog engine={p.engine} onClose={closeDialog} />;
   }
 }
 
@@ -1252,9 +1272,7 @@ function NewProjectDialog(p: { engine: EngineClient; onClose(): void }): React.J
   const valid = name.trim() !== '';
   const submit = async () => {
     if (current === null || !valid) return;
-    const created = await attempt(() =>
-      p.engine.newProject({ name: name.trim(), profile: current.profile, unitSystem }),
-    );
+    const created = await attempt(() => p.engine.newProject({ name: name.trim(), profile: current.user, unitSystem }));
     if (created === null) return;
     const s = useWorkbench.getState();
     for (const t of [...s.tabs]) s.closeTab(t.id);
@@ -1308,43 +1326,266 @@ function NewProjectDialog(p: { engine: EngineClient; onClose(): void }): React.J
   );
 }
 
-/** First start: who is doing the work. The name appears in the audit log and in every export. */
-export function ProfileSetupDialog(p: { onDone(profile: UserProfile): void }): React.JSX.Element {
+/**
+ * Who is doing the work (FR-AUD-03): a profile kept on this computer, or a new one with a role. The
+ * name appears in the audit log and in every export; the role says what the profile may do.
+ */
+export function ProfileSetupDialog(p: {
+  profiles?: UserProfile[];
+  current?: UserProfile | null;
+  submitLabel?: string;
+  onDone(profile: UserProfile): void;
+  onCancel?(): void;
+}): React.JSX.Element {
+  const profiles = p.profiles ?? [];
+  const [choice, setChoice] = useState<string>(
+    p.current?.id ?? (profiles.length > 0 ? (profiles[0]?.id ?? 'new') : 'new'),
+  );
   const [name, setName] = useState('');
+  const [role, setRole] = useState<Role>('Analyst');
   const id = useMemo(
     () => `u_${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('')}`,
     [],
   );
-  const valid = name.trim().length >= 2;
+  const chosen = profiles.find((x) => x.id === choice);
+  const valid = chosen !== undefined || name.trim().length >= 2;
   return (
-    <Modal title="Welcome to Tracewell" testId={TID.profileDialog} onClose={() => undefined}>
+    <Modal
+      title={profiles.length === 0 ? 'Welcome to Tracewell' : 'Who is working?'}
+      testId={TID.profileDialog}
+      onClose={() => p.onCancel?.()}
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (valid) p.onDone({ id, name: name.trim(), role: 'Analyst' });
+          if (!valid) return;
+          p.onDone(chosen ?? { id, name: name.trim(), role });
         }}
       >
         <p>
           Tracewell works entirely on this computer. Your name is recorded with every change you make, so reviewers know
           who decided what.
         </p>
-        <label className="tw-field">
-          <span>Your name</span>
-          <input
-            autoFocus
-            data-testid={TID.profileName}
-            value={name}
-            autoComplete="name"
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <p className="tw-hint">Role: Analyst</p>
+        {profiles.length > 0 && (
+          <fieldset className="tw-field">
+            <legend>Profiles on this computer</legend>
+            {profiles.map((x, i) => (
+              <label key={x.id} className="tw-radio">
+                <input
+                  type="radio"
+                  name="profile"
+                  data-testid={TID.profileChoice(i)}
+                  checked={choice === x.id}
+                  onChange={() => setChoice(x.id)}
+                />{' '}
+                {x.name} · {x.role}
+              </label>
+            ))}
+            <label className="tw-radio">
+              <input type="radio" name="profile" checked={choice === 'new'} onChange={() => setChoice('new')} /> A new
+              profile
+            </label>
+          </fieldset>
+        )}
+        {chosen === undefined && (
+          <>
+            <label className="tw-field">
+              <span>Your name</span>
+              <input
+                autoFocus
+                data-testid={TID.profileName}
+                value={name}
+                autoComplete="name"
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <label className="tw-field">
+              <span>Role</span>
+              <select data-testid={TID.profileRole} value={role} onChange={(e) => setRole(e.target.value as Role)}>
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
+        <p className="tw-hint">
+          {chosen?.role ?? role}: {ROLE_TEXT[chosen?.role ?? role]}.
+        </p>
         <div className="tw-dialog-actions">
+          {p.onCancel !== undefined && (
+            <button type="button" onClick={() => p.onCancel?.()}>
+              Cancel
+            </button>
+          )}
           <button type="submit" className="tw-primary" disabled={!valid}>
-            Start
+            {p.submitLabel ?? 'Start'}
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+/** File › Switch profile…: someone else works from now on, with their role (FR-AUD-03). */
+function SwitchProfileDialog(p: { engine: EngineClient; onClose(): void }): React.JSX.Element {
+  const store = useWorkbench();
+  const switchTo = async (profile: UserProfile) => {
+    const set = await attempt(async () => {
+      await p.engine.setProfile(profile);
+      return true;
+    });
+    if (set === null) return;
+    rememberProfile(profile);
+    store.setUser(profile);
+    if (store.project !== null) {
+      const summary = await attempt(() => p.engine.getProject());
+      if (summary !== null) store.setProject(summary);
+    }
+    p.onClose();
+  };
+  return (
+    <ProfileSetupDialog
+      profiles={loadProfiles()}
+      current={store.project?.user ?? store.user}
+      submitLabel="Switch"
+      onDone={(profile) => void switchTo(profile)}
+      onCancel={p.onClose}
+    />
+  );
+}
+
+/** Review › Sign off dataset… (FR-AUD-04): a Reviewer approves the dataset as it stands, or asks for changes. */
+function SignOffDialog(p: { engine: EngineClient; datasetId: DatasetId; onClose(): void }): React.JSX.Element {
+  const dataset = useWorkbench((s) => s.project?.datasets.find((d) => d.id === p.datasetId));
+  const [status, setStatus] = useState<SignOffStatus>('approved');
+  const [statement, setStatement] = useState('');
+  const submit = async () => {
+    const done = await attempt(() =>
+      p.engine.decide({ kind: 'sign_off', datasetId: p.datasetId, status, reason: statement }),
+    );
+    if (done !== null) p.onClose();
+  };
+  return (
+    <Modal
+      title={`Sign off ${dataset?.name ?? p.datasetId}`}
+      testId={TID.signOffDialog}
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" data-testid={TID.dialogCancel} onClick={p.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="tw-primary"
+            data-testid={TID.dialogApply}
+            disabled={reasonLength(statement) < MIN_REASON_LENGTH}
+            onClick={() => void submit()}
+          >
+            Sign off
+          </button>
+        </>
+      }
+    >
+      <p className="tw-hint">
+        The stamp covers the dataset as it stands: its data, steps and issues. A later change to any of them is shown on
+        the stamp, and an export states the latest stamp.
+      </p>
+      <fieldset className="tw-field">
+        <legend>Verdict</legend>
+        <label className="tw-radio">
+          <input
+            type="radio"
+            name="verdict"
+            data-testid={TID.signOffStatus('approved')}
+            checked={status === 'approved'}
+            onChange={() => setStatus('approved')}
+          />{' '}
+          Approve
+        </label>
+        <label className="tw-radio">
+          <input
+            type="radio"
+            name="verdict"
+            data-testid={TID.signOffStatus('changes_requested')}
+            checked={status === 'changes_requested'}
+            onChange={() => setStatus('changes_requested')}
+          />{' '}
+          Request changes
+        </label>
+      </fieldset>
+      <label className="tw-field">
+        <span>Statement (recorded in the audit log)</span>
+        <textarea
+          autoFocus
+          rows={3}
+          value={statement}
+          placeholder="For example: Checked against the field sheets for October."
+          onChange={(e) => setStatement(e.target.value)}
+        />
+      </label>
+    </Modal>
+  );
+}
+
+/** Assigns an issue to someone by name, or to no one (FR-VAL-04), with a reason. */
+function AssignDialog(p: {
+  engine: EngineClient;
+  issueId: IssueId;
+  assignee: string | null;
+  onClose(): void;
+}): React.JSX.Element {
+  const [name, setName] = useState(p.assignee ?? '');
+  const reason = useReasonPrompt();
+  const assign = async (assignee: string | null) => {
+    const why = await reason.ask(assignee === null ? 'Unassign the issue' : `Assign the issue to ${assignee}`);
+    if (why === null) return;
+    const done = await attempt(() =>
+      p.engine.decide({ kind: 'assign_issue', issueId: p.issueId, assignee, reason: why }),
+    );
+    if (done !== null) p.onClose();
+  };
+  return (
+    <Modal
+      title="Assign the issue"
+      testId={TID.assignDialog}
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" data-testid={TID.dialogCancel} onClick={p.onClose}>
+            Cancel
+          </button>
+          {p.assignee !== null && (
+            <button type="button" onClick={() => void assign(null)}>
+              Unassign
+            </button>
+          )}
+          <button
+            type="button"
+            className="tw-primary"
+            data-testid={TID.dialogApply}
+            disabled={name.trim() === '' || name.trim() === p.assignee}
+            onClick={() => void assign(name.trim())}
+          >
+            Assign
+          </button>
+        </>
+      }
+    >
+      <label className="tw-field">
+        <span>Assign to (a name, up to {ASSIGNEE_MAX_LENGTH} characters)</span>
+        <input
+          autoFocus
+          data-testid={TID.assignName}
+          maxLength={ASSIGNEE_MAX_LENGTH}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </label>
+      {reason.element}
     </Modal>
   );
 }

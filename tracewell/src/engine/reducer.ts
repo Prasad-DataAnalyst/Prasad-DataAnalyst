@@ -324,6 +324,14 @@ export async function applyEntry(state: ProjectState, e: AuditEntry, env: Reduce
       st?.comments.push({ seq: e.seq, at: e.at, by, text: e.new as string });
       return;
     }
+    case 'issue.assign': {
+      const st = dataset(state, e.target.datasetId).issues.get(e.target.issueId as string);
+      if (st !== undefined) st.assignee = (e.new as string | null) ?? null;
+      return;
+    }
+    // A sign-off changes nothing in the project's state: its stamps are read from the log (signOffsOf).
+    case 'dataset.signoff':
+      return;
     case 'step.apply': {
       const ds = dataset(state, e.target.datasetId);
       const input = e.new as unknown as StepInput;

@@ -1,5 +1,5 @@
 /** Always-visible facts: offline state, save state, rules, units, conventions, rows and assumptions. */
-import { conventionsText, type Conventions, type ProjectSummary } from '@tw/model';
+import { conventionsText, type Conventions, type ProjectSummary, type UserProfile } from '@tw/model';
 import { formatCount } from './format';
 
 export function savedText(p: ProjectSummary | null): string {
@@ -51,7 +51,11 @@ export function installedPacksText(p: ProjectSummary | null): string | undefined
   return lines.length === 0 ? undefined : lines.join('\n');
 }
 
-export function StatusBar(p: { project: ProjectSummary | null; edition: 'lite' | 'desktop' }): React.JSX.Element {
+export function StatusBar(p: {
+  project: ProjectSummary | null;
+  user: UserProfile | null;
+  edition: 'lite' | 'desktop';
+}): React.JSX.Element {
   const project = p.project;
   const rows = project?.datasets.reduce((n, d) => n + d.outputRowCount, 0) ?? 0;
   const assumed = project?.datasets.reduce((n, d) => n + d.assumptions, 0) ?? 0;
@@ -61,6 +65,11 @@ export function StatusBar(p: { project: ProjectSummary | null; edition: 'lite' |
         <span className="tw-dot-ok" aria-hidden="true" /> Offline
       </span>
       <span>{savedText(project)}</span>
+      {(project?.user ?? p.user) !== null && (
+        <span data-testid="tw-status-user">
+          {(project?.user ?? p.user)?.name} · {(project?.user ?? p.user)?.role}
+        </span>
+      )}
       <span data-testid="tw-status-rules" title={installedPacksText(project)}>
         Rules {rulesShort(project)}
       </span>

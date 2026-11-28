@@ -36,6 +36,8 @@ export interface IssueState {
   present: boolean;
   acceptedWhole: boolean;
   comments: IssueComment[];
+  /** Who the issue is assigned to (issue.assign), by name, or null. */
+  assignee: string | null;
   firstSeenSeq: AuditSeq;
   lastCheckedSeq: AuditSeq;
   /** The audit entry that decided each accepted row, for drill-down. */

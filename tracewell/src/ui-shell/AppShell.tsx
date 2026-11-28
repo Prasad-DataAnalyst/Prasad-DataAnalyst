@@ -13,8 +13,9 @@ import { MenuBar, focusMenuBar } from './MenuBar';
 import { ProcessToolbar } from './ProcessToolbar';
 import { ProjectTree } from './ProjectTree';
 import { StatusBar } from './StatusBar';
+import { ROLE_TEXT } from './profiles';
 import { stageStates } from './stages';
-import { useWorkbench } from './store';
+import { roleOf, useWorkbench } from './store';
 import type { CentreTab, CentreTabKind } from './types';
 import './tokens.css';
 import './shell.css';
@@ -219,6 +220,12 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
           <ProcessToolbar states={states} commands={commands} state={state} run={run} rulePackLabel={rulePackLabel} />
         </div>
         <ErrorBanner error={state.lastError} onDismiss={() => state.showError(null)} />
+        {roleOf(state) !== 'Analyst' && (
+          <div className="tw-mode-banner" role="note" data-testid="tw-mode-banner">
+            <strong>{roleOf(state)} mode.</strong> A {roleOf(state)} {ROLE_TEXT[roleOf(state)]}; nothing else in the
+            project can be changed. File › Switch profile… changes who is working.
+          </div>
+        )}
         {state.project?.readOnly === true && (
           <div className="tw-readonly-banner" role="alert" data-testid="tw-read-only">
             <strong>Read-only project.</strong> Its integrity checks failed when it was opened, so nothing can be
@@ -281,7 +288,9 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
                     </div>
                   ) : (
                     <div className="tw-empty">
-                      Import a CSV, Excel, GeoJSON, JSON or Parquet file to begin (File › Import file…, Ctrl+I).
+                      {roleOf(state) === 'Analyst'
+                        ? 'Import a CSV, Excel, GeoJSON, JSON or Parquet file to begin (File › Import file…, Ctrl+I).'
+                        : 'Open a project to review it (File › Open project…, Ctrl+O).'}
                     </div>
                   )}
                 </Panel>
@@ -315,7 +324,7 @@ export function AppShell(p: AppShellProps): React.JSX.Element {
           </Group>
         </main>
         <div data-region="status">
-          <StatusBar project={state.project} edition={p.edition} />
+          <StatusBar project={state.project} user={state.user} edition={p.edition} />
         </div>
         <input
           ref={fileInput}

@@ -94,6 +94,10 @@ export class EngineClient implements EngineApi {
     return this.invoke('getProject');
   }
 
+  setProfile(profile: UserProfile): Promise<void> {
+    return this.invoke('setProfile', profile);
+  }
+
   openProject(file: FileInput): Promise<JobHandle> {
     return this.invoke('openProject', file);
   }

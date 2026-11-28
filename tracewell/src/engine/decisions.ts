@@ -4,8 +4,11 @@
  */
 import { cellParser } from '@tw/ingest';
 import {
+  ASSIGNEE_MAX_LENGTH,
   EngineError,
   MIN_REASON_LENGTH,
+  SIGN_OFF_STATUSES,
+  signOffsOf,
   canonicalJson,
   conventionsProblem,
   isDateCell,
@@ -443,6 +446,57 @@ export function recordedConventions(c: Conventions): Conventions {
   };
 }
 
+function assignDraft(state: ProjectState, d: Extract<Decision, { kind: 'assign_issue' }>): AuditDraft {
+  const reason = requireReason(d.reason);
+  const { ds, st } = issueOf(state, d.issueId);
+  const raw = d.assignee as unknown;
+  const next = typeof raw === 'string' ? raw.trim() : raw;
+  if (next !== null && (typeof next !== 'string' || next === '' || next.length > ASSIGNEE_MAX_LENGTH)) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      `An assignee is a name of 1 to ${ASSIGNEE_MAX_LENGTH} characters, or no one.`,
+      'Type the name of the person to assign the issue to, or choose no one.',
+    );
+  }
+  if (next === st.assignee) {
+    throw next === null
+      ? new EngineError('INVALID_INPUT', 'The issue is not assigned to anyone.', 'Choose someone to assign it to.')
+      : new EngineError(
+          'INVALID_INPUT',
+          `The issue is already assigned to ${next}.`,
+          'Choose someone else, or close the dialog.',
+        );
+  }
+  return {
+    action: 'issue.assign',
+    target: { datasetId: ds.id, issueId: d.issueId },
+    old: st.assignee,
+    new: next,
+    reason,
+  };
+}
+
+function signOffDraft(state: ProjectState, d: Extract<Decision, { kind: 'sign_off' }>): AuditDraft {
+  const reason = requireReason(d.reason);
+  const ds = datasetOf(state, d.datasetId);
+  if (!(SIGN_OFF_STATUSES as readonly unknown[]).includes(d.status)) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      `The sign-off status ${JSON.stringify(d.status)} is not "approved" or "changes_requested".`,
+      'Approve the dataset, or request changes.',
+    );
+  }
+  if (!ds.checked) {
+    throw new EngineError(
+      'INVALID_INPUT',
+      `${ds.dataset.schema.name} has not been checked, so it cannot be signed off.`,
+      'Ask the analyst to run the checks first.',
+    );
+  }
+  const previous = signOffsOf(state.log.entries()).get(ds.id)?.at(-1)?.status ?? null;
+  return { action: 'dataset.signoff', target: { datasetId: ds.id }, old: previous, new: { status: d.status }, reason };
+}
+
 function conventionsDraft(state: ProjectState, d: Extract<Decision, { kind: 'set_conventions' }>): AuditDraft {
   const reason = requireReason(d.reason);
   const problem = conventionsProblem(d.conventions);
@@ -547,6 +601,10 @@ export function decisionDraft(state: ProjectState, d: Decision): AuditDraft {
       return excludeDraft(state, d);
     case 'comment_issue':
       return commentDraft(state, d);
+    case 'assign_issue':
+      return assignDraft(state, d);
+    case 'sign_off':
+      return signOffDraft(state, d);
     case 'override_detection':
       return overrideDraft(state, d);
     case 'set_project_area':

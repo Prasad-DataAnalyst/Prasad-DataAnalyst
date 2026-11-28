@@ -27,6 +27,7 @@ export function mergeCheckRun(ds: DatasetState, drafts: IssueDraft[], seq: Audit
         present: true,
         acceptedWhole: false,
         comments: [],
+        assignee: null,
         firstSeenSeq: seq,
         lastCheckedSeq: seq,
         decidedBy: new Map(),
@@ -99,6 +100,7 @@ export function toIssue(id: IssueId, st: IssueState, ds: DatasetState, packs: Ru
     counts,
     openRows: open.toRanges(),
     comments: [...st.comments],
+    assignee: st.assignee,
     firstSeenSeq: st.firstSeenSeq,
     lastCheckedSeq: st.lastCheckedSeq,
   };

@@ -97,6 +97,12 @@ export function decide(project: StubProject, input: unknown): Applied {
       return setProjectArea(project, d);
     case 'set_conventions':
       return setConventions(project, d);
+    case 'assign_issue':
+    case 'sign_off':
+      throw invalid(
+        'The stub engine does not record assignments or sign-offs.',
+        'Use the Lite or the desktop engine to assign issues and sign off datasets.',
+      );
     case 'revert':
       return revert(project, d);
   }

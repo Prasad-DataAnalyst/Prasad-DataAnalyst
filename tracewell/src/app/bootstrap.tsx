@@ -9,10 +9,9 @@ import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { EngineClient, hostTransport, workerTransport, type EngineHost, type EngineInfo } from '@tw/engine-api';
 import type { EngineErrorData, ProjectOpenReport, RecoveryInfo, UserProfile } from '@tw/model';
-import { AppShell, toErrorData, useWorkbench } from '@tw/ui-shell';
+import { AppShell, lastProfile, loadProfiles, rememberProfile, toErrorData, useWorkbench } from '@tw/ui-shell';
 import { ProfileSetupDialog, SHELL_VIEWS, defaultCommands, openDialog } from '@tw/ui-views';
 import { checkProtocol } from './protocol';
-import { loadProfile, saveProfile } from './profile';
 
 declare global {
   interface Window {
@@ -92,7 +91,7 @@ function Workbench(p: { engine: EngineClient; edition: Edition }): React.JSX.Ele
 }
 
 function App(p: { engine: EngineClient; info: EngineInfo; edition: Edition }): React.JSX.Element {
-  const [profile, setProfile] = useState<UserProfile | null>(() => loadProfile());
+  const [profile, setProfile] = useState<UserProfile | null>(() => lastProfile());
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<EngineErrorData | null>(null);
   // Unsaved work of an earlier session: undefined while asking the engine, null when there is none.
@@ -115,14 +114,20 @@ function App(p: { engine: EngineClient; info: EngineInfo; edition: Edition }): R
   useEffect(() => {
     if (profile === null || recovery !== null || ready) return;
     let live = true;
-    p.engine.newProject({ name: 'Untitled project', profile }).then(
-      (summary) => {
-        if (!live) return;
-        useWorkbench.getState().setProject(summary);
-        setReady(true);
-      },
-      (e: unknown) => live && setError(toErrorData(e)),
-    );
+    const start = async () => {
+      // Who is working, for every entry from now on (FR-AUD-03). Only an Analyst starts on a new
+      // project; a Reviewer or a Viewer opens one.
+      await p.engine.setProfile(profile);
+      useWorkbench.getState().setUser(profile);
+      if (profile.role === 'Analyst') {
+        const summary = await p.engine.newProject({ name: 'Untitled project', profile });
+        if (live) useWorkbench.getState().setProject(summary);
+      }
+      if (live) setReady(true);
+    };
+    start().catch((e: unknown) => {
+      if (live) setError(toErrorData(e));
+    });
     return () => {
       live = false;
     };
@@ -131,6 +136,10 @@ function App(p: { engine: EngineClient; info: EngineInfo; edition: Edition }): R
   const recover = async () => {
     setRecovering(true);
     try {
+      if (profile !== null) {
+        await p.engine.setProfile(profile);
+        useWorkbench.getState().setUser(profile);
+      }
       const report = await p.engine.awaitJob<ProjectOpenReport>(await p.engine.recoverProject());
       const store = useWorkbench.getState();
       store.setProject(report.project);
@@ -157,8 +166,9 @@ function App(p: { engine: EngineClient; info: EngineInfo; edition: Edition }): R
     return (
       <div className="tw-app tw-start" data-theme={theme} data-density={density}>
         <ProfileSetupDialog
+          profiles={loadProfiles()}
           onDone={(prof) => {
-            saveProfile(prof);
+            rememberProfile(prof);
             setProfile(prof);
           }}
         />

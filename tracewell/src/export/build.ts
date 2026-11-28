@@ -24,6 +24,7 @@ import {
   type ProjectId,
   type RulePackRef,
   type Sha256Hex,
+  type SignOff,
   type Step,
   type ValidationCheck,
   type Conventions,
@@ -100,6 +101,8 @@ export interface ExportInput {
   neutralizeFormulas?: boolean;
   /** The project's conventions; the manifest and README state them when at least one is set. */
   conventions?: Conventions;
+  /** The dataset's latest sign-off (FR-AUD-04); the manifest and README state it. */
+  signOff?: SignOff;
   /** Format limits; only tests lower them. */
   limits?: ExportLimits;
 }
@@ -433,6 +436,7 @@ export async function buildExport(
     ...(input.conventions === undefined || conventionsText(input.conventions) === null
       ? {}
       : { conventions: structuredClone(input.conventions) }),
+    ...(input.signOff === undefined ? {} : { signOff: structuredClone(input.signOff) }),
     validation,
     auditHead: input.auditHead,
   };

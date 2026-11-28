@@ -6,7 +6,8 @@ export type { CentreTab, CentreTabKind, Selection, Stage, StageState } from './t
 export { STAGES, STAGE_LABELS } from './types';
 export { stageStates } from './stages';
 export type { TrackedJob, WorkbenchState } from './store';
-export { createWorkbenchStore, loadPrefs, PREFS_KEY, useWorkbench } from './store';
+export { createWorkbenchStore, loadPrefs, PREFS_KEY, roleOf, useWorkbench } from './store';
+export { LEGACY_PROFILE_KEY, PROFILES_KEY, ROLE_TEXT, lastProfile, loadProfiles, rememberProfile } from './profiles';
 export type { Command, CommandContext } from './commands';
 export { clearCommands, getCommands, matchShortcut, registerCommands } from './commands';
 export { formatCell, formatCount, cellTooltip } from './format';

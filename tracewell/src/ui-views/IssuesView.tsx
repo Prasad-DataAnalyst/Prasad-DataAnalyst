@@ -6,7 +6,7 @@
 import { useMemo, useState } from 'react';
 import type { EngineClient } from '@tw/engine-api';
 import type { DatasetId, Issue, IssueDelta, IssueOccurrence, IssueQuery, RowId, Severity } from '@tw/model';
-import { formatCell, formatCount, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
+import { formatCell, formatCount, roleOf, useWorkbench, type CentreViewProps } from '@tw/ui-shell';
 import { ErrorNote, SeverityBadge, display, useReasonPrompt } from './common';
 import { attempt, datasetFor, useEngineQuery, useProject } from './hooks';
 import { gotoRow, openDialog } from './store';
@@ -213,6 +213,7 @@ function IssuesRegister(p: {
                     Fixed
                   </th>
                   <th scope="col">Status</th>
+                  <th scope="col">Assigned to</th>
                   {hasDelta && <th scope="col">Since recipe</th>}
                 </tr>
               </thead>
@@ -253,6 +254,7 @@ function IssuesRegister(p: {
                     <td>
                       <span className={`tw-status tw-status-${i.status}`}>{STATUS_TEXT[i.status]}</span>
                     </td>
+                    <td>{i.assignee ?? ''}</td>
                     {hasDelta && (
                       <td className="tw-delta" data-testid={TID.issueDelta} data-delta={i.delta?.state ?? ''}>
                         {i.delta === undefined
@@ -282,6 +284,10 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
   const { engine, issue } = p;
   const project = useProject();
   const readOnly = project?.readOnly === true;
+  // An Analyst decides on rows; a Reviewer comments and assigns (FR-AUD-03, FR-AUD-04).
+  const role = useWorkbench((s) => roleOf(s));
+  const canDecide = !readOnly && role === 'Analyst';
+  const canReview = !readOnly && role !== 'Viewer';
   const [offset, setOffset] = useState(0);
   const [picked, setPicked] = useState<Set<RowId>>(new Set());
   const reason = useReasonPrompt();
@@ -355,12 +361,15 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
       </header>
       <p className="tw-detail-text">{issue.message}</p>
       <p className="tw-muted tw-detail-text">{issue.explanation}</p>
+      <p className="tw-detail-text" data-testid={TID.issueAssignee}>
+        Assigned to {issue.assignee ?? 'no one'}
+      </p>
       {!isSystem && (
         <div className="tw-actions" role="toolbar" aria-label="Issue actions">
           <button
             type="button"
             data-testid={TID.issueAction('accept-all')}
-            disabled={readOnly || issue.counts.open === 0}
+            disabled={!canDecide || issue.counts.open === 0}
             onClick={() => void accept('all')}
           >
             Accept all open
@@ -370,7 +379,7 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
               <button
                 type="button"
                 data-testid={TID.issueAction('accept')}
-                disabled={readOnly || openPicked.length === 0}
+                disabled={!canDecide || openPicked.length === 0}
                 onClick={() => void accept(openPicked)}
               >
                 Accept selected ({openPicked.length})
@@ -378,7 +387,7 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
               <button
                 type="button"
                 data-testid={TID.issueAction('exclude-all')}
-                disabled={readOnly || issue.counts.open === 0}
+                disabled={!canDecide || issue.counts.open === 0}
                 onClick={() => void exclude('open')}
               >
                 Exclude open rows
@@ -386,7 +395,7 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
               <button
                 type="button"
                 data-testid={TID.issueAction('exclude')}
-                disabled={readOnly || picked.size === 0}
+                disabled={!canDecide || picked.size === 0}
                 onClick={() => void exclude([...picked])}
               >
                 Exclude selected ({picked.size})
@@ -396,10 +405,18 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
           <button
             type="button"
             data-testid={TID.issueAction('comment')}
-            disabled={readOnly}
+            disabled={!canReview}
             onClick={() => openDialog({ kind: 'comment', issueId: issue.id })}
           >
             Comment…
+          </button>
+          <button
+            type="button"
+            data-testid={TID.issueAction('assign')}
+            disabled={!canReview}
+            onClick={() => openDialog({ kind: 'assign', issueId: issue.id, assignee: issue.assignee })}
+          >
+            Assign…
           </button>
         </div>
       )}
@@ -442,7 +459,7 @@ function IssueDetail(p: { engine: EngineClient; issue: Issue; onClose(): void })
                         type="checkbox"
                         aria-label={`Select row ${o.rowId + 1}`}
                         checked={picked.has(o.rowId)}
-                        disabled={o.state === 'excluded' || readOnly}
+                        disabled={o.state === 'excluded' || !canDecide}
                         onChange={(e) => {
                           const next = new Set(picked);
                           if (e.target.checked) next.add(o.rowId);

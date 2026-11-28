@@ -197,6 +197,14 @@ const SHAPES: Record<keyof EngineApi, (c: EngineClient) => Promise<void>> = {
       'import',
     ]);
   },
+  setProfile: async (c) => {
+    await c.setProfile({ id: 'u_jane', name: ' Jane ', role: 'Reviewer' });
+    expect((await c.getProject()).user).toEqual({ id: 'u_jane', name: 'Jane', role: 'Reviewer' });
+    await expect(c.setProfile({ id: 'u_x', name: 'X', role: 'Admin' } as never)).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: 'The user profile is incomplete.',
+    });
+  },
   installRulePack: async (c) => {
     const file = { kind: 'bytes' as const, bytes: new TextEncoder().encode('{}'), name: 'pack.twrules' };
     await expect(c.installRulePack(file, 'Methane reporting')).rejects.toMatchObject({

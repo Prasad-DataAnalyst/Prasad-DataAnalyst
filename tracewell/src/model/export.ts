@@ -6,6 +6,7 @@ import type { Assumption } from './detection';
 import type { FileTarget } from './formats';
 import type { AuditSeq, ColumnId, DatasetId, FileId, IsoUtc, ProjectId, Sha256Hex } from './ids';
 import type { Conventions } from './conventions';
+import type { SignOff } from './review';
 import type { RulePackRef } from './rules';
 import type { Step } from './steps';
 import type { LogicalType } from './values';
@@ -135,6 +136,8 @@ export interface ExportManifest {
   options?: ExportOptions;
   /** The project's conventions, when at least one is set (FR-CNV-02). */
   conventions?: Conventions;
+  /** The dataset's latest sign-off, when it has one (FR-AUD-04). */
+  signOff?: SignOff;
   files: { path: string; size: number; sha256: Sha256Hex; role: 'data' | 'readme' | 'audit' | 'issues' | 'manifest' }[];
   validation: ValidationReport;
   auditHead: { seq: AuditSeq; hash: Sha256Hex };

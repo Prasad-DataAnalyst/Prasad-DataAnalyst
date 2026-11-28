@@ -41,10 +41,16 @@ export interface IdSource {
   newExportId(): string;
 }
 
+/**
+ * What a local profile may do (FR-AUD-03, SAD decision D-18): an Analyst works on the data, a
+ * Reviewer reads it, comments, assigns issues and signs datasets off, and a Viewer only reads.
+ */
+export type Role = 'Analyst' | 'Reviewer' | 'Viewer';
+
 export interface UserProfile {
   id: string;
   name: string;
-  role: 'Analyst';
+  role: Role;
 }
 
 /** WGS84 bounding box in RFC 7946 order. */

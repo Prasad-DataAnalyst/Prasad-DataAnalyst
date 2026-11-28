@@ -59,7 +59,7 @@ import type {
 } from '@tw/model';
 
 /** Semantic version of this protocol; a major mismatch between UI and engine is refused (SAD section 4.2). */
-export const PROTOCOL_VERSION = '0.11.0';
+export const PROTOCOL_VERSION = '0.12.0';
 
 /** What an engine is and can do; the UI adapts to the capabilities rather than assuming them. */
 export interface EngineInfo {
@@ -84,6 +84,8 @@ export interface EngineApi {
   hello(): Promise<EngineInfo>;
   newProject(o: { name: string; profile: UserProfile; unitSystem?: 'SI' | 'Oilfield' }): Promise<ProjectSummary>;
   getProject(): Promise<ProjectSummary>;
+  /** Who is working (FR-AUD-03): later entries are recorded as theirs, and their role says what they may do. Protocol 0.12. */
+  setProfile(profile: UserProfile): Promise<void>;
   /** Result: ProjectOpenReport. */
   openProject(file: FileInput): Promise<JobHandle>;
   /** Result: SaveResult. */
@@ -211,6 +213,7 @@ export const ENGINE_METHODS = [
   'hello',
   'newProject',
   'getProject',
+  'setProfile',
   'openProject',
   'saveProject',
   'sniff',

@@ -394,6 +394,8 @@ pub struct Engine {
     pub journal: Option<crate::recovery::Journal>,
     /// The administrator's rule-pack policy file (FR-RUL-04), read at each install.
     pub policy: Option<PathBuf>,
+    /// Who is working in this session (FR-AUD-03): set by setProfile, or by creating a project.
+    pub user: Option<Value>,
 }
 
 /// What every thread shares: the engine behind a lock, and the output stream behind another, so
@@ -424,7 +426,7 @@ impl Shared {
 }
 
 fn user_actor(profile: &Value) -> Value {
-    json!({ "kind": "user", "profileId": profile["id"], "name": profile["name"], "role": "Analyst" })
+    json!({ "kind": "user", "profileId": profile["id"], "name": profile["name"], "role": profile["role"] })
 }
 
 fn draft(action: &str, target: Value) -> Map<String, Value> {
@@ -524,6 +526,7 @@ impl Engine {
             reply_bytes: None,
             journal: None,
             policy: None,
+            user: None,
         }
     }
 
@@ -598,6 +601,27 @@ impl Engine {
         })
     }
 
+    /// The profile at work: the one set for the session, else the project's creator.
+    fn acting(&self) -> Option<&Value> {
+        self.user
+            .as_ref()
+            .or_else(|| self.project.as_ref().map(|p| &p.profile))
+    }
+
+    /// Refuses an operation the role of the profile at work may not do (FR-AUD-03).
+    pub fn allow(&self, op: &str) -> Result<()> {
+        match self.acting().and_then(|p| crate::roles::refusal(p, op)) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Sets who is working (setProfile, FR-AUD-03). Protocol 0.12.
+    pub fn set_profile(&mut self, profile: &Value) -> Result<bool> {
+        self.user = Some(crate::roles::checked_profile(profile)?);
+        Ok(self.project.is_some())
+    }
+
     /// The open project, unless it opened read-only.
     fn writable(&self) -> Result<&Project> {
         let p = self.project()?;
@@ -630,7 +654,7 @@ impl Engine {
         let p = self.project.as_mut().ok_or_else(|| {
             EngineError::not_found("No project is open.", "Create a new project first.")
         })?;
-        let actor = actor.unwrap_or_else(|| user_actor(&p.profile));
+        let actor = actor.unwrap_or_else(|| user_actor(self.user.as_ref().unwrap_or(&p.profile)));
         Ok(p.log.append(d, at, actor))
     }
 
@@ -657,17 +681,7 @@ impl Engine {
                 "Type a name for the project.",
             ));
         }
-        let profile = &o["profile"];
-        let pname = profile["name"].as_str().map(str::trim).unwrap_or("");
-        if profile["id"].as_str().unwrap_or("").is_empty()
-            || pname.is_empty()
-            || profile["role"] != "Analyst"
-        {
-            return Err(EngineError::invalid(
-                "The user profile is incomplete.",
-                "Pass a profile with an id, a name and the role Analyst.",
-            ));
-        }
+        let profile = crate::roles::checked_profile(&o["profile"])?;
         let unit_system = o["unitSystem"].as_str().unwrap_or("SI");
         if unit_system != "SI" && unit_system != "Oilfield" {
             return Err(EngineError::invalid(
@@ -675,7 +689,11 @@ impl Engine {
                 "Choose SI or Oilfield.",
             ));
         }
-        let profile = json!({ "id": profile["id"], "name": pname, "role": "Analyst" });
+        // Only an Analyst creates projects (FR-AUD-03).
+        if let Some(e) = crate::roles::refusal(&profile, "create_project") {
+            return Err(e);
+        }
+        self.user = Some(profile.clone());
         let id = self.ids.new_project_id();
         self.project = Some(Project {
             id: id.clone(),
@@ -714,7 +732,7 @@ impl Engine {
         self.summary()
     }
 
-    fn dataset_summary(d: &Dataset) -> Value {
+    fn dataset_summary(d: &Dataset, sign_offs: &[Value]) -> Value {
         json!({
             "id": d.id,
             "name": d.name,
@@ -725,17 +743,20 @@ impl Engine {
             "assumptions": d.assumptions.len(),
             "partial": false,
             "steps": d.steps,
+            "signOffs": sign_offs,
         })
     }
 
     pub fn summary(&self) -> Result<Value> {
         let p = self.project()?;
         let (seq, hash) = p.log.head();
+        let sign_offs = crate::roles::sign_offs(p.log.entries());
         Ok(json!({
             "id": p.id,
             "name": p.name,
             "createdAt": p.created_at,
             "profile": p.profile,
+            "user": self.user.as_ref().unwrap_or(&p.profile),
             "unitSystem": p.unit_system,
             "projectArea": p.project_area,
             "conventions": p.conventions,
@@ -744,7 +765,11 @@ impl Engine {
             "dirty": p.log.entries().last().is_some_and(|e| e["action"] != "project.save"),
             "lastSavedAt": p.last_saved_at,
             "originals": p.originals,
-            "datasets": p.datasets.iter().map(Self::dataset_summary).collect::<Vec<_>>(),
+            "datasets": p
+                .datasets
+                .iter()
+                .map(|d| Self::dataset_summary(d, sign_offs.get(&d.id).map_or(&[], Vec::as_slice)))
+                .collect::<Vec<_>>(),
             "exports": p.exports,
             "rulePacks": rule_packs_of(&p.log),
             "auditHead": { "seq": seq, "hash": hash },
@@ -1924,6 +1949,7 @@ fn system_to_issue(d: &Draft, seq: u64) -> Value {
         "counts": { "flagged": 1, "open": 1, "accepted": 0, "excluded": 0, "fixed": 0 },
         "openRows": { "count": 0, "ranges": [] },
         "comments": [],
+        "assignee": null,
         "firstSeenSeq": seq,
         "lastCheckedSeq": seq,
     })
@@ -2178,6 +2204,21 @@ fn apply_decision(
                 st.comments.push(json!({ "seq": seq, "at": e["at"], "by": author(&e["actor"]), "text": e["new"] }));
             }
         }
+        "issue.assign" => {
+            if skip(&id, seq) {
+                return Ok(());
+            }
+            let d = dataset_mut(p, &id)?;
+            if let Some(st) = d
+                .issues
+                .iter_mut()
+                .find(|s| e["target"]["issueId"] == s.id.as_str())
+            {
+                st.assignee = e["new"].as_str().map(String::from);
+            }
+        }
+        // A sign-off changes nothing in the project: its stamps are read from the log (roles.rs).
+        "dataset.signoff" => {}
         "project.area" => {
             p.project_area = e["new"].clone();
             let with = run_with(p);
@@ -2671,6 +2712,87 @@ fn decision_draft(conn: &Connection, p: &Project, d: &Value) -> Result<Map<Strin
                 json!({ "datasetId": ds.id, "issueId": st.id }),
             );
             e.insert("new".into(), json!(text));
+            e
+        }
+        "assign_issue" => {
+            let reason = reason_of(&d["reason"])?;
+            let (ds, st) = issue_of(p, &d["issueId"])?;
+            let max = crate::roles::ASSIGNEE_MAX_LENGTH;
+            let next = match d.get("assignee") {
+                Some(Value::Null) => Some(None),
+                Some(Value::String(s)) => {
+                    let t = s.trim_matches(crate::units::is_js_space);
+                    (!t.is_empty() && t.encode_utf16().count() <= max).then(|| Some(t.to_string()))
+                }
+                _ => None,
+            };
+            let Some(next) = next else {
+                return Err(EngineError::invalid(
+                    format!("An assignee is a name of 1 to {max} characters, or no one."),
+                    "Type the name of the person to assign the issue to, or choose no one.",
+                ));
+            };
+            if next == st.assignee {
+                return Err(match &next {
+                    None => EngineError::invalid(
+                        "The issue is not assigned to anyone.",
+                        "Choose someone to assign it to.",
+                    ),
+                    Some(n) => EngineError::invalid(
+                        format!("The issue is already assigned to {n}."),
+                        "Choose someone else, or close the dialog.",
+                    ),
+                });
+            }
+            let mut e = draft(
+                "issue.assign",
+                json!({ "datasetId": ds.id, "issueId": st.id }),
+            );
+            e.insert("old".into(), json!(st.assignee));
+            e.insert("new".into(), json!(next));
+            e.insert("reason".into(), json!(reason));
+            e
+        }
+        "sign_off" => {
+            let reason = reason_of(&d["reason"])?;
+            let id = d["datasetId"].as_str().unwrap_or("");
+            let ds = p.datasets.iter().find(|x| x.id == id).ok_or_else(|| {
+                EngineError::not_found(
+                    format!("There is no dataset {id} in this project."),
+                    "Choose a listed dataset.",
+                )
+            })?;
+            let status = d.get("status");
+            if !status
+                .and_then(Value::as_str)
+                .is_some_and(|s| s == "approved" || s == "changes_requested")
+            {
+                let shown =
+                    status.map_or_else(|| "undefined".to_string(), crate::canonical::stringify);
+                return Err(EngineError::invalid(
+                    format!(
+                        "The sign-off status {shown} is not \"approved\" or \"changes_requested\"."
+                    ),
+                    "Approve the dataset, or request changes.",
+                ));
+            }
+            if !ds.checked() {
+                return Err(EngineError::invalid(
+                    format!(
+                        "{} has not been checked, so it cannot be signed off.",
+                        ds.name
+                    ),
+                    "Ask the analyst to run the checks first.",
+                ));
+            }
+            let previous = crate::roles::sign_offs(p.log.entries())
+                .get(&ds.id)
+                .and_then(|l| l.last())
+                .map_or(Value::Null, |s| s["status"].clone());
+            let mut e = draft("dataset.signoff", json!({ "datasetId": ds.id }));
+            e.insert("old".into(), previous);
+            e.insert("new".into(), json!({ "status": status }));
+            e.insert("reason".into(), json!(reason));
             e
         }
         "set_project_area" => {
@@ -3208,6 +3330,7 @@ impl Engine {
     /// read from the source, by header text, with their settings; a template of the same name is
     /// replaced.
     pub fn save_mapping_template(&mut self, o: &Value) -> Result<Value> {
+        self.allow("save_template")?;
         use unicode_normalization::UnicodeNormalization;
         let d = self.dataset(&o["datasetId"])?;
         let name: String = o["name"]
@@ -3261,7 +3384,7 @@ impl Engine {
             "savedFrom": { "fileName": d.spec["fileName"], "format": d.spec["options"]["format"] },
             "columns": columns,
             "savedAt": self.clock.now_iso(),
-            "savedBy": self.project()?.profile["name"],
+            "savedBy": self.acting().map_or(Value::Null, |p| p["name"].clone()),
         });
         if !valid_template(&template) {
             return Err(EngineError::internal(format!(
@@ -3280,6 +3403,7 @@ impl Engine {
 
     /// Deletes a mapping template (deleteMappingTemplate).
     pub fn delete_mapping_template(&mut self, id: &Value) -> Result<Value> {
+        self.allow("delete_template")?;
         let templates = self.load_templates();
         if !templates.iter().any(|t| t["id"] == *id) {
             return Err(EngineError::not_found(
@@ -4040,8 +4164,9 @@ impl Engine {
     /// A recipe of a dataset's steps, checks and issues (saveRecipe); the .twr bytes go back with
     /// the answer.
     pub fn save_recipe(&mut self, o: &Value) -> Result<Value> {
+        self.allow("save_recipe")?;
         use unicode_normalization::UnicodeNormalization;
-        let p = self.project()?;
+        self.project()?;
         let d = self.dataset(&o["datasetId"])?;
         let name: String = o["name"]
             .as_str()
@@ -4106,7 +4231,7 @@ impl Engine {
         } else {
             json!({ "profile": exported["profile"], "neutralizeFormulas": exported["neutralizeFormulas"] })
         };
-        let saved_by = p.profile["name"].clone();
+        let saved_by = self.acting().map_or(Value::Null, |a| a["name"].clone());
         let version_text = self.version.clone();
         let at = self.clock.now_iso();
         let src = crate::recipes::Source {
@@ -4177,6 +4302,7 @@ pub fn apply_recipe(
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("run_recipe")?;
     let text = reason_of(reason)?;
     engine.writable()?;
     let dataset_id = engine.dataset(dataset)?.id.clone();
@@ -4343,6 +4469,7 @@ pub fn apply_step(
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("apply_step")?;
     let text = reason_of(reason)?;
     engine.writable()?;
     let d = engine.dataset(dataset)?;
@@ -4413,6 +4540,7 @@ pub fn remove_step(
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("remove_step")?;
     let text = reason_of(reason)?;
     engine.writable()?;
     let d = engine.dataset(dataset)?;
@@ -4485,6 +4613,12 @@ pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    if let Some(op) = d["kind"]
+        .as_str()
+        .and_then(crate::roles::decision_operation)
+    {
+        engine.allow(op)?;
+    }
     let entry = engine.commit_decision(d)?;
     engine.journal_now();
     drop(engine);
@@ -4495,6 +4629,21 @@ pub fn decide(shared: &Arc<Shared>, d: &Value) -> Result<Value> {
     }
     shared.event(event);
     Ok(json!([entry]))
+}
+
+/// Sets who is working from now on (setProfile, FR-AUD-03): later entries are recorded as theirs,
+/// and their role says what they may do. Protocol 0.12.
+pub fn set_profile(shared: &Arc<Shared>, profile: &Value) -> Result<Value> {
+    let mut engine = shared
+        .engine
+        .lock()
+        .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    let open = engine.set_profile(profile)?;
+    drop(engine);
+    if open {
+        shared.event(json!({ "type": "project.changed", "what": ["project"] }));
+    }
+    Ok(Value::Null)
 }
 
 /// Installs a signed rule-pack file (installRulePack, FR-RUL-01, FR-RUL-02), once it has passed
@@ -4511,6 +4660,7 @@ pub fn install_rule_pack(
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("install_rulepack")?;
     engine.writable()?;
     let why = reason_of(reason)?;
     let (bytes, _) = input_bytes(&engine, msg, file)?;
@@ -4555,6 +4705,7 @@ pub fn run_checks(shared: &Arc<Shared>, dataset: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("check")?;
     let project_id = engine.writable()?.id.clone();
     let d = engine.dataset(dataset)?;
     let dataset_id = d.id.clone();
@@ -4665,6 +4816,7 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("export")?;
     let project_id = engine.writable()?.id.clone();
     let profile = req["profile"].as_str().unwrap_or("").to_string();
     let d = engine.dataset(&req["datasetId"])?;
@@ -4732,9 +4884,14 @@ pub fn export_data(shared: &Arc<Shared>, req: &Value) -> Result<Value> {
         .cloned()
         .collect();
     let (seq, hash) = p.log.head();
+    let sign_off = crate::roles::sign_offs(p.log.entries())
+        .get(&d.id)
+        .and_then(|l| l.last().cloned())
+        .unwrap_or(Value::Null);
     let mut input = crate::export::ExportInput {
         export_id: String::new(),
         conventions: p.conventions.clone(),
+        sign_off,
         base_name,
         profile: profile.clone(),
         at: String::new(),
@@ -4940,6 +5097,7 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("save")?;
     let target = target_path(target)?;
     let p = engine.writable()?;
     let project_id = p.id.clone();
@@ -5115,7 +5273,8 @@ pub fn save_project(shared: &Arc<Shared>, target: &Value) -> Result<Value> {
             manifest.insert("name".into(), json!(p.name));
             manifest.insert("createdAt".into(), json!(p.created_at));
             manifest.insert("savedAt".into(), json!(saved_at));
-            manifest.insert("savedBy".into(), p.profile["name"].clone());
+            // Whoever saved: the actor of the project.save entry the file ends with (FR-AUD-03).
+            manifest.insert("savedBy".into(), saved["actor"]["name"].clone());
             manifest.insert("unitSystem".into(), json!(p.unit_system));
             manifest.insert("projectArea".into(), Value::Null);
             manifest.insert("datasets".into(), json!(digests));
@@ -5334,6 +5493,7 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
         .engine
         .lock()
         .map_err(|_| EngineError::internal("The engine lock is poisoned."))?;
+    engine.allow("import")?;
     let project_id = engine.writable()?.id.clone();
     // As in the TypeScript engine, the import plans the file again rather than trusting a preview
     // sent with it: detection is deterministic, so the plan is the one the user reviewed.
@@ -5513,7 +5673,10 @@ pub fn import_file(shared: &Arc<Shared>, msg: &Incoming, file: &Value, o: &Value
                 }
                 engine.commit_decision(&d)?;
             }
-            Ok(Engine::dataset_summary(engine.dataset(&summary["id"])?))
+            Ok(Engine::dataset_summary(
+                engine.dataset(&summary["id"])?,
+                &[],
+            ))
         })();
         let mut engine = match shared.engine.lock() {
             Ok(e) => e,
@@ -5673,7 +5836,7 @@ fn commit_import(
         reread: false,
     };
     install_views(&engine.conn, &mut dataset)?;
-    let summary = Engine::dataset_summary(&dataset);
+    let summary = Engine::dataset_summary(&dataset, &[]);
     let p = engine
         .project
         .as_mut()
@@ -5866,6 +6029,8 @@ impl Reopen<'_> {
                 | "project.area"
                 | "project.conventions"
                 | "rulepack.install"
+                | "issue.assign"
+                | "dataset.signoff"
                 | "entry.revert"
                 | "step.apply"
                 | "step.remove"

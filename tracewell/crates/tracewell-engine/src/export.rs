@@ -423,6 +423,8 @@ pub struct ExportInput {
     pub export_id: String,
     /// The project's conventions; the manifest and README state them when at least one is set.
     pub conventions: Value,
+    /// The dataset's latest sign-off (FR-AUD-04), or null; the manifest and README state it.
+    pub sign_off: Value,
     pub base_name: String,
     pub profile: String,
     pub at: String,
@@ -2279,6 +2281,12 @@ fn render_readme(m: &Value, steps: &[String]) -> String {
             crate::conventions::text(&m["conventions"]).unwrap_or_else(|| "none set".into())
         ));
     }
+    if !m["signOff"].is_null() {
+        lines.push(format!(
+            "SIGN-OFF: {}",
+            crate::roles::sign_off_text(&m["signOff"])
+        ));
+    }
     lines.push(String::new());
     lines.push(format!("STEPS ({})", steps.len()));
     if steps.is_empty() {
@@ -2772,14 +2780,24 @@ pub fn build_export(
         "auditHead": input.audit_head,
         "files": [],
     });
+    // Where the TypeScript manifest has them: after the options, the conventions when at least one
+    // is set, then the latest sign-off.
+    let mut after_options = Vec::new();
     if crate::conventions::text(&input.conventions).is_some() {
-        // Where the TypeScript manifest has it: after the options.
+        after_options.push(("conventions", input.conventions.clone()));
+    }
+    if !input.sign_off.is_null() {
+        after_options.push(("signOff", input.sign_off.clone()));
+    }
+    if !after_options.is_empty() {
         let mut ordered = serde_json::Map::new();
         for (k, v) in std::mem::take(manifest.as_object_mut().expect("the manifest is an object")) {
             let options = k == "options";
             ordered.insert(k, v);
             if options {
-                ordered.insert("conventions".into(), input.conventions.clone());
+                for (name, value) in &after_options {
+                    ordered.insert((*name).into(), value.clone());
+                }
             }
         }
         manifest = Value::Object(ordered);
